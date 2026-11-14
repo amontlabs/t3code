@@ -133,9 +133,9 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: `DESKTOP_APP_ID` itself is left alone (T3's passkey signing tests pin it; the fork never builds `--signed`). The staged package `name` stays T3's `"t3code"`: Electron names its safe-storage keychain item after it (`t3code Safe Storage`, account `t3code Key`), and the fork must read the secrets the official app encrypted in `~/.t3`.
 - **Conflict**: take upstream's file, re-apply the two edits.
 
-### `README.md` (budget 15)
+### `README.md` (budget 17)
 
-- **Lines**: the "T3 Code + lastdrop" section above upstream's README.
+- **Lines**: the "T3 Code + lastdrop" section above upstream's README, its uninstall note included.
 - **Conflict**: take upstream's README, put the section back on top.
 
 ## App identity and data
@@ -174,9 +174,17 @@ Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, pri
 - `helper/`: an empty folder `claude` starts in when renewing a sign-in.
 - `agent-threads.json`: which agent entry (and instance) made each native thread, so a restart resumes a thread only on its own instance.
 - `agent-room.json`: agent entries out at a usage limit, until when.
-- `endpoint-instances.json`: which provider instance ids lastdrop made (it changes or removes only those).
-- `endpoints/<provider>/`: the Z.ai/OpenRouter Claude Code profiles (key helper settings, onboarding, links into `~/.claude`, session settings with the endpoint env); `endpoints/key-helper` prints the key from the keychain at launch.
-- T3's own `settings.json` gets the `zai`/`openrouter` instances through `ServerSettingsService.updateProviderInstance` (labelled `(lastdrop)`, no key in them).
+- `endpoint-instances.json`: which provider instance ids lastdrop made (claimed on disk before T3's `create`), and the user's switch and colour on one lastdrop removed, put back if it is made again.
+- `endpoints/<provider>/`: the Z.ai/OpenRouter Claude Code profiles (key helper settings, onboarding, links into `~/.claude`); `endpoints/key-helper` prints the key from the keychain at launch.
+- T3's own `settings.json` gets the `zai`/`openrouter` instances through `ServerSettingsService.updateProviderInstance` (labelled `(lastdrop)`, no key in them, the endpoint env inline in `--settings`). Each carries the marker `LASTDROP_ENDPOINT=<provider>` in its environment and `lastdropEndpoint` in its config; lastdrop changes only marked instances whose id it recorded, and only its own fields of them.
+
+### Rules other fork code must keep
+
+- **The query-runner wrapper (step 4) never touches a Z.ai or OpenRouter query.** Before picking a Claude account, setting `CLAUDE_SECURESTORAGE_CONFIG_DIR`/`CLAUDE_CONFIG_DIR` or moving a thread, it calls `isLastdropEndpointEnvironment(env)` (or `isLastdropEndpointInstance(instance)`, both from `@t3tools/lastdrop-node`) and passes the query through unchanged when it holds. Pinned by `endpoints.test.ts` on the process env T3 builds from the instance.
+
+### These instances in the official app, and uninstalling
+
+The official app reads the same `settings.json`, so it shows and runs the `(lastdrop)` instances too: they work there while `~/.t3/lastdrop/endpoints/` exists (Claude Code needs the profile and its key helper), but nothing updates them. If that folder is deleted, every thread on them fails at launch with Claude Code's `apiKeyHelper` error. The official app can't tell the fork is gone, so nothing disables them automatically. To uninstall: remove `Z.ai (lastdrop)` and `OpenRouter (lastdrop)` in Settings → Providers first (or delete the `zai` and `openrouter` entries of `providerInstances` in `~/.t3/userdata/settings.json` with both apps closed), then `~/.t3/lastdrop/`.
 
 **Data the fork reads and shares with the standalone lastdrop** (never rewritten by the fork): the agent catalog `agent-catalog.json` and the agents' model efforts `agent-models.json` (same folder, polled every 2 s); the account list `~/Library/Application Support/lastdrop/accounts.json` (or the older `claude-accounts.json`), each account's sign-in folder `~/.claude-accounts/<key>` and its Claude Code keychain item. The fork does write each account's profile, `~/.claude-accounts/<key>/profile/` (links into `~/.claude` and a `.claude.json` rebuilt from Main's), exactly as the standalone app does before a run; renewing a sign-in starts `claude -p` in the account's folder, which renews its keychain item. The service runs only on macOS, and not under vitest (T3's own server tests start the layer).
 
