@@ -513,6 +513,27 @@ describe("the query-runner wrapper (replays)", () => {
     ),
   );
 
+  it.effect(
+    "a Z.ai or OpenRouter instance's query opens untouched, even with a recorded session",
+    () =>
+      withWorld((w) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            w.ledger.record({ session: "Z1", account: "Pro", at: w.now }),
+          );
+          const fake = fakeRunner(() => [[init(), result()]]);
+          const { runner } = wrap(w, fake);
+          const input = openInput(
+            "thread-z",
+            { resume: "Z1" },
+            { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", LASTDROP_ENDPOINT: "zai" },
+          );
+          yield* drain(yield* runner.open(input));
+          assert.deepEqual(opts(fake.opened[0]!), opts(input));
+        }),
+      ),
+  );
+
   // Review fixes: the open never runs another account's id on Main, and late routes never write.
   const recordOnPro = (w: World) =>
     Effect.promise(async () => {

@@ -51,3 +51,48 @@ export function signInLabel(a: Pick<AccountView, "signIn" | "signInEndsSoon">): 
       return { text: "Signed out", variant: "error" };
   }
 }
+
+/** Z.ai or OpenRouter, as `GET /api/lastdrop/endpoints` sends it (`EndpointView` in the server's endpointsView.ts). */
+export interface EndpointWindowView {
+  readonly label: string;
+  readonly usedPercent?: number;
+  readonly resetsAt?: number;
+  readonly detail?: string;
+}
+
+export interface EndpointView {
+  readonly provider: "zai" | "openrouter";
+  readonly title: string;
+  readonly instanceId: string;
+  readonly configured: boolean;
+  readonly problem?: string;
+  readonly instance: "ours" | "user" | "none";
+  readonly usage?: {
+    readonly plan?: string;
+    readonly windows: ReadonlyArray<EndpointWindowView>;
+    readonly summary?: string;
+  };
+  readonly readAt?: number;
+  readonly error?: string;
+  readonly outUntil?: number;
+}
+
+export type EndpointsResponse =
+  | { readonly updatedAt: number; readonly endpoints: ReadonlyArray<EndpointView> }
+  | { readonly unavailable: string };
+
+/** Where the provider stands for agents, in a few words. */
+export function endpointStatus(e: EndpointView): {
+  readonly text: string;
+  readonly variant: "success" | "warning" | "error" | "secondary";
+} {
+  if (!e.configured) return { text: "No key", variant: "secondary" };
+  if (e.problem !== undefined) return { text: "Can't run agents", variant: "error" };
+  if (e.outUntil !== undefined) return { text: "Out of room", variant: "warning" };
+  if (e.instance === "user") return { text: "Your instance", variant: "secondary" };
+  return { text: "Ready", variant: "success" };
+}
+
+/** The endpoint's rows shown as meters: those with a share used. */
+export const endpointMeters = (e: EndpointView): ReadonlyArray<EndpointWindowView> =>
+  (e.usage?.windows ?? []).filter((w) => w.usedPercent !== undefined);

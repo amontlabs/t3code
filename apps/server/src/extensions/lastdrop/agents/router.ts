@@ -32,6 +32,7 @@ import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter"
 
 import { stepLabel, stepSelection, type AgentDefinition, type AgentStep } from "./catalog.ts";
 import { entryRuntimePolicy } from "./permissions.ts";
+import { isUsageLimit } from "../endpointRoom.ts";
 import type { FallbackSignals, Room } from "./room.ts";
 import type { NativeEntry } from "./shared.ts";
 import { makeStoredMap, type StoredMap } from "./store.ts";
@@ -401,7 +402,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     const atTerminal = Effect.fn("LastdropRouter.atTerminal")(function* (
       event: Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>,
     ) {
-      if (event.status !== "failed" || event.failure?.class !== "usage_limit") return [event];
+      if (event.status !== "failed" || !isUsageLimit(step.provider, event.failure)) return [event];
       yield* options.room.markOut(step, event.failure.resetAt);
       const other = yield* firstUsable(
         agent,

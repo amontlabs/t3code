@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as LastdropAccounts from "./lastdrop/accounts.ts";
+import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
@@ -54,10 +55,16 @@ export const wrapClaudeQueryRunner = <E, R>(
 
 /**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
- * agents' target lookup and fallback reactor.
+ * agents' target lookup and fallback reactor; the Z.ai and OpenRouter instances and their usage.
  */
 export const layer = Layer.mergeAll(
   LastdropAccounts.layer,
+  // Imported when the layer builds: it reaches T3's settings service, which imports this module's lists.
+  Layer.unwrap(
+    Effect.promise(() => import("./lastdrop/endpoints.ts")).pipe(
+      Effect.map((endpoints) => endpoints.layer),
+    ),
+  ),
   // Imported when the layer builds: it reaches T3's orchestrator, which imports this module's lists.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/agents/layer.ts")).pipe(
@@ -66,8 +73,8 @@ export const layer = Layer.mergeAll(
   ),
 );
 
-/** HTTP routes, merged beside T3's own: the accounts view for the settings section. */
-export const routes = LastdropAccounts.routes;
+/** HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section. */
+export const routes = Layer.mergeAll(LastdropAccounts.routes, LastdropEndpointsView.routes);
 
 /** Refuses a database migrated by a newer T3 build; `server.ts` runs it before opening the database. */
 export { refuseNewerDatabase } from "./databaseVersion.ts";

@@ -11,6 +11,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   classifyResult,
+  isLastdropEndpointEnvironment,
   limitKind,
   parseClaudeResult,
   RETRY_PROMPT,
@@ -349,6 +350,8 @@ export function wrapQueryRunner(
       const env = (input.options.env ?? options.hostEnvironment) as Readonly<
         Record<string, string | undefined>
       >;
+      // A Z.ai or OpenRouter instance (step 6) is never account-picked, moved or translated (FORK.md rule).
+      if (isLastdropEndpointEnvironment(env)) return yield* inner.open(input);
       const model = typeof input.options.model === "string" ? input.options.model : undefined;
       const routeInput = {
         threadId: input.threadId,

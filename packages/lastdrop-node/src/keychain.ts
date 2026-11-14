@@ -56,3 +56,41 @@ export async function readOwnKeychain(
   if (encoded === undefined || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) return undefined;
   return Buffer.from(encoded, "base64").toString("utf8");
 }
+
+/** A keychain read that tells "there is no such item" apart from "couldn't read it right now". */
+export type KeychainRead =
+  | { readonly state: "found"; readonly value: string }
+  | { readonly state: "missing" }
+  | { readonly state: "unreadable" };
+
+/** `security` exits with this when the item isn't there (errSecItemNotFound). */
+const ITEM_NOT_FOUND = 44;
+
+/**
+ * One of lastdrop's own items (base64), as `readOwnKeychain`, but only a definite "not found" reads as missing:
+ * a locked keychain, a timeout or any other failure is `unreadable`, so callers never act on it as an absence.
+ */
+export function probeOwnKeychain(
+  security: string,
+  service: string,
+  account: string,
+): Promise<KeychainRead> {
+  return new Promise((resolve) => {
+    NodeChildProcess.execFile(
+      security,
+      ["find-generic-password", "-s", service, "-a", account, "-w"],
+      { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          resolve({ state: error.code === ITEM_NOT_FOUND ? "missing" : "unreadable" });
+          return;
+        }
+        const encoded = stdout.trim();
+        if (encoded === "") return resolve({ state: "missing" });
+        if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) return resolve({ state: "unreadable" });
+        const value = Buffer.from(encoded, "base64").toString("utf8").trim();
+        resolve(value === "" ? { state: "missing" } : { state: "found", value });
+      },
+    );
+  });
+}

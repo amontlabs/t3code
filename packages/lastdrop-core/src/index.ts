@@ -4,6 +4,7 @@ export * from "./claudeCodeHeaders.ts";
 export * from "./claudeKeeper.ts";
 export * from "./claudeProfile.ts";
 export * from "./claudeUsage.ts";
+export * from "./endpoints.ts";
 export * from "./planSize.ts";
 export * from "./result.ts";
 export * from "./transientError.ts";

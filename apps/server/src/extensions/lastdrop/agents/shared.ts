@@ -10,6 +10,7 @@ import type { ProviderInstanceId, RuntimeMode, ServerProviderModel } from "@t3to
 import * as Effect from "effect/Effect";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 
+import * as EndpointRoom from "../endpointRoom.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeStoredMap } from "./store.ts";
 
@@ -59,7 +60,9 @@ export interface NativeEntry {
 
 const roomMarks = makeStoredMap<number>();
 /** Usage-limit marks, shared by every session: a limit is the account's, not the thread's. */
-export const room = makeRoom(Date.now, roomMarks);
+export const room = makeRoom(Date.now, roomMarks, (step, now) =>
+  EndpointRoom.outUntil(step.instanceId, now),
+);
 /** Runs the router saw end at a limit, for the fallback reactor. */
 export const fallbacks = makeFallbackSignals();
 /** Which chain entry made each native thread, by native id. */
