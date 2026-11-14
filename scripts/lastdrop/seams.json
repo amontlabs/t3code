@@ -1,0 +1,49 @@
+{
+  "$comment": "The fork's rules, checked by check-fork-paths.ts. `allowed`: paths the fork owns outright. `exempt`: regenerated files. `seams`: T3 files the fork may change, each with its budget of changed lines (added + deleted, as git diff --numstat counts them). A new seam needs an entry here and in FORK.md.",
+  "allowed": [
+    "packages/lastdrop-*/**",
+    "apps/*/src/extensions/**",
+    "packages/client-runtime/src/extensions.ts",
+    "scripts/lastdrop/**",
+    "docs/lastdrop/**",
+    ".github/workflows/lastdrop-*",
+    "FORK.md"
+  ],
+  "exempt": ["pnpm-lock.yaml"],
+  "seams": {
+    "README.md": { "budget": 40, "why": "the fork's section above upstream's README" },
+    "apps/server/src/provider/builtInDrivers.ts": {
+      "budget": 9,
+      "why": "extension drivers and usage readers"
+    },
+    "apps/server/src/settingsSecrets.ts": {
+      "budget": 2,
+      "why": "secret fields of extension providers"
+    },
+    "apps/server/src/policy/managedProviders.ts": {
+      "budget": 2,
+      "why": "managed policy knows extension providers"
+    },
+    "apps/server/src/provider/ProviderOrchestrationAdapterInfrastructure.ts": {
+      "budget": 3,
+      "why": "Claude query-runner wrapper"
+    },
+    "apps/server/src/server.ts": { "budget": 3, "why": "extension services and routes" },
+    "packages/client-runtime/src/providerClients.ts": {
+      "budget": 2,
+      "why": "extension provider client definitions"
+    },
+    "apps/web/src/components/settings/ProviderInstanceCard.tsx": {
+      "budget": 7,
+      "why": "extension settings section per driver"
+    },
+    "apps/desktop/src/main.ts": { "budget": 1, "why": "fork startup: identity and home" },
+    "apps/desktop/src/app/DesktopEnvironment.ts": { "budget": 3, "why": "app name" },
+    "apps/desktop/src/app/DesktopUserData.ts": { "budget": 4, "why": "Electron profile folder" },
+    "apps/desktop/package.json": { "budget": 2, "why": "product name" },
+    "scripts/build-desktop-artifact.ts": {
+      "budget": 7,
+      "why": "bundle id and self-signed mac signing"
+    }
+  }
+}
