@@ -10,6 +10,7 @@ import type { ProviderInstanceId, RuntimeMode, ServerProviderModel } from "@t3to
 import * as Effect from "effect/Effect";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 
+import { attachCommandLog } from "./commandAnswers.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeStoredMap } from "./store.ts";
 
@@ -70,4 +71,5 @@ export const attachStore = (dataDir: string): Effect.Effect<void> =>
   Effect.sync(() => {
     nativeEntries.attach(NodePath.join(dataDir, "agent-threads.json"));
     roomMarks.attach(NodePath.join(dataDir, "agent-room.json"));
+    attachCommandLog(dataDir);
   });

@@ -7,3 +7,4 @@ export * from "./keychain.ts";
 export * from "./paths.ts";
 export * from "./statusStore.ts";
 export * from "./monitor.ts";
+export * from "./judge.ts";

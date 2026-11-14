@@ -31,6 +31,11 @@ import {
 import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
 
 import { stepLabel, stepSelection, type AgentDefinition, type AgentStep } from "./catalog.ts";
+import {
+  defaultCommandAnswerServices,
+  makeSessionAnswers,
+  type CommandAnswerServices,
+} from "./commandAnswers.ts";
 import { entryRuntimePolicy } from "./permissions.ts";
 import type { FallbackSignals, Room } from "./room.ts";
 import type { NativeEntry } from "./shared.ts";
@@ -61,6 +66,8 @@ export interface RouterOptions {
   readonly innerModels?: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProviderModel> | undefined>;
+  /** Rules, judge and log for the approval requests lastdrop answers under `auto`. */
+  readonly commandAnswers?: CommandAnswerServices;
 }
 
 /** Maps the runtime policy at the top of an adapter input to what the entry's instance needs. */
@@ -288,6 +295,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
           innerModels,
           supported,
           outerSelection: input.modelSelection,
+          outerPolicy: input.runtimePolicy,
           adoptedNativeId: sameEntry ? input.initialNativeThreadId : undefined,
           openNotice: notice,
         });
@@ -305,6 +313,8 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     readonly innerModels: ReadonlyArray<ServerProviderModel> | undefined;
     readonly supported: ReadonlyArray<RuntimeMode> | undefined;
     readonly outerSelection: ModelSelection;
+    /** The thread's own runtime policy at open, before the entry's mapping. */
+    readonly outerPolicy: Parameters<Adapter["openSession"]>[0]["runtimePolicy"];
     /** The native thread this session resumes, when the entry was inferred, not stored. */
     readonly adoptedNativeId: string | undefined;
     readonly openNotice: string | undefined;
@@ -321,6 +331,14 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     >();
     if (session.adoptedNativeId !== undefined)
       nativeEntries.set(session.adoptedNativeId, { entry: thisStep, instanceId: innerId });
+    /** Approval requests lastdrop answers under `auto` (`commandAnswers.ts`). */
+    const answers = makeSessionAnswers({
+      agent,
+      step,
+      services: options.commandAnswers ?? defaultCommandAnswerServices,
+      openPolicy: session.outerPolicy,
+      respond: (request) => inner.respondToRuntimeRequest(request),
+    });
 
     const toInnerSelection = (outer: ModelSelection): ModelSelection => {
       if (outer.instanceId !== outerId) return outer;
@@ -427,8 +445,12 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
 
     const mapEvents = (
       events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>,
+      /** Only T3's own event pump answers requests; another subscriber just watches. */
+      answering = false,
     ): Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error> =>
       events.pipe(
+        Stream.mapEffect((event) => (answering ? answers.onEvent(event) : Effect.succeed([event]))),
+        Stream.flatMap((batch) => Stream.fromIterable(batch)),
         Stream.mapEffect((event) =>
           event.type === "turn.terminal"
             ? atTerminal(event)
@@ -465,7 +487,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       ...inner,
       instanceId: outerId,
       providerSession: toOuter(inner.providerSession),
-      events: mapEvents(inner.events),
+      events: mapEvents(inner.events, true),
       ...(inner.subscribeEvents === undefined
         ? {}
         : {
@@ -536,9 +558,13 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
           runId: input.runId,
           nodeId: input.rootNodeId,
         });
+        answers.onMessage(input.providerThread.id, input.message.text, input.runtimePolicy);
         return threadCall(inner.startTurn)(input);
       },
-      steerTurn: threadCall(inner.steerTurn),
+      steerTurn: (input) => {
+        answers.onMessage(input.providerThread.id, input.message.text);
+        return threadCall(inner.steerTurn)(input);
+      },
       interruptTurn: threadCall(inner.interruptTurn),
       respondToRuntimeRequest: threadCall(inner.respondToRuntimeRequest),
       readThreadSnapshot: threadCall(inner.readThreadSnapshot),

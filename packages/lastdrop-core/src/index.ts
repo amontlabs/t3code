@@ -8,3 +8,8 @@ export * from "./planSize.ts";
 export * from "./result.ts";
 export * from "./transientError.ts";
 export * from "./usage.ts";
+export * from "./judge/commandJudge.ts";
+export * from "./judge/decide.ts";
+export * from "./judge/permissionRules.ts";
+export * from "./judge/readOnlyCommands.ts";
+export * from "./judge/readOnlyFlagTables.ts";

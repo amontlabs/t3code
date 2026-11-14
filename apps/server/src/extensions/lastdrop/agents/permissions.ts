@@ -1,9 +1,10 @@
 /**
- * The thread's permission mode as each entry's instance takes it, by T3's own rule: a mode the
- * target doesn't support becomes `approval-required`, so its prompts reach the person. Z.ai and
- * OpenRouter are Claude instances on another endpoint whose auto check is untested: no `auto` yet.
+ * The thread's mode as each entry's instance takes it, and who answers its approval requests
+ * (docs/agents.md "Permission modes"). Under `auto` lastdrop answers, so Antigravity runs accept-edits;
+ * otherwise T3's rule: an unsupported mode becomes `approval-required` and the person answers.
  */
 import type { RuntimeMode } from "@t3tools/contracts";
+import type { JudgePolicy } from "@t3tools/lastdrop-node";
 import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 
 import type { AgentStep } from "./catalog.ts";
@@ -30,15 +31,19 @@ export const entryRuntimeMode = (
   mode: RuntimeMode,
   supported: ReadonlyArray<RuntimeMode> | undefined,
 ): RuntimeMode => {
-  // Until the command judge (step 7): Claude Code's auto check on these endpoints is untested, and
-  // Antigravity has no auto mode, so its prompts must reach the person even if its modes are unknown.
-  if (
-    (step.provider === "zai" ||
-      step.provider === "openrouter" ||
-      step.provider === "antigravity") &&
-    mode === "auto"
-  )
-    return "approval-required";
+  if (mode === "auto") {
+    const known = supported !== undefined && supported.length > 0;
+    // Antigravity has no auto mode, even while its modes are unknown: accept-edits, with lastdrop
+    // answering what it asks (the standalone app's mode for it).
+    if (step.provider === "antigravity" && (!known || supported.includes("auto-accept-edits")))
+      return "auto-accept-edits";
+    // OpenRouter: Claude Code's own auto check is untested there, so every command it asks about
+    // goes to lastdrop's rules and judge instead. Z.ai keeps Claude Code's check (verified in step 6).
+    if (step.provider === "openrouter" && (!known || supported.includes("auto-accept-edits")))
+      return "auto-accept-edits";
+    if (known && !supported.includes("auto") && supported.includes("auto-accept-edits"))
+      return "auto-accept-edits";
+  }
   return supportedOrAsk(mode, supported);
 };
 
@@ -49,4 +54,20 @@ export const entryRuntimePolicy = (
 ): ProviderAdapterV2RuntimePolicy => {
   const runtimeMode = entryRuntimeMode(step, policy.runtimeMode, supported);
   return runtimeMode === policy.runtimeMode ? policy : { ...policy, runtimeMode };
+};
+
+/**
+ * Whether lastdrop answers an entry's request: only under `auto`, read-only in plan mode; other modes
+ * ask the person. Codex's requests are those its `auto_review` left to a person: rules and the
+ * read-only list allow, the rest is declined without the judge.
+ */
+export const lastdropAnswers = (
+  step: AgentStep,
+  policy: Pick<ProviderAdapterV2RuntimePolicy, "runtimeMode" | "interactionMode">,
+): { readonly policy: JudgePolicy; readonly judge: boolean } | undefined => {
+  if (policy.runtimeMode !== "auto") return undefined;
+  return {
+    policy: policy.interactionMode === "plan" ? "readOnly" : "checked",
+    judge: step.provider !== "codex",
+  };
 };
