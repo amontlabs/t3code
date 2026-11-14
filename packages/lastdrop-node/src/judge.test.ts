@@ -8,7 +8,13 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { verdictSummary } from "@t3tools/lastdrop-core";
 
-import { findAgy, loadPermissionRules, makeJudgeLimit, readCatalogJudge, runCommandJudge } from "./judge.ts";
+import {
+  findAgy,
+  loadPermissionRules,
+  makeJudgeLimit,
+  readCatalogJudge,
+  runCommandJudge,
+} from "./judge.ts";
 
 const folders: Array<string> = [];
 const temp = (prefix: string) => {
@@ -112,20 +118,47 @@ describe("CommandJudge running agy", () => {
     const missing = await runCommandJudge("PROMPT", { executable: NodePath.join(folder, "none") });
     expect(missing).toEqual({ allow: false, failure: "could not start agy" });
     // A judge that hangs is killed and refuses (added: Swift's 150 s kill is not run in its tests).
-    // Its child keeps the pipes open after agy itself is killed: the whole group goes, and the
-    // verdict comes at the kill time (review item 4).
-    const pidFile = NodePath.join(folder, "child.pid");
-    const hanging = script(folder, `sleep 30 & print $! > ${pidFile}; wait`);
-    const hung = await runCommandJudge("PROMPT", { executable: hanging, killAfterSeconds: 0.5 });
+    // A judge that hangs past the kill time is refused as timed out.
+    const hung = await runCommandJudge("PROMPT", {
+      executable: script(folder, "sleep 30"),
+      killAfterSeconds: 0.3,
+    });
     expect(hung).toEqual({ allow: false, failure: "timed out" });
-    const child = Number(NodeFS.readFileSync(pidFile, "utf8").trim());
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(() => process.kill(child, 0), "the judge's own child is killed too").toThrow();
-    // A session that closes stops its judge at once.
+    // Its child keeps the pipes open after agy itself is gone: the whole group is killed, and the
+    // verdict comes at once (review item 4). Here the session closes.
+    const pidFile = NodePath.join(folder, "child.pid");
     const controller = new AbortController();
-    const pending = runCommandJudge("PROMPT", { executable: script(folder, "sleep 30"), signal: controller.signal });
+    const pending = runCommandJudge("PROMPT", {
+      executable: script(folder, `sleep 30 & print $! > ${pidFile}; wait`),
+      signal: controller.signal,
+    });
+    await expect
+      .poll(() => NodeFS.existsSync(pidFile) && NodeFS.readFileSync(pidFile, "utf8").trim() !== "")
+      .toBe(true);
+    const child = Number(NodeFS.readFileSync(pidFile, "utf8").trim());
     controller.abort();
     expect(await pending).toEqual({ allow: false, failure: "the session closed" });
+    const alive = () => {
+      try {
+        process.kill(child, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await expect.poll(alive, { message: "the judge's own child is killed too" }).toBe(false);
+    // Aborted before it started: refused without running.
+    const early = new AbortController();
+    early.abort();
+    expect(
+      await runCommandJudge("PROMPT", {
+        executable: script(folder, "sleep 30"),
+        signal: early.signal,
+      }),
+    ).toEqual({
+      allow: false,
+      failure: "the session closed",
+    });
     expect(await runCommandJudge("PROMPT", { executable: undefined })).toEqual({
       allow: false,
       failure: "Antigravity (`agy`) was not found on this Mac",
@@ -179,23 +212,25 @@ describe("judge limit (review item 6)", () => {
     const limit = makeJudgeLimit(2);
     let running = 0;
     let most = 0;
-    const order: Array<number> = [];
-    const release: Array<() => void> = [];
+    const started: Array<number> = [];
+    const release = new Map<number, () => void>();
     const tasks = [0, 1, 2, 3].map((n) =>
       limit(async () => {
         running += 1;
         most = Math.max(most, running);
-        await new Promise<void>((resolve) => release.push(resolve));
-        order.push(n);
+        started.push(n);
+        await new Promise<void>((resolve) => release.set(n, resolve));
         running -= 1;
       }),
     );
-    while (order.length < 4) {
-      await new Promise((resolve) => setImmediate(resolve));
-      release.shift()?.();
-    }
+    await expect.poll(() => started).toEqual([0, 1]);
+    release.get(0)!();
+    await expect.poll(() => started).toEqual([0, 1, 2]);
+    release.get(1)!();
+    await expect.poll(() => started).toEqual([0, 1, 2, 3]);
+    release.get(2)!();
+    release.get(3)!();
     await Promise.all(tasks);
     expect(most).toBe(2);
-    expect(order).toEqual([0, 1, 2, 3]);
   });
 });

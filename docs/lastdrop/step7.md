@@ -13,14 +13,25 @@ table is in `packages/lastdrop-core/PORTING.md`.
   right after `runtime_request.updated`) is answered in the background through the inner adapter's
   `respondToRuntimeRequest`: `accept` or `decline`. The row still reaches T3 and resolves as usual. Only
   T3's own event pump (`events`) answers; `subscribeEvents` only watches. Each request is answered once.
+- **What is checked** (review fix): never the approval row's text, which is only a summary (T3's ACP
+  path falls back to the title, `run_command` for agy). The action is the tool item the provider emitted
+  for the same native call (`nativeItemRef`) before asking:
+  - a `command_execution` item is a shell command: Antigravity's `rawInput.CommandLine` (T3's
+    Antigravity normalizer), Claude's `Bash.command`, Codex's command. Only these go through the shell
+    rules and the read-only list. Text that may be the title, a generic fallback or a cut command is not
+    a command;
+  - any other item (an MCP tool, `WebFetch`/`WebSearch`, `Agent`, a file edit or read) goes to the judge
+    with its tool name and input, as the standalone app sends non-command actions; edits are refused in
+    plan mode;
+  - no tool item for the call, or a command that can't be read: refused, never judged on the summary.
 - **Who answers** (`permissions.ts` `lastdropAnswers`, after docs/agents.md "Permission modes"):
 
-  | Thread mode                              | Antigravity entry                                                                                         | Z.ai / OpenRouter / Claude entry                                                                                                                          | Codex entry                                                                                                   |
-  | ---------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-  | `auto`                                   | runs `auto-accept-edits`; lastdrop answers: rules, read-only list, judge                                  | Z.ai, Claude: `auto` (Claude Code's own check; what it still asks, lastdrop answers). OpenRouter: `auto-accept-edits`, every command answered by lastdrop | runs `auto` (`auto_review`); what it leaves to a person: rules and read-only list allow, the rest is declined |
-  | `auto` + plan                            | lastdrop answers read-only: deny/ask rules, read-only list, judge told to allow only reads; edits refused | same                                                                                                                                                      | same, without the judge                                                                                       |
-  | `approval-required`, `auto-accept-edits` | the person                                                                                                | the person                                                                                                                                                | the person                                                                                                    |
-  | `full-access`                            | the person (only the provider's own checks ask)                                                           | the person                                                                                                                                                | the person                                                                                                    |
+  | Thread mode                              | Antigravity entry                                                                                                                                                | Z.ai / OpenRouter / Claude entry                                                                                                                          | Codex entry                                                                                                   |
+  | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+  | `auto`                                   | runs `auto-accept-edits`; lastdrop answers: rules, read-only list, judge                                                                                         | Z.ai, Claude: `auto` (Claude Code's own check; what it still asks, lastdrop answers). OpenRouter: `auto-accept-edits`, every command answered by lastdrop | runs `auto` (`auto_review`); what it leaves to a person: rules and read-only list allow, the rest is declined |
+  | `auto` + plan                            | runs `approval-required`, so edits reach lastdrop too; lastdrop answers read-only: deny/ask rules, read-only list, judge told to allow only reads; edits refused | same                                                                                                                                                      | same, without the judge                                                                                       |
+  | `approval-required`, `auto-accept-edits` | the person                                                                                                                                                       | the person                                                                                                                                                | the person                                                                                                    |
+  | `full-access`                            | the person (only the provider's own checks ask)                                                                                                                  | the person                                                                                                                                                | the person                                                                                                    |
 
   `auto-accept-edits` stays with the person: in T3 that mode means "ask me about commands", and a person
   is there, unlike in the standalone app's headless runs. MCP elicitations always go to the person.
@@ -29,10 +40,14 @@ table is in `packages/lastdrop-core/PORTING.md`.
   request from the thread's folder (user settings or `$CLAUDE_CONFIG_DIR`, managed settings, the
   project's two files, the main checkout's from a worktree). The judge prompt holds the agent's name,
   provider and role (the catalog description), the thread's messages and steers (trusted), earlier
-  commands, edits and searches (inputs only, never outputs), and the planned action with its folder. An
-  identical action is decided once per session.
+  commands, edits and searches (inputs only, never outputs), and the planned action with its folder. The
+  latest 10 messages are kept, as in the standalone. Rules are read again for every request; only the
+  judge's verdicts are kept, per identical action and mode, and a failure (timeout, `agy` error) is never
+  kept, so the next identical request is judged again.
 - **The judge**: one `agy -p … --mode plan --model <m> [--effort <e>] --disable-slash-commands
-  --print-timeout 120s` per check, from an empty temporary folder, killed after 150 s. This is the
+  --print-timeout 120s` per check, from an empty temporary folder, in its own process group: at 150 s, or
+  when its session closes, the whole group is killed and the request refused at once. At most 3 judges
+  run at once across the server; the rest wait. This is the
   standalone's way, chosen over a native T3 instance: same prompt and parsing, no T3 thread per check, and
   it works whether or not T3's own Antigravity is signed in. The model is the standalone catalog's
   `judges.antigravity` (`lastdrop --agents judge antigravity <model> [effort]`), read read-only for each
@@ -50,6 +65,17 @@ table is in `packages/lastdrop-core/PORTING.md`.
   `auto-accept-edits` (also while its modes are unknown). Z.ai runs `auto`: step 6 verified Claude Code 2.1.322's client-side check there (glm-5.3 allowed `curl -sI https://example.com` in about 1.8 s), as in the standalone. OpenRouter stays conservative: it runs `auto-accept-edits`, so Claude Code asks about every command and lastdrop's rules and judge answer (its auto check is untested live; the saved key is management-only).
 
 ## Evidence
+
+- Review fixes: `commandAnswersAcp.test.ts` runs T3's real Antigravity adapter on T3's ACP replay agent
+  with agy's shapes (title `run_command`, `rawInput.CommandLine`): `rm -rf ~/Documents` is judged and
+  declined, `ls -la` under the same title allowed as read-only, a title "Run \`ls\`" over an `rm`
+  declined, with the exact ACP answers checked. `commandAnswersClaude.test.ts` runs T3's real Claude
+  adapter on frames from T3's recorded `tool_call_denied_write` fixture: a Bash `rm`, an
+  `mcp__ssh__exec {command: "cat /etc/shadow"}` (judged as the MCP tool, not read-only) and a Bash `ls`,
+  with the exact SDK answers checked. Both fail if the summary or a non-shell tool's input is read as the
+  command (checked by mutation). `commandAnswersSession.test.ts`: no tool item, title-only, fallback and
+  cut commands refused; MCP, fetch and Agent calls judged as themselves, not covered by a bare `Bash`
+  rule; rules re-read, failures not kept; 10 messages kept; a closed session's judge aborted.
 
 - Ported Swift cases, all 22, plus 4 added: `lastdrop-core` `src/judge/*.test.ts`, `lastdrop-node`
   `judge.test.ts` (temporary homes, fake `agy` scripts, a hang killed).

@@ -67,7 +67,7 @@ const appendLog = (line: string) => {
 };
 
 /** At most this many `agy` judges at once, across every session. */
-export const JUDGE_CONCURRENCY = 3;
+const JUDGE_CONCURRENCY = 3;
 const judgeLimit = makeJudgeLimit(JUDGE_CONCURRENCY);
 
 /** The standalone app's ways: settings files, the catalog's judge (read when each check runs), `agy`. */
@@ -98,7 +98,7 @@ const GENERIC_COMMAND_TEXT = new Set(["command", "monitor", "terminal", "run_com
  * input (Antigravity `CommandLine`, Claude `Bash.command`, Codex `exec`). Undefined when the text
  * may be the title or a fallback, or was cut: then nobody knows what would run.
  */
-export const realCommand = (
+const realCommand = (
   item: Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
 ): string | undefined => {
   const command = item.input.trim();
@@ -131,7 +131,11 @@ const toolInput = (item: OrchestrationV2TurnItem): Record<string, unknown> => {
 };
 
 const toolName = (item: OrchestrationV2TurnItem): string =>
-  item.type === "dynamic_tool" ? (item.toolName ?? "tool") : item.type === "file_change" ? "edit" : item.type;
+  item.type === "dynamic_tool"
+    ? (item.toolName ?? "tool")
+    : item.type === "file_change"
+      ? "edit"
+      : item.type;
 
 /**
  * The action an approval asks about, from the tool item the provider made for the same native call
@@ -139,7 +143,7 @@ const toolName = (item: OrchestrationV2TurnItem): string =>
  * rules and the read-only list; any other tool goes to the judge with its name and input, as in the
  * standalone app. Undefined when the call is unknown or its command can't be read: refused.
  */
-export const approvalAction = (
+const approvalAction = (
   item: ApprovalItem,
   tool: OrchestrationV2TurnItem | undefined,
   cwd: string | null,
@@ -287,18 +291,20 @@ export const makeSessionAnswers = (input: {
   });
 
   /** The judge, once per identical action and mode; a failure is never kept. */
-  const judgeOnce = (key: string) => async (prompt: string): Promise<Verdict> => {
-    const kept = verdicts.get(key);
-    if (kept !== undefined) return kept;
-    const verdict = await services.judge(prompt, closing.signal).catch(
-      (error: unknown): Verdict => ({
-        allow: false,
-        failure: error instanceof Error ? error.message : String(error),
-      }),
-    );
-    if (verdict.failure === undefined) verdicts.set(key, verdict);
-    return verdict;
-  };
+  const judgeOnce =
+    (key: string) =>
+    async (prompt: string): Promise<Verdict> => {
+      const kept = verdicts.get(key);
+      if (kept !== undefined) return kept;
+      const verdict = await services
+        .judge(prompt, closing.signal)
+        .catch((error: unknown): Verdict => ({
+          allow: false,
+          failure: error instanceof Error ? error.message : String(error),
+        }));
+      if (verdict.failure === undefined) verdicts.set(key, verdict);
+      return verdict;
+    };
 
   const decide = Effect.fn("LastdropCommandAnswers.decide")(function* (
     item: ApprovalItem,

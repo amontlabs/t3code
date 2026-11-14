@@ -220,7 +220,11 @@ const makeAskingAdapter = (input: {
                         ? {
                             ...base,
                             id: TurnItemId.make("item:tool"),
-                            nativeItemRef: { driver, nativeId: "call-1", strength: "strong" as const },
+                            nativeItemRef: {
+                              driver,
+                              nativeId: "call-1",
+                              strength: "strong" as const,
+                            },
                             title: "replace_file_content",
                             ordinal: 2,
                             status: "running" as const,
@@ -231,7 +235,11 @@ const makeAskingAdapter = (input: {
                         : {
                             ...base,
                             id: TurnItemId.make("item:tool"),
-                            nativeItemRef: { driver, nativeId: "call-1", strength: "strong" as const },
+                            nativeItemRef: {
+                              driver,
+                              nativeId: "call-1",
+                              strength: "strong" as const,
+                            },
                             title: "run_command",
                             ordinal: 2,
                             status: "running" as const,
@@ -356,11 +364,11 @@ const run = Effect.fn("run")(function* (input: {
       Effect.succeed(id === ANTIGRAVITY ? ANTIGRAVITY_MODES : [...ALL_RUNTIME_MODES]),
     commandAnswers: input.services ?? {
       rules: () => ({ ...ALLOW_RULES }),
-      judge: async (prompt) => {
+      judge: async (prompt, signal) => {
         prompts.push(prompt);
         return input.judge === undefined
           ? { allow: false, failure: "no judge in this test" }
-          : input.judge(prompt);
+          : input.judge(prompt, signal);
       },
       log: (line) => logs.push(line),
     },

@@ -378,6 +378,10 @@ Behaviour that differs:
 
 - Numbers: Swift's `isNumber` (any Unicode number) and `Double(...)` became ASCII digits and plain
   decimals: stricter, never looser.
+- Text (review fix): characters are grapheme clusters and whitespace is Swift's (`src/judge/swiftText.ts`),
+  so `"\r\n"` never splits and U+0085 is a space, U+FEFF is not, as in Swift. Stricter than Swift: a
+  command with a carriage return is never allowed by a pattern or as read-only, and deny and ask rules
+  also see it split at `"\r\n"` as bash does.
 - The judge's policy line names "the user or the main agent" as the task's author (T3 threads are
   started by a person), and its read-only line says "a plan run" instead of "an Explore or Plan agent".
 - `judgeUnavailable` points at `lastdrop --agents judge antigravity <model> [effort]` (the fork has no

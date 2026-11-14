@@ -222,7 +222,10 @@ describe("lastdrop router targets", () => {
       assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES, "plan"), "approval-required");
       assert.equal(entryRuntimeMode(step, "auto", undefined, "plan"), "approval-required");
       const openrouterStep = agents.find((agent) => agent.name === "cheap")!.chain[1]!;
-      assert.equal(entryRuntimeMode(openrouterStep, "auto", [...ALL_RUNTIME_MODES], "plan"), "approval-required");
+      assert.equal(
+        entryRuntimeMode(openrouterStep, "auto", [...ALL_RUNTIME_MODES], "plan"),
+        "approval-required",
+      );
       const zaiStep = agents.find((agent) => agent.name === "cheap")!.chain[0]!;
       assert.equal(entryRuntimeMode(zaiStep, "auto", [...ALL_RUNTIME_MODES], "plan"), "auto");
     }).pipe(Effect.scoped),

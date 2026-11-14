@@ -157,7 +157,10 @@ describe("PermissionRules whitespace, as Swift reads it (never looser)", () => {
   });
 
   it("denies across a CRLF, and never allows a carriage return", () => {
-    expect(checkRules(rules({ deny: ["Bash(rm *)"] }), "ls\r\nrm -rf x")).toEqual({ type: "deny", rule: "Bash(rm *)" });
+    expect(checkRules(rules({ deny: ["Bash(rm *)"] }), "ls\r\nrm -rf x")).toEqual({
+      type: "deny",
+      rule: "Bash(rm *)",
+    });
     expect(checkRules(rules({ allow: ["Bash(gh *)"] }), "gh pr list\r\ncomm x")).toEqual(NONE);
   });
 

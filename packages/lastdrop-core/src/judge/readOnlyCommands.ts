@@ -3,7 +3,7 @@
  * `ReadOnlyCommands.swift`; flag tables are data). Never looser than Claude Code: an unknown flag, `$`,
  * a backtick, a file redirect, a subshell or control flow is never read-only.
  */
-import { chars, count, isWhitespace, splitAtSpaces, trim, WHITESPACE } from "./swiftText.ts";
+import { chars, count, isWhitespace, trim } from "./swiftText.ts";
 import { splitCommand, unwrapCommand } from "./permissionRules.ts";
 import { FLAG_TABLES, type FlagValue } from "./readOnlyFlagTables.ts";
 
@@ -19,7 +19,13 @@ const tableFor = (name: string): Table | undefined =>
 export const readOnlyCommands = (input: string): Array<string> | undefined => {
   const command = trim(input);
   // A carriage return is never read-only: bash splits at "\r\n", Swift does not (stricter than both).
-  if (command === "" || command.includes("\r") || command.includes("$") || command.includes("`") || backgrounds(command))
+  if (
+    command === "" ||
+    command.includes("\r") ||
+    command.includes("$") ||
+    command.includes("`") ||
+    backgrounds(command)
+  )
     return undefined;
   const parts = splitCommand(command, false);
   if (parts === undefined || parts.length === 0) return undefined;

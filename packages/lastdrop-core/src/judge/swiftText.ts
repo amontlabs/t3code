@@ -10,10 +10,12 @@ export const chars = (text: string): Array<string> =>
   Array.from(segmenter.segment(text), (segment) => segment.segment);
 
 /** Unicode White_Space, which Swift's `Character.isWhitespace` tests on the first scalar. */
-export const WHITESPACE = "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+export const WHITESPACE =
+  "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 const FIRST_IS_WHITESPACE = new RegExp(`^[${WHITESPACE}]`, "u");
 
-export const isWhitespace = (c: string | undefined): boolean => c !== undefined && FIRST_IS_WHITESPACE.test(c);
+export const isWhitespace = (c: string | undefined): boolean =>
+  c !== undefined && FIRST_IS_WHITESPACE.test(c);
 
 /** `trimmingCharacters(in: .whitespacesAndNewlines)`, by characters. */
 export const trim = (text: string): string => {

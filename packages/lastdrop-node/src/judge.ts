@@ -194,7 +194,13 @@ export const runCommandJudge = async (
     type Ended =
       | { readonly type: "not-started" }
       | { readonly type: "stopped"; readonly failure: string }
-      | { readonly type: "exited"; readonly stdout: string; readonly stderr: string; readonly code: number | null; readonly signal: NodeJS.Signals | null };
+      | {
+          readonly type: "exited";
+          readonly stdout: string;
+          readonly stderr: string;
+          readonly code: number | null;
+          readonly signal: NodeJS.Signals | null;
+        };
     const ended = await new Promise<Ended>((resolve) => {
       let settled = false;
       const settle = (value: Ended) => {

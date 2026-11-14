@@ -4,7 +4,7 @@
  * lastdrop-node's `loadPermissionRules` reads the settings files.
  */
 
-import { chars, count, isWhitespace, splitAtSpaces, trim, WHITESPACE } from "./swiftText.ts";
+import { chars, isWhitespace, splitAtSpaces, trim, WHITESPACE } from "./swiftText.ts";
 
 /** `Bash(...)` specifiers; `*` stands for a bare `Bash` rule. */
 export interface PermissionRules {
@@ -79,7 +79,9 @@ export const checkRules = (rules: PermissionRules, input: string): RulesVerdict 
   // also see the pieces as if it were a newline (never narrower than Swift).
   const loosePieces = (text: string) =>
     splitCommand(text, true)?.map((part) => unwrapCommand(part, false).text) ?? [text];
-  const pieces = [...new Set([...loosePieces(command), ...loosePieces(command.replaceAll("\r\n", "\n"))])];
+  const pieces = [
+    ...new Set([...loosePieces(command), ...loosePieces(command.replaceAll("\r\n", "\n"))]),
+  ];
 
   for (const rule of rules.deny)
     if (pieces.some((piece) => matchesRule(rule, piece)))
@@ -393,7 +395,10 @@ export const redirects = (part: string): boolean => {
     stripped += single || double ? "_" : c;
   }
   // Harmless targets: /dev/null and file descriptors.
-  const rest = stripped.replace(new RegExp(`(\\d*|&)>>?[${WHITESPACE}]*/dev/null|\\d*>&\\d+|<&\\d+`, "gu"), " ");
+  const rest = stripped.replace(
+    new RegExp(`(\\d*|&)>>?[${WHITESPACE}]*/dev/null|\\d*>&\\d+|<&\\d+`, "gu"),
+    " ",
+  );
   return rest.includes(">") || rest.includes("<");
 };
 
