@@ -131,7 +131,7 @@ export class ClaudeUsage {
     const folder = claudeFolder(this.options.paths, key);
     return [
       this.options.paths.sharedConfig,
-      ...(folder ? [profileConfigFile(folder), `${folder}/.claude.json`] : []),
+      ...(folder ? [profileConfigFile(folder, this.options.paths), `${folder}/.claude.json`] : []),
     ];
   }
 

@@ -11,6 +11,8 @@ import * as LastdropAccounts from "./lastdrop/accounts.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
+import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+
 /** Services the extension drivers need to create instances. */
 export type ExtensionDriversEnv = never;
 /** Services the extension drivers' usage readers need. */
@@ -36,12 +38,19 @@ export const EXTENSION_PROVIDER_CLIENTS: ReadonlyArray<ProviderClientDefinition>
 ];
 
 /**
- * Wraps the layer that opens every Claude Agent SDK query. lastdrop will pick the account here;
- * today it returns the layer unchanged.
+ * Wraps the layer that opens every Claude Agent SDK query: lastdrop picks the Claude account per
+ * thread there, moves threads between accounts and translates their session ids
+ * (`lastdrop/queryRunner.ts`). Under vitest and off macOS it returns T3's runner unchanged.
  */
-export const wrapClaudeQueryRunner = <A, E, R>(
-  queryRunner: Layer.Layer<A, E, R>,
-): Layer.Layer<A, E, R> => queryRunner;
+export const wrapClaudeQueryRunner = <E, R>(
+  queryRunner: Layer.Layer<ClaudeAgentSdkQueryRunner, E, R>,
+): Layer.Layer<ClaudeAgentSdkQueryRunner, E, R> =>
+  // Loaded lazily: the wrapper imports the Claude adapter, which (through the drivers) imports this file.
+  Layer.unwrap(
+    Effect.promise(() => import("./lastdrop/queryRunnerLive.ts")).pipe(
+      Effect.map((live) => live.wrapLive(queryRunner)),
+    ),
+  );
 
 /**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the

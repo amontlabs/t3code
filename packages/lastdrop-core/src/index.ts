@@ -8,3 +8,4 @@ export * from "./planSize.ts";
 export * from "./result.ts";
 export * from "./transientError.ts";
 export * from "./usage.ts";
+export * from "./threadRouting.ts";
