@@ -6,6 +6,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   checkInferenceKey,
+  ENDPOINT_MARKER,
+  isLastdropEndpointEnvironment,
+  isLastdropEndpointInstance,
   creditsWindow,
   endpointEnvironment,
   endpointInstance,
@@ -85,7 +88,6 @@ describe("endpoint instance", () => {
     const { instanceId, instance } = endpointInstance({
       provider: "zai",
       home: "/h/.t3/lastdrop/endpoints/zai",
-      sessionSettings: "/h/.t3/lastdrop/endpoints/zai/session-settings.json",
       model: "glm-5.3-flash",
       models: endpointModels("zai", ["glm-5.3-flash"]),
     });
@@ -93,10 +95,14 @@ describe("endpoint instance", () => {
     expect(instance.driver).toBe("claudeAgent");
     expect(instance.displayName).toBe("Z.ai (lastdrop)");
     expect(instance.config.homePath).toBe("/h/.t3/lastdrop/endpoints/zai");
-    expect(instance.config.launchArgs).toBe(
-      "--settings /h/.t3/lastdrop/endpoints/zai/session-settings.json",
-    );
     const env = Object.fromEntries(instance.environment.map((v) => [v.name, v.value]));
+    // The settings go inline (single-quoted for T3's tokenizer), with the endpoint's routing in them.
+    const launch = /^--settings '(.*)'$/u.exec(instance.config.launchArgs);
+    const inline = JSON.parse(launch![1]!) as { env: Record<string, string> };
+    expect(inline.env.ANTHROPIC_BASE_URL).toBe("https://api.z.ai/api/anthropic");
+    expect(inline.env.ANTHROPIC_MODEL).toBe("glm-5.3-flash");
+    expect(env[ENDPOINT_MARKER]).toBe("zai");
+    expect(instance.config.lastdropEndpoint).toBe("zai");
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.z.ai/api/anthropic");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("");
     for (const key of SCRUBBED_VARIABLES) expect(env[key]).toBe("");
@@ -109,15 +115,46 @@ describe("endpoint instance", () => {
     expect(effort.options.find((o) => o.isDefault)?.id).toBe("max");
   });
 
-  it("omits --settings for a path T3 would split", () => {
+  it("keeps --settings with a home path that has spaces (nothing is a path any more)", () => {
     const { instance } = endpointInstance({
       provider: "openrouter",
       home: "/Users/a b/x",
-      sessionSettings: "/Users/a b/x/session-settings.json",
-      model: undefined,
+      model: "p/m",
       models: [],
     });
-    expect(instance.config.launchArgs).toBe("");
+    expect(instance.config.homePath).toBe("/Users/a b/x");
+    expect(instance.config.launchArgs.startsWith("--settings '{")).toBe(true);
+  });
+
+  it("tells lastdrop's instances and their processes apart", () => {
+    const { instance } = endpointInstance({
+      provider: "zai",
+      home: "/h",
+      model: "glm-5.3",
+      models: [],
+    });
+    expect(isLastdropEndpointInstance(instance)).toBe(true);
+    expect(
+      isLastdropEndpointInstance({ environment: [], config: { lastdropEndpoint: "openrouter" } }),
+    ).toBe(true);
+    expect(isLastdropEndpointInstance({ environment: [{ name: "FOO", value: "zai" }] })).toBe(
+      false,
+    );
+    expect(isLastdropEndpointInstance({ config: { homePath: "/x" } })).toBe(false);
+    expect(isLastdropEndpointInstance(undefined)).toBe(false);
+    const env = Object.fromEntries(instance.environment.map((v) => [v.name, v.value]));
+    expect(isLastdropEndpointEnvironment(env)).toBe(true);
+    expect(isLastdropEndpointEnvironment({ ANTHROPIC_BASE_URL: "https://openrouter.ai/api" })).toBe(
+      true,
+    );
+    expect(
+      isLastdropEndpointEnvironment({
+        PATH: "/bin",
+        ANTHROPIC_BASE_URL: "https://api.anthropic.com",
+      }),
+    ).toBe(false);
+    expect(isLastdropEndpointEnvironment({ [ENDPOINT_MARKER]: "other" })).toBe(false);
+    expect(isLastdropEndpointEnvironment(undefined)).toBe(false);
   });
 
   it("offers OpenRouter's catalog models with their listed efforts", () => {
@@ -191,6 +228,34 @@ describe("endpoint errors", () => {
     expect(endpointLimitReached("zai", { code: "api_error_401", message: "unauthorized" })).toBe(
       undefined,
     );
+  });
+  it("matches only Z.ai's real codes, never a number elsewhere in the message", () => {
+    for (const message of [
+      "Prompt is 1320 tokens too long",
+      "API Error: 400 context of 1308 tokens",
+      "retry after 1302 ms",
+    ]) {
+      expect(endpointLimitReached("zai", { code: "api_error_400", message })).toBeUndefined();
+    }
+    expect(
+      endpointLimitReached("zai", { code: null, message: '{"code":1310,"msg":"weekly"}' }),
+    ).toBe(true);
+    expect(
+      endpointLimitReached("zai", { code: null, message: "API Error: 1308 Usage limit reached" }),
+    ).toBe(true);
+    // OpenRouter: the status, the error body's code, or its billing words; a bare 402 elsewhere is not.
+    expect(
+      endpointLimitReached("openrouter", { code: null, message: 'API Error: 402 {"error":{}}' }),
+    ).toBe(true);
+    expect(
+      endpointLimitReached("openrouter", { code: null, message: '{"error":{"code":402}}' }),
+    ).toBe(true);
+    expect(endpointLimitReached("openrouter", { code: null, message: "payment_required" })).toBe(
+      true,
+    );
+    expect(
+      endpointLimitReached("openrouter", { code: null, message: "read 402 files" }),
+    ).toBeUndefined();
   });
 });
 
@@ -299,6 +364,32 @@ describe("endpoint room", () => {
         now,
       ),
     ).toBeUndefined();
+  });
+
+  it("counts a row past its reset as unused, as Claude's readings do", () => {
+    expect(
+      endpointOutUntil(
+        {
+          at: now - minutes(5),
+          windows: [{ label: "Session", usedPercent: 100, resetsAt: now - minutes(1) }],
+        },
+        thresholds,
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      endpointOutUntil(
+        {
+          at: now - minutes(5),
+          windows: [
+            { label: "Session", usedPercent: 100, resetsAt: now - minutes(1) },
+            { label: "Weekly", usedPercent: 95, resetsAt: now + minutes(60) },
+          ],
+        },
+        thresholds,
+        now,
+      ),
+    ).toBe(now + minutes(60));
   });
 
   it("never stops an agent on an old or missing reading", () => {

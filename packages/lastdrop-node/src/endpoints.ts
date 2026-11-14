@@ -24,7 +24,6 @@ import {
   openRouterKeyUsage,
   openRouterModels,
   profileSettingsJson,
-  sessionSettingsJson,
   shellQuote,
   zaiPlan,
   zaiWindows,
@@ -32,7 +31,7 @@ import {
 
 import type { FetchLike } from "./claudeUsage.ts";
 import { exists, readText, writeAtomic } from "./files.ts";
-import { readOwnKeychain } from "./keychain.ts";
+import { probeOwnKeychain, readOwnKeychain } from "./keychain.ts";
 import type { LastdropPaths } from "./paths.ts";
 
 /** The standalone's keychain service, and its name before the rename (read only, never moved). */
@@ -92,15 +91,38 @@ export async function endpointApiKey(
   paths: LastdropPaths,
   env: Env = {},
 ): Promise<string | undefined> {
-  const own = await readOwn(paths, KEY_ITEMS[provider]);
-  if (own !== undefined) return own;
-  if (provider === "zai") {
-    const file = await zaiKeyFile(paths);
-    if (file !== undefined) return file;
-    for (const name of ZAI_ENV_KEYS) if (trimmed(env[name])) return trimmed(env[name]);
-    return undefined;
+  const found = await lookupEndpointKey(provider, paths, env);
+  return found.state === "found" ? found.key : undefined;
+}
+
+/**
+ * The key, or why there's none: `missing` only when every place definitely has none; `unreadable` when the
+ * keychain couldn't be read (locked, timed out) and no fallback had a key. Only `missing` may remove an
+ * instance.
+ */
+export type KeyLookup =
+  | { readonly state: "found"; readonly key: string }
+  | { readonly state: "missing" }
+  | { readonly state: "unreadable" };
+
+export async function lookupEndpointKey(
+  provider: EndpointProvider,
+  paths: LastdropPaths,
+  env: Env = {},
+): Promise<KeyLookup> {
+  let unreadable = false;
+  for (const service of SERVICES) {
+    const read = await probeOwnKeychain(paths.security, service, KEY_ITEMS[provider]);
+    if (read.state === "found") return { state: "found", key: read.value };
+    if (read.state === "unreadable") unreadable = true;
   }
-  return trimmed(env[OPENROUTER_ENV_KEY]);
+  const fallback =
+    provider === "zai"
+      ? ((await zaiKeyFile(paths)) ??
+        ZAI_ENV_KEYS.map((name) => trimmed(env[name])).find((k) => k !== undefined))
+      : trimmed(env[OPENROUTER_ENV_KEY]);
+  if (fallback !== undefined) return { state: "found", key: fallback };
+  return unreadable ? { state: "unreadable" } : { state: "missing" };
 }
 
 /** Z.ai's usage authorization: the web session lastdrop keeps, else the API key. */
@@ -119,8 +141,6 @@ async function zaiAuthorization(
 /** The fork's profile folder for the provider (the standalone keeps its own in its support folder). */
 export const endpointDirectory = (paths: LastdropPaths, provider: EndpointProvider): string =>
   `${paths.dataDir}/endpoints/${provider}`;
-export const endpointSessionSettings = (paths: LastdropPaths, provider: EndpointProvider): string =>
-  `${endpointDirectory(paths, provider)}/session-settings.json`;
 export const keyHelperPath = (paths: LastdropPaths): string =>
   `${paths.dataDir}/endpoints/key-helper`;
 
@@ -175,12 +195,11 @@ const SHARED_ITEMS = ["agents", "skills", "CLAUDE.md", "commands"] as const;
 /**
  * Makes the provider's Claude Code profile (`EndpointProfile.prepare`): its own `settings.json` holding only
  * the key helper (a stale symlink is replaced, never written through), onboarding marked done, links to the
- * user's agents, skills, CLAUDE.md and commands, and the session settings file with the environment.
+ * user's agents, skills, CLAUDE.md and commands. Writes only what differs.
  */
 export async function prepareEndpointProfile(input: {
   readonly paths: LastdropPaths;
   readonly provider: EndpointProvider;
-  readonly environment: Readonly<Record<string, string>>;
 }): Promise<void> {
   const { paths, provider } = input;
   const dir = endpointDirectory(paths, provider);
@@ -214,9 +233,8 @@ export async function prepareEndpointProfile(input: {
     if (!(await exists(source)) || (await exists(target))) continue;
     await NodeFSP.symlink(source, target);
   }
-  const session = endpointSessionSettings(paths, provider);
-  const sessionText = sessionSettingsJson(input.environment);
-  if ((await readText(session)) !== sessionText) await writeAtomic(session, sessionText);
+  // The environment now goes inline in the instance's `--settings`; an older build's file goes.
+  await NodeFSP.rm(`${dir}/session-settings.json`, { force: true });
 }
 
 // MARK: Usage
@@ -324,7 +342,9 @@ export async function validateOpenRouterKey(fetch: FetchLike, key: string): Prom
   if (ok(own.status)) return checkInferenceKey(own.body);
   if (own.status === 401 || own.status === 403) {
     const credits = await getJson(fetch, `${OPENROUTER_API}/credits`, headers);
-    if (ok(credits.status)) throw endpointUsageError("message", missingKeyMessage("openrouter"));
+    if (ok(credits.status)) {
+      throw endpointUsageError("management", missingKeyMessage("openrouter"));
+    }
     throw endpointUsageError(
       "unauthorized",
       "OpenRouter authentication failed. Check the regular API key in lastdrop's Settings.",
@@ -353,9 +373,14 @@ const MODELS_REFRESH_MS = 60 * 60_000;
 /** What lastdrop knows about one provider. Never holds the key. */
 export interface EndpointState {
   readonly provider: EndpointProvider;
-  /** A key that may run models is there. */
+  /**
+   * This pass's answer: a key is there, there definitely is none, or the keychain couldn't be read (locked,
+   * timed out). Only `absent` may remove the instance; `unknown` keeps everything as it was.
+   */
+  readonly presence: "configured" | "absent" | "unknown";
+  /** A key was there at the last definite answer. */
   readonly configured: boolean;
-  /** Why agents can't run on it although a key is there (a management key). */
+  /** Why agents can't run on it although a key is there: only a definite management key, kept across failures. */
   readonly problem?: string | undefined;
   readonly usage?: EndpointUsage | undefined;
   /** When `usage` was read, epoch ms. */
@@ -377,6 +402,7 @@ export class EndpointMonitor {
   private readonly now: () => number;
   private readonly states = new Map<EndpointProvider, EndpointState & { attemptedAt?: number }>();
   private models: { at: number; list: ReadonlyArray<EndpointModel> } | undefined;
+  private modelsTriedAt: number | undefined;
 
   constructor(options: EndpointMonitorOptions) {
     this.options = options;
@@ -386,6 +412,7 @@ export class EndpointMonitor {
   state(provider: EndpointProvider): EndpointState {
     const { attemptedAt: _a, ...state } = this.states.get(provider) ?? {
       provider,
+      presence: "unknown",
       configured: false,
     };
     return state;
@@ -395,18 +422,24 @@ export class EndpointMonitor {
     return ENDPOINT_PROVIDERS.map((p) => this.state(p));
   }
 
-  /** OpenRouter's listed models, read at most hourly; the last list when the read fails. */
-  async openRouterModels(): Promise<ReadonlyArray<EndpointModel>> {
+  /**
+   * OpenRouter's listed models, read at most hourly. A failed read keeps the last good list (and tries again
+   * next pass, not in an hour); undefined until one read has succeeded, so nothing is written on no data.
+   */
+  async openRouterModels(): Promise<ReadonlyArray<EndpointModel> | undefined> {
     const now = this.now();
-    if (this.models !== undefined && now - this.models.at < MODELS_REFRESH_MS)
+    if (this.models !== undefined && now - this.models.at < MODELS_REFRESH_MS) {
       return this.models.list;
+    }
+    if (this.modelsTriedAt !== undefined && now - this.modelsTriedAt < 60_000)
+      return this.models?.list;
+    this.modelsTriedAt = now;
     try {
       this.models = { at: now, list: await fetchOpenRouterModels(this.options.fetch) };
     } catch (error) {
       this.options.log?.(`OpenRouter models: ${(error as Error).message}`);
-      this.models = { at: now, list: this.models?.list ?? [] };
     }
-    return this.models.list;
+    return this.models?.list;
   }
 
   /** One pass over both providers. */
@@ -419,12 +452,24 @@ export class EndpointMonitor {
     const { paths, fetch } = this.options;
     const env = this.options.env ?? {};
     const previous = this.states.get(provider);
-    const key = await endpointApiKey(provider, paths, env);
+    const lookup = await lookupEndpointKey(provider, paths, env);
     const now = this.now();
-    if (key === undefined) {
-      this.states.set(provider, { provider, configured: false });
+    if (lookup.state === "missing") {
+      this.states.set(provider, { provider, presence: "absent", configured: false });
       return;
     }
+    if (lookup.state === "unreadable") {
+      // Keep everything as it was; only say this pass couldn't tell.
+      this.options.log?.(
+        `${ENDPOINT_TITLES[provider]}: keychain unreadable; keeping the instance as is`,
+      );
+      this.states.set(provider, {
+        ...(previous ?? { provider, configured: false }),
+        presence: "unknown",
+      });
+      return;
+    }
+    const key = lookup.key;
     const keyChanged = previous?.configured !== true;
     if (
       !force &&
@@ -432,9 +477,10 @@ export class EndpointMonitor {
       previous?.attemptedAt !== undefined &&
       now - previous.attemptedAt < ENDPOINT_USAGE_REFRESH_MS
     ) {
+      this.states.set(provider, { ...previous, presence: "configured" });
       return;
     }
-    let problem: string | undefined;
+    let problem = keyChanged ? undefined : previous?.problem;
     let usage = previous?.usage;
     let readAt = previous?.readAt;
     let error: string | undefined;
@@ -450,14 +496,16 @@ export class EndpointMonitor {
     if (provider === "openrouter") {
       try {
         await validateOpenRouterKey(fetch, key);
+        problem = undefined;
       } catch (e) {
-        // Only a key that is plainly not for models stops the instance; a network failure doesn't.
-        if (isEndpointUsageError(e) && e.kind !== "http") problem = e.message;
+        // Only a definite management key stops the instance; an outage, a 401 or an odd answer keeps the last word.
+        if (isEndpointUsageError(e) && e.kind === "management") problem = e.message;
       }
     }
     if (error !== undefined) this.options.log?.(`${ENDPOINT_TITLES[provider]} usage: ${error}`);
     this.states.set(provider, {
       provider,
+      presence: "configured",
       configured: true,
       problem,
       usage,
@@ -483,5 +531,8 @@ export {
   endpointLimitReached,
   endpointModels,
   endpointOutUntil,
+  ENDPOINT_MARKER,
   isEndpointProvider,
+  isLastdropEndpointEnvironment,
+  isLastdropEndpointInstance,
 } from "@t3tools/lastdrop-core";

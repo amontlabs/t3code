@@ -25,11 +25,11 @@ import {
   endpointEnvironment,
   endpointInstance,
   endpointModels,
+  isLastdropEndpointInstance,
 } from "@t3tools/lastdrop-node";
 import {
   endpointDirectory,
   EndpointMonitor,
-  endpointSessionSettings,
   type EndpointState,
   fileLogger,
   lastdropPaths,
@@ -102,7 +102,6 @@ export const roleModel = (provider: EndpointProvider, facts: CatalogFacts): stri
 export function desiredInstance(input: {
   readonly provider: EndpointProvider;
   readonly home: string;
-  readonly sessionSettings: string;
   readonly facts: CatalogFacts;
   readonly listed: ReadonlyArray<EndpointModel>;
 }): { readonly spec: EndpointInstance; readonly environment: Record<string, string> } {
@@ -113,7 +112,6 @@ export function desiredInstance(input: {
     spec: endpointInstance({
       provider,
       home: input.home,
-      sessionSettings: input.sessionSettings,
       model,
       judge,
       models: endpointModels(provider, facts.models[provider], input.listed),
@@ -124,109 +122,235 @@ export function desiredInstance(input: {
 
 // MARK: Reconcile
 
+/** What lastdrop wants for a provider's instance this pass. */
+export type Want =
+  /** Not sure (keychain unreadable, catalog or model list never read): change nothing. */
+  | { readonly kind: "keep" }
+  /** Definitely gone (no key, or a management key): remove lastdrop's instance. */
+  | { readonly kind: "remove" }
+  | { readonly kind: "present"; readonly spec: EndpointInstance["instance"] };
+
 /** What one pass did to one provider's instance. */
 export type InstanceOutcome =
   | "created"
   | "updated"
   | "unchanged"
+  | "kept"
   | "removed"
   | "absent"
-  | "userOwned";
+  | "userOwned"
+  | "raced";
+
+/** The user's own choices on lastdrop's instance, put back when lastdrop makes it again. */
+export interface Remembered {
+  readonly enabled?: boolean | undefined;
+  readonly accentColor?: string | undefined;
+}
+
+/** Which instance ids lastdrop made; each change is on disk before the T3 write it covers. */
+export interface Ownership {
+  readonly has: (instanceId: string) => boolean;
+  readonly claim: (instanceId: string) => void;
+  readonly release: (instanceId: string) => void;
+  readonly remember: (instanceId: string, choices: Remembered) => void;
+  readonly remembered: (instanceId: string) => Remembered | undefined;
+}
+
+interface OwnershipFile {
+  readonly ids: ReadonlyArray<string>;
+  readonly remembered: Readonly<Record<string, Remembered>>;
+}
+
+const readOwnershipFile = (file: string): OwnershipFile => {
+  try {
+    const json = JSON.parse(NodeFS.readFileSync(file, "utf8")) as Partial<OwnershipFile>;
+    return {
+      ids: Array.isArray(json.ids) ? json.ids.filter((id) => typeof id === "string") : [],
+      remembered:
+        typeof json.remembered === "object" && json.remembered !== null ? json.remembered : {},
+    };
+  } catch {
+    return { ids: [], remembered: {} };
+  }
+};
+
+/** `<T3 home>/lastdrop/endpoint-instances.json`, written atomically on every change. */
+export const fileOwnership = (file: string): Ownership => {
+  let state = readOwnershipFile(file);
+  const write = (next: OwnershipFile) => {
+    NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    NodeFS.writeFileSync(temporary, JSON.stringify(next), { mode: 0o600 });
+    NodeFS.renameSync(temporary, file);
+    state = next;
+  };
+  return {
+    has: (id) => state.ids.includes(id),
+    claim: (id) => {
+      if (!state.ids.includes(id)) write({ ...state, ids: [...state.ids, id].toSorted() });
+    },
+    release: (id) => {
+      if (state.ids.includes(id)) write({ ...state, ids: state.ids.filter((x) => x !== id) });
+    },
+    remember: (id, choices) =>
+      write({ ...state, remembered: { ...state.remembered, [id]: choices } }),
+    remembered: (id) => state.remembered[id],
+  };
+};
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Our fields of the instance equal what lastdrop wants (the user's `enabled` and other fields aside). */
-function matches(existing: ProviderInstanceConfig, spec: EndpointInstance["instance"]): boolean {
+/** lastdrop's fields of the instance equal the spec's: driver, our variables, our config keys. */
+function ownedFieldsMatch(existing: ProviderInstanceConfig, spec: EndpointInstance["instance"]) {
   const config = (existing.config ?? {}) as Record<string, unknown>;
+  const env = existing.environment ?? [];
   return (
     existing.driver === spec.driver &&
-    existing.displayName === spec.displayName &&
-    sameJson(
-      (existing.environment ?? []).map((v) => ({
-        name: v.name,
-        value: v.value,
-        sensitive: v.sensitive,
-      })),
-      spec.environment,
+    spec.environment.every((want) =>
+      env.some(
+        (v) => v.name === want.name && v.value === want.value && v.sensitive === want.sensitive,
+      ),
     ) &&
     Object.entries(spec.config).every(([key, value]) => sameJson(config[key], value))
   );
 }
 
-const toConfig = (
+/** The instance with only lastdrop's fields set; the user's name, switch, colour and extra variables stay. */
+const withOwnedFields = (
+  existing: ProviderInstanceConfig,
   spec: EndpointInstance["instance"],
-  existing: ProviderInstanceConfig | undefined,
+): ProviderInstanceConfig => {
+  const ours = new Set(spec.environment.map((v) => v.name));
+  return {
+    ...existing,
+    driver: ProviderDriverKind.make(spec.driver),
+    environment: [
+      ...spec.environment,
+      ...(existing.environment ?? []).filter((v) => !ours.has(v.name)),
+    ],
+    config: { ...((existing.config ?? {}) as Record<string, unknown>), ...spec.config },
+  };
+};
+
+const newInstance = (
+  spec: EndpointInstance["instance"],
+  remembered: Remembered | undefined,
 ): ProviderInstanceConfig => ({
   driver: ProviderDriverKind.make(spec.driver),
   displayName: spec.displayName,
-  ...(existing?.accentColor === undefined ? {} : { accentColor: existing.accentColor }),
+  ...(remembered?.accentColor === undefined ? {} : { accentColor: remembered.accentColor }),
   environment: spec.environment,
-  enabled: existing?.enabled ?? spec.enabled,
-  config: { ...((existing?.config ?? {}) as Record<string, unknown>), ...spec.config },
+  enabled: remembered?.enabled ?? spec.enabled,
+  config: spec.config,
 });
 
 /**
- * Brings one provider's instance in line: made when the provider can run agents and the id is free, kept
- * current while lastdrop owns it, removed when the provider goes. The user's own instance under the id, or
- * the user's on/off choice on ours, is never changed.
+ * One provider's instance, settings read just before writing. lastdrop's = marked and id recorded (a marked
+ * one the file lost is adopted). Made with T3's `create`, updated only in lastdrop's fields, removed only on
+ * a definite `remove`; the user's switch and colour come back if it is made again.
  */
 export const reconcileInstance = Effect.fn("LastdropEndpoints.reconcileInstance")(function* <
   E,
+  R,
 >(input: {
-  readonly instances: ProviderInstanceConfigMap;
   readonly instanceId: string;
-  /** Undefined when the provider has no key that can run models. */
-  readonly spec: EndpointInstance["instance"] | undefined;
-  readonly owned: boolean;
-  readonly mutate: (mutation: ProviderInstanceMutation) => Effect.Effect<void, E>;
+  readonly want: Want;
+  readonly read: Effect.Effect<ProviderInstanceConfigMap, E, R>;
+  readonly mutate: (mutation: ProviderInstanceMutation) => Effect.Effect<void, E, R>;
+  readonly ownership: Ownership;
 }) {
+  const { ownership, want } = input;
   const instanceId = ProviderInstanceId.make(input.instanceId);
-  const existing = input.instances[instanceId];
-  if (input.spec === undefined) {
-    if (!input.owned || existing === undefined) return { outcome: "absent", owned: false } as const;
+  const existing = (yield* input.read)[instanceId];
+  const marked = isLastdropEndpointInstance(existing);
+  if (existing !== undefined && marked && !ownership.has(instanceId)) ownership.claim(instanceId);
+  if (existing !== undefined && !marked && ownership.has(instanceId)) ownership.release(instanceId);
+  const ours = existing !== undefined && marked;
+  const outcome = (o: InstanceOutcome) => ({
+    outcome: o,
+    ours: o === "created" || o === "updated" || o === "unchanged" || o === "kept",
+  });
+
+  if (want.kind === "keep") {
+    return outcome(existing === undefined ? "absent" : ours ? "kept" : "userOwned");
+  }
+  if (want.kind === "remove") {
+    if (existing === undefined) return outcome("absent");
+    if (!ours) return outcome("userOwned");
+    ownership.remember(instanceId, {
+      enabled: existing.enabled,
+      accentColor: existing.accentColor,
+    });
     yield* input.mutate({ operation: "remove", instanceId });
-    return { outcome: "removed", owned: false } as const;
+    ownership.release(instanceId);
+    return outcome("removed");
   }
   if (existing === undefined) {
-    yield* input.mutate({
-      operation: "upsert",
-      instanceId,
-      instance: toConfig(input.spec, undefined),
-    });
-    return { outcome: "created", owned: true } as const;
+    // On disk before the write: a crash after T3 saved it still leaves it lastdrop's.
+    ownership.claim(instanceId);
+    const created = yield* input
+      .mutate({
+        operation: "create",
+        instanceId,
+        instance: newInstance(want.spec, ownership.remembered(instanceId)),
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    if (created) return outcome("created");
+    // Someone saved an instance under this id meanwhile: it isn't lastdrop's unless it carries the marker.
+    const now = (yield* input.read)[instanceId];
+    if (!isLastdropEndpointInstance(now)) ownership.release(instanceId);
+    return outcome("raced");
   }
-  if (!input.owned) return { outcome: "userOwned", owned: false } as const;
-  if (matches(existing, input.spec)) return { outcome: "unchanged", owned: true } as const;
+  if (!ours) return outcome("userOwned");
+  if (ownedFieldsMatch(existing, want.spec)) return outcome("unchanged");
   yield* input.mutate({
     operation: "upsert",
     instanceId,
-    instance: toConfig(input.spec, existing),
+    instance: withOwnedFields(existing, want.spec),
   });
-  return { outcome: "updated", owned: true } as const;
+  return outcome("updated");
 });
 
-// MARK: Ownership file
+/**
+ * What lastdrop wants for the provider: `keep` on any doubt (keychain unreadable, no catalog or model list
+ * ever read), `remove` only on a definite absence or a management key, else the instance.
+ */
+export function wantFor(input: {
+  readonly state: Pick<EndpointState, "presence" | "problem">;
+  readonly facts: CatalogFacts | undefined;
+  readonly listed: ReadonlyArray<EndpointModel> | undefined;
+  readonly build: (facts: CatalogFacts, listed: ReadonlyArray<EndpointModel>) => EndpointInstance;
+  readonly provider: EndpointProvider;
+}): Want {
+  const { state, facts } = input;
+  if (state.presence === "absent") return { kind: "remove" };
+  if (state.presence === "unknown") return { kind: "keep" };
+  if (state.problem !== undefined) return { kind: "remove" };
+  if (facts === undefined) return { kind: "keep" };
+  const needsList = input.provider === "openrouter" && facts.models.openrouter.length > 0;
+  if (needsList && input.listed === undefined) return { kind: "keep" };
+  return { kind: "present", spec: input.build(facts, input.listed ?? []).instance };
+}
 
-/** Which instance ids lastdrop made (`<T3 home>/lastdrop/endpoint-instances.json`). */
-export const readOwned = (file: string): Set<string> => {
+/** The standalone's catalog: read, definitely absent, or unreadable right now (keep the last good facts). */
+export function readCatalogFile(
+  file: string,
+): { readonly state: "ok"; readonly json: unknown } | { readonly state: "missing" | "unreadable" } {
+  let text: string;
   try {
-    const json: unknown = JSON.parse(NodeFS.readFileSync(file, "utf8"));
-    const ids =
-      typeof json === "object" && json !== null ? (json as { ids?: unknown }).ids : undefined;
-    return new Set(
-      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
-    );
-  } catch {
-    return new Set();
+    text = NodeFS.readFileSync(file, "utf8");
+  } catch (error) {
+    return { state: (error as { code?: string }).code === "ENOENT" ? "missing" : "unreadable" };
   }
-};
-
-const writeOwned = (file: string, ids: ReadonlySet<string>): void => {
-  NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  NodeFS.writeFileSync(temporary, JSON.stringify({ ids: [...ids].toSorted() }), { mode: 0o600 });
-  NodeFS.renameSync(temporary, file);
-};
+  try {
+    return { state: "ok", json: JSON.parse(text) };
+  } catch {
+    return { state: "unreadable" };
+  }
+}
 
 // MARK: Service
 
@@ -236,14 +360,6 @@ class EndpointsError extends Schema.TaggedError<EndpointsError>()("LastdropEndpo
 
 const io = <A>(run: () => Promise<A> | A) =>
   Effect.tryPromise({ try: async () => run(), catch: (cause) => new EndpointsError({ cause }) });
-
-const readCatalogJson = (file: string): unknown => {
-  try {
-    return JSON.parse(NodeFS.readFileSync(file, "utf8"));
-  } catch {
-    return undefined;
-  }
-};
 
 /**
  * Runs on macOS, where the keys are in the keychain. Not under vitest: T3's own server tests start this
@@ -262,12 +378,15 @@ export const layer = Layer.effect(
     const home = NodeOS.homedir();
     const paths = lastdropPaths({ home, dataDir });
     const log = fileLogger(`${dataDir}/lastdrop.log`);
-    const ownedFile = NodePath.join(dataDir, "endpoint-instances.json");
     const catalogFile = standaloneCatalogFiles(home).catalog;
     const monitor = new EndpointMonitor({ paths, fetch: nodeFetch, env: process.env, log });
     const placement = new Map<EndpointProvider, EndpointView["instance"]>();
     const told = new Set<string>();
     let updatedAt = 0;
+
+    const ownership = fileOwnership(NodePath.join(dataDir, "endpoint-instances.json"));
+    /** The last catalog that read; undefined until one did (then nothing is written). */
+    let lastFacts: CatalogFacts | undefined;
 
     const pass = Effect.gen(function* () {
       const states = yield* io(() => monitor.refresh());
@@ -277,9 +396,9 @@ export const layer = Layer.effect(
         sessionThreshold: accounts.sessionThreshold,
         weeklyThreshold: accounts.weeklyThreshold,
       });
-      const facts = catalogFacts(readCatalogJson(catalogFile));
-      const owned = readOwned(ownedFile);
-      const current = yield* settings.getSettings;
+      const catalog = readCatalogFile(catalogFile);
+      if (catalog.state === "ok") lastFacts = catalogFacts(catalog.json);
+      else if (catalog.state === "missing") lastFacts = catalogFacts(undefined);
       for (const state of states) {
         const provider = state.provider;
         const instanceId = ENDPOINT_INSTANCE_IDS[provider];
@@ -289,40 +408,39 @@ export const layer = Layer.effect(
             ? undefined
             : { windows: state.usage.windows, at: state.readAt },
         );
-        let spec: EndpointInstance["instance"] | undefined;
-        if (state.configured && state.problem === undefined) {
-          const listed =
-            provider === "openrouter" ? yield* io(() => monitor.openRouterModels()) : [];
-          const desired = desiredInstance({
-            provider,
-            home: endpointDirectory(paths, provider),
-            sessionSettings: endpointSessionSettings(paths, provider),
-            facts,
-            listed,
-          });
-          yield* io(() =>
-            prepareEndpointProfile({ paths, provider, environment: desired.environment }),
-          );
-          spec = desired.spec.instance;
+        const listed =
+          provider === "openrouter" && state.presence === "configured"
+            ? yield* io(() => monitor.openRouterModels())
+            : [];
+        const want = wantFor({
+          state,
+          facts: lastFacts,
+          listed,
+          provider,
+          build: (facts, models) =>
+            desiredInstance({
+              provider,
+              home: endpointDirectory(paths, provider),
+              facts,
+              listed: models,
+            }).spec,
+        });
+        if (want.kind === "present") {
+          yield* io(() => prepareEndpointProfile({ paths, provider }));
         }
+        // Read T3's settings again right before each write: a pass spends seconds on the network.
         const result = yield* reconcileInstance({
-          instances: current.providerInstances,
           instanceId,
-          spec,
-          owned: owned.has(instanceId),
+          want,
+          ownership,
+          read: settings.getSettings.pipe(Effect.map((current) => current.providerInstances)),
           mutate: (mutation) => settings.updateProviderInstance(mutation).pipe(Effect.asVoid),
         });
-        if (result.owned) owned.add(instanceId);
-        else if (result.outcome !== "userOwned") owned.delete(instanceId);
         placement.set(
           provider,
-          result.outcome === "userOwned" ? "user" : result.owned ? "ours" : "none",
+          result.outcome === "userOwned" ? "user" : result.ours ? "ours" : "none",
         );
-        if (
-          result.outcome === "created" ||
-          result.outcome === "updated" ||
-          result.outcome === "removed"
-        ) {
+        if (["created", "updated", "removed", "raced"].includes(result.outcome)) {
           log(`${ENDPOINT_TITLES[provider]}: instance ${instanceId} ${result.outcome}`);
         }
         if (result.outcome === "userOwned" && !told.has(instanceId)) {
@@ -330,7 +448,6 @@ export const layer = Layer.effect(
           log(`${ENDPOINT_TITLES[provider]}: instance ${instanceId} is the user's own; left alone`);
         }
       }
-      yield* io(() => writeOwned(ownedFile, owned));
       updatedAt = yield* Clock.currentTimeMillis;
     }).pipe(Effect.catch((error) => Effect.logWarning("lastdrop endpoints pass failed", error)));
 

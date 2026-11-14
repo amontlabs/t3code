@@ -216,19 +216,21 @@ export interface EndpointInstance {
       readonly homePath: string;
       readonly launchArgs: string;
       readonly customModels: ReadonlyArray<ReturnType<typeof customModelEntry>>;
+      /** Marks the instance as lastdrop's (beside `ENDPOINT_MARKER` in its environment). */
+      readonly lastdropEndpoint: EndpointProvider;
     };
   };
 }
 
 /**
  * The provider's instance: Claude Code in its own profile (`homePath`, which holds the key helper), with the
- * endpoint's environment. `sessionSettings` is a file with the same environment, passed as `--settings` so a
- * project's `.claude/settings.json` can't switch the endpoint (the standalone's `--settings` argument).
+ * endpoint's environment. The same environment goes inline in `--settings`, so a project's
+ * `.claude/settings.json` can't switch the endpoint (the standalone's `--settings` argument); inline, so no
+ * file path can be split or go missing.
  */
 export function endpointInstance(input: {
   readonly provider: EndpointProvider;
   readonly home: string;
-  readonly sessionSettings: string;
   readonly model: string | undefined;
   readonly judge?: string | undefined;
   readonly models: ReadonlyArray<EndpointModel>;
@@ -240,6 +242,7 @@ export function endpointInstance(input: {
     ...Object.entries(env)
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([name, value]) => ({ name, value, sensitive: false })),
+    { name: ENDPOINT_MARKER, value: input.provider, sensitive: false },
   ];
   return {
     instanceId: ENDPOINT_INSTANCE_IDS[input.provider],
@@ -250,17 +253,57 @@ export function endpointInstance(input: {
       environment,
       config: {
         homePath: input.home,
-        // T3 splits launch arguments on spaces; a path with one goes without (the env still routes).
-        launchArgs: /\s/u.test(input.sessionSettings) ? "" : `--settings ${input.sessionSettings}`,
+        launchArgs: endpointLaunchArgs(env),
         customModels: input.models.map(customModelEntry),
+        lastdropEndpoint: input.provider,
       },
     },
   };
 }
 
-/** The session settings file's contents: the endpoint's environment above every settings file. */
-export const sessionSettingsJson = (env: Readonly<Record<string, string>>): string =>
-  `${JSON.stringify({ env }, null, 2)}\n`;
+/** `--settings '<json>'`: the environment above every settings file, quoted for T3's argument tokenizer. */
+export const endpointLaunchArgs = (env: Readonly<Record<string, string>>): string =>
+  `--settings ${shellQuote(JSON.stringify({ env }))}`;
+
+// MARK: Telling lastdrop's instances apart
+
+/**
+ * The environment variable that marks a Claude process as running on lastdrop's Z.ai or OpenRouter instance.
+ * Must hold for the query-runner wrapper (step 4): such a query is never given a Claude account.
+ */
+export const ENDPOINT_MARKER = "LASTDROP_ENDPOINT";
+
+/** A Claude query's environment is one of lastdrop's endpoint instances (its marker, or our base URL). */
+export function isLastdropEndpointEnvironment(
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): boolean {
+  if (env === undefined) return false;
+  if (isEndpointProvider(env[ENDPOINT_MARKER])) return true;
+  const base = env.ANTHROPIC_BASE_URL;
+  return base !== undefined && Object.values(ENDPOINT_BASE_URLS).includes(base);
+}
+
+/** A T3 provider instance (`ProviderInstanceConfig`) carries lastdrop's endpoint marker. */
+export function isLastdropEndpointInstance(
+  instance:
+    | {
+        readonly environment?: ReadonlyArray<{ readonly name: string; readonly value: unknown }>;
+        readonly config?: unknown;
+      }
+    | undefined,
+): boolean {
+  if (instance === undefined) return false;
+  const marked = instance.environment?.some(
+    (v) => v.name === ENDPOINT_MARKER && isEndpointProvider(v.value),
+  );
+  const config = instance.config;
+  return (
+    marked === true ||
+    (typeof config === "object" &&
+      config !== null &&
+      isEndpointProvider((config as Record<string, unknown>).lastdropEndpoint))
+  );
+}
 
 /** The profile's own settings: only the key helper, never the key (`EndpointProfile.prepare`). */
 export const profileSettingsJson = (helperCommand: string): string =>
@@ -278,6 +321,21 @@ export const shellQuote = (value: string): string =>
  * Z.ai business codes 1308/1310/1316–1321 are an exhausted window, 1302/1305 throttling; OpenRouter's 402 is
  * spent credit.
  */
+const ZAI_EXHAUSTED = new Set([1308, 1310, 1316, 1317, 1318, 1319, 1320, 1321]);
+const ZAI_THROTTLING = new Set([1302, 1305]);
+
+/**
+ * Z.ai's business codes as Claude Code reports them: the error body's `"code":"1308"` (or a number), or
+ * `API Error: 1302` at the start of the text. A number elsewhere in the message ("1320 tokens") is not one.
+ */
+function zaiErrorCodes(message: string): ReadonlyArray<number> {
+  const codes: number[] = [];
+  for (const m of message.matchAll(/"code"\s*:\s*"?(\d{4})"?(?![0-9])/gu)) codes.push(Number(m[1]));
+  const lead = /^\s*API Error:\s*(?:\d{3}\s+)?(\d{4})(?![0-9])/u.exec(message);
+  if (lead) codes.push(Number(lead[1]));
+  return codes;
+}
+
 export function endpointLimitReached(
   provider: EndpointProvider,
   failure: {
@@ -285,14 +343,16 @@ export function endpointLimitReached(
     readonly code?: string | null | undefined;
   },
 ): boolean | undefined {
-  const text = `${failure.code ?? ""} ${failure.message ?? ""}`;
+  const message = failure.message ?? "";
   if (provider === "zai") {
-    if (/\b(1308|1310|131[6-9]|132[01])\b/u.test(text)) return true;
-    if (/\b(1302|1305)\b/u.test(text)) return false;
+    const codes = zaiErrorCodes(message);
+    if (codes.some((c) => ZAI_THROTTLING.has(c))) return false;
+    if (codes.some((c) => ZAI_EXHAUSTED.has(c))) return true;
     return undefined;
   }
-  if (/api_error_402\b|API Error: 402\b|\b402\b.*credit|insufficient credits/iu.test(text))
-    return true;
+  if (failure.code === "api_error_402") return true;
+  if (/API Error:\s*402(?![0-9])|"code"\s*:\s*"?402(?![0-9])/u.test(message)) return true;
+  if (/billing_error|payment_required|insufficient credits/iu.test(message)) return true;
   return undefined;
 }
 
@@ -327,6 +387,7 @@ export type EndpointUsageErrorKind =
   | "unauthorized"
   | "http"
   | "invalid"
+  | "management"
   | "message";
 
 /** A failed read, with why (a plain `Error` carrying `kind`). */
@@ -432,7 +493,9 @@ export function checkInferenceKey(root: unknown): void {
   if (!isRecord(root) || !isRecord(root.data)) {
     throw endpointUsageError("invalid", "OpenRouter returned no key.");
   }
-  if (isManagementKey(root)) throw endpointUsageError("message", missingKeyMessage("openrouter"));
+  if (isManagementKey(root)) {
+    throw endpointUsageError("management", missingKeyMessage("openrouter"));
+  }
 }
 
 export function openRouterKey(d: unknown): KeyUsage | undefined {
@@ -533,7 +596,7 @@ export function openRouterModels(root: unknown): ReadonlyArray<EndpointModel> {
 
 /**
  * Until when the provider has no room for agents (epoch ms), from its last reading: a Session or Weekly row at
- * or over its threshold (until that row resets), or credits used up. Undefined when it has room, or when the
+ * or over its threshold (until that row resets; a row past its reset counts as unused), or credits used up. Undefined when it has room, or when the
  * reading is too old to say (unknown usage never stops an agent; the endpoint answers at its limit).
  */
 export function endpointOutUntil(
@@ -555,7 +618,9 @@ export function endpointOutUntil(
             ? 100
             : undefined;
     if (limit === undefined || w.usedPercent < limit) continue;
-    const end = w.resetsAt !== undefined && w.resetsAt > now ? w.resetsAt : fallback;
+    // Past its reset the window is unused again, as Claude's readings project it.
+    if (w.resetsAt !== undefined && w.resetsAt <= now) continue;
+    const end = w.resetsAt ?? fallback;
     until = until === undefined ? end : Math.max(until, end);
   }
   return until !== undefined && until > now ? until : undefined;

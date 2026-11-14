@@ -15,15 +15,16 @@ export interface TestHome {
   setKeychain(service: string, value: string): void;
   /** Stores an item for `service` and `account`, which wins over the service-only item for that account. */
   setKeychainItem(service: string, account: string, value: string): void;
+  /** While locked, the fake `security` fails like a locked keychain (51), for every item. */
+  lockKeychain(locked: boolean): void;
   write(path: string, value: unknown): void;
   read(path: string): Record<string, unknown>;
   remove(): void;
 }
 
-export function makeTestHome(): TestHome {
-  const root = NodeFS.realpathSync(
-    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "lastdrop-node-")),
-  );
+/** `prefix` may hold a space, for paths that must survive one. */
+export function makeTestHome(prefix = "lastdrop-node-"): TestHome {
+  const root = NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), prefix)));
   const home = `${root}/home`;
   const items = `${root}/keychain`;
   NodeFS.mkdirSync(home, { recursive: true });
@@ -35,6 +36,7 @@ export function makeTestHome(): TestHome {
     `#!/bin/sh
 service=""
 account=""
+[ -f "${root}/locked" ] && exit 51
 while [ $# -gt 0 ]; do
   case "$1" in
     -s) service="$2"; shift 2;;
@@ -57,6 +59,10 @@ cat "$file"
     root,
     paths: lastdropPaths({ home, dataDir: `${home}/.t3/lastdrop`, security }),
     setKeychain: (service, value) => NodeFS.writeFileSync(`${items}/${hex(service)}`, value),
+    lockKeychain: (locked) =>
+      locked
+        ? NodeFS.writeFileSync(`${root}/locked`, "")
+        : NodeFS.rmSync(`${root}/locked`, { force: true }),
     setKeychainItem: (service, account, value) =>
       NodeFS.writeFileSync(`${items}/${hex(`${service}/${account}`)}`, value),
     write: (path, value) => {
