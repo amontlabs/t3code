@@ -1,0 +1,30 @@
+name: lastdrop guard
+
+# Every change to lastdrop stays in the fork's folders or in a seam within its budget
+# (scripts/lastdrop/seams.json, FORK.md).
+
+on:
+  pull_request:
+    branches: [lastdrop]
+  push:
+    branches: [lastdrop]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      # Node 24 runs the TypeScript guard directly.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Fetch upstream tags
+        run: git fetch --no-tags https://github.com/pingdotgg/t3code.git '+refs/tags/v*:refs/tags/v*'
+      - name: Fork guard
+        run: node scripts/lastdrop/check-fork-paths.ts

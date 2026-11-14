@@ -1,0 +1,148 @@
+name: lastdrop release
+
+# Builds the macOS arm64 app for a fork tag (v<upstream>-ld.<n>), signs it with the fork's
+# self-signed certificate (no notarization), and publishes a GitHub release on this repository
+# with the files electron-updater reads (latest-mac.yml, zip, blockmap). See FORK.md, "Releases".
+#
+# Runs on a tag pushed by a person, or is called by lastdrop-sync.yml: a tag pushed with
+# GITHUB_TOKEN starts no workflow, so the sync job calls this one directly.
+
+on:
+  push:
+    tags: ["v*-ld.*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Fork tag to release, such as v0.1.10-ld.1
+        required: true
+        type: string
+    secrets:
+      LASTDROP_SIGNING_CERT_P12:
+        required: false
+      LASTDROP_SIGNING_CERT_PASSWORD:
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lastdrop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      LASTDROP_SIGNING_CERT_P12: ${{ secrets.LASTDROP_SIGNING_CERT_P12 }}
+      LASTDROP_SIGNING_CERT_PASSWORD: ${{ secrets.LASTDROP_SIGNING_CERT_PASSWORD }}
+    steps:
+      - name: Check the tag and the signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-ld\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a fork release tag (v<x.y.z>-ld.<n>)."
+            exit 1
+          fi
+          missing=()
+          [[ -n "$LASTDROP_SIGNING_CERT_P12" ]] || missing+=(LASTDROP_SIGNING_CERT_P12)
+          [[ -n "$LASTDROP_SIGNING_CERT_PASSWORD" ]] || missing+=(LASTDROP_SIGNING_CERT_PASSWORD)
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing repository secrets: ${missing[*]}. Add the fork's self-signed code-signing certificate (base64 .p12) and its password; see FORK.md, \"Release signing\". Releases are never published unsigned, because an ad-hoc signed app cannot install updates."
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Import the signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/lastdrop-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          cert="$RUNNER_TEMP/lastdrop-signing.p12"
+          printf '%s' "$LASTDROP_SIGNING_CERT_P12" | base64 --decode > "$cert"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$LASTDROP_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # codesign finds a self-signed (untrusted) identity only through the search list.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$cert"
+          identity="$(security find-identity -p codesigning "$keychain" | awk '/^ *1\)/ { print $2; exit }')"
+          if [[ -z "$identity" ]]; then
+            echo "::error::LASTDROP_SIGNING_CERT_P12 holds no code-signing identity."
+            exit 1
+          fi
+          echo "LASTDROP_MAC_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "LASTDROP_MAC_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Align package versions to the release version
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Build and sign the app
+        env:
+          # The update feed (app-update.yml) and release links point at this repository.
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: |
+          node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 \
+            --build-version "$VERSION" --output-dir release --verbose
+
+      - name: Check the signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          mount="$RUNNER_TEMP/lastdrop-dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$(ls release/*.dmg | head -1)"
+          trap 'hdiutil detach "$mount" -force' EXIT
+          app="$(ls -d "$mount"/*.app | head -1)"
+          codesign --verify --deep --strict "$app"
+          details="$(codesign -d -r- "$app" 2>&1)"
+          echo "$details"
+          fingerprint="$(echo "$LASTDROP_MAC_SIGN_IDENTITY" | tr '[:upper:]' '[:lower:]')"
+          if ! grep -q "certificate leaf = H\"$fingerprint\"" <<< "$details"; then
+            echo "::error::The app is not signed with the fork's certificate."
+            exit 1
+          fi
+          test -f release/latest-mac.yml
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream="${TAG%%-ld.*}"
+          notes="T3 Code ${upstream} with lastdrop. Upstream changes: https://github.com/pingdotgg/t3code/releases/tag/${upstream}"
+          shopt -s nullglob
+          files=(release/*.dmg release/*.zip release/*.blockmap release/latest-mac.yml)
+          # A full release marked latest: electron-updater on the stable channel reads releases/latest.
+          gh release create "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+            --title "T3 Code lastdrop ${TAG#v}" --notes "$notes" --verify-tag --latest
+
+      - name: Remove the signing keychain
+        if: always()
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/lastdrop-signing.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
