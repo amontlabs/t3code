@@ -13,6 +13,11 @@ import * as NodeFS from "node:fs";
 import type { FetchLike } from "./claudeUsage.ts";
 import { AccountsMonitor, USAGE_REFRESH_MS } from "./monitor.ts";
 import { accountsFiles, claudeFolder, statusFile } from "./paths.ts";
+import {
+  standaloneAppRunning,
+  standaloneHeartbeatFile,
+  standaloneStatusFile,
+} from "./standalone.ts";
 import { makeTestHome, type TestHome } from "./testHome.ts";
 
 const mainUUID = "614646e1-0000-0000-0000-000000000001";
@@ -152,5 +157,52 @@ describe("the accounts monitor", () => {
       ["main", "signedOut", "Run `claude` to sign in."],
       ["Gone", "signedOut", "Run `claude` to sign in."],
     ]);
+  });
+
+  it("while the standalone app runs, the fork reads its usage.json and asks nobody", async () => {
+    const config = append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 0 });
+    t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
+    t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: mainUUID } });
+    // The app's own file, in its format (seconds).
+    t.write(standaloneStatusFile(t.paths), {
+      main: { session: 12, weekly: 34, at: at / 1000 - 60, plan: "Ultra", signIn: "ok" },
+      Pro: { session: 50, weekly: 60, at: at / 1000 - 60, signIn: "needsSignIn" },
+    });
+    const asked: string[] = [];
+    const renewed: string[] = [];
+    const monitor = new AccountsMonitor({
+      paths: t.paths,
+      env: {},
+      fetch: async (url) => {
+        asked.push(url);
+        throw new Error("no network");
+      },
+      sessionId: "s",
+      now: () => at,
+      renew: async (key) => {
+        renewed.push(key);
+        return true;
+      },
+      standaloneRunning: async () => true,
+    });
+    const view = await monitor.view();
+    expect(view.readBy).toBe("standalone");
+    expect(view.accounts.map((a) => [a.key, a.session, a.weekly, a.signIn, a.source])).toEqual([
+      ["main", 12, 34, "ok", "standalone"],
+      ["Pro", 50, 60, "needsSignIn", "standalone"],
+    ]);
+    expect((await monitor.routingStatuses())["main"]?.session).toBe(12);
+    expect(asked).toEqual([]);
+    expect(renewed).toEqual([]);
+    // Nothing of the fork's own was written, and the app's file is only read.
+    expect(NodeFS.existsSync(statusFile(t.paths))).toBe(false);
+  });
+
+  it("the standalone app counts as running while its heartbeat is under a minute old", async () => {
+    expect(await standaloneAppRunning(t.paths, at)).toBe(false);
+    t.write(standaloneHeartbeatFile(t.paths), "");
+    NodeFS.utimesSync(standaloneHeartbeatFile(t.paths), at / 1000 - 30, at / 1000 - 30);
+    expect(await standaloneAppRunning(t.paths, at)).toBe(true);
+    expect(await standaloneAppRunning(t.paths, at + 31_000)).toBe(false);
   });
 });

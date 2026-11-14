@@ -29,6 +29,12 @@ in Effect); its tests are listed here too, with temporary homes and a fake `secu
 | `ClaudeKeeper` (the loop)                                                                                                                                                                                                                                                                                              | lastdrop-node `keeper.ts`                                                    |
 | `SubagentUsage` `usage.json` read-modify-write                                                                                                                                                                                                                                                                         | lastdrop-node `statusStore.ts` (`~/.t3/lastdrop/usage.json`)                 |
 | `AppModel` refresh of Claude accounts (`AppModel+Claude.swift`)                                                                                                                                                                                                                                                        | lastdrop-node `monitor.ts`                                                   |
+| `ThreadLauncher.decide`/`parse`/`parseTail`/`userAuthOverride`, `ThreadReaper.limit`, `ThreadRelay.Machine`, `SessionTransfer.withoutTrailingNotices`, `SubagentRunner.retryPrompt`                                                                                                                                    | `src/threadRouting.ts` (on the SDK's options, not Claude Code's arguments)   |
+| `SessionLedger` (sessions, threads; `live` dropped: no processes to reap)                                                                                                                                                                                                                                              | lastdrop-node `sessionLedger.ts` (`~/.t3/lastdrop/sessions.json`)            |
+| `SessionTransfer`, `ThreadLauncher.transcript(ofConversation:)`/`conversationFile`                                                                                                                                                                                                                                     | lastdrop-node `sessionTransfer.ts`                                           |
+| `ThreadLauncher.choose`, `AgentRegistry.markFull`/`isFull`/`markTroubled`/`isTroubled` (in memory)                                                                                                                                                                                                                     | lastdrop-node `threadRouter.ts`                                              |
+| `SubagentUsage.appIsRunning`                                                                                                                                                                                                                                                                                           | lastdrop-node `standalone.ts`                                                |
+| `ThreadRelay.Relay` (the stdio relay), `ThreadReaper.check` (transcript polling + SIGTERM)                                                                                                                                                                                                                             | apps/server `extensions/lastdrop/queryRunner.ts` (on the SDK stream)         |
 
 ## Tests: Swift → TS
 
@@ -247,6 +253,48 @@ added = 35; the 40 others test runners, relays and files that later steps replac
 Totals for step 3: of 79 Swift cases (16 + 11 + 13 + 11 + 10 + 18), 56 are ported (12 + 9 + 12 + 11 + 10 +
 2); the 23 others test the menu bar app, other providers or the CLI runner.
 
+### ThreadLauncherTests.swift (33 cases: 28 ported), step 4
+
+core threadRouting.test.ts, same names in plain words ("a new thread starts on the roomiest account and records
+it", "a cold thread moves to the roomiest account", … "a user line after the last answer keeps the thread warm",
+"the user's own auth or profile is left alone"): the 15 decision cases, 2 moved-thread cases and 7 tail cases.
+The two that read files (`testTheConversationFileIsFoundAcrossProjectsAndReadWarm`,
+`testAnAnswerBeyondAHugeToolResultIsFoundBySearchingFurtherBack`) and `testAThreadThatAlreadyMovedResumesItsCurrentConversation`'s
+real-ledger half are in lastdrop-node sessionLedger.test.ts and threadRouter.test.ts.
+
+Not ported: `testEqualsFormOfFlagsIsParsedAndRewritten`, `testAStayKeepsTheEqualsFormOfResume` (the SDK passes
+options, not `--flag=value` arguments), `testOnlyConversationsChooseAnAccount` (only queries reach the runner),
+`testTheWrapperFallsBackToTheRealClaudeWhenLastdropIsGone`, `testTheWrapperScriptExecsTheLauncherAndIsRewrittenOnlyWhenItDiffers`
+(no wrapper script: the fork wraps the runner).
+
+### SharedConversationsTests.swift (5 cases: 3 ported), step 4
+
+lastdrop-node sessionLedger.test.ts "shared conversations": "the ledger says which account a shared conversation
+ran on", "an account folder keeps its own account", "lines from before a fork don't count"
+(`transcriptAccount`, `linesAfterFork`, for a per-account usage reader later). Not ported:
+`testRootsHaveMainAndEachAccountsOwnRealProjects`, `testRootsNeverWalkTheSameRealPathTwice` (Stats' index roots:
+Stats is dropped, T3's Usage page reads transcripts itself).
+
+### Step 4 cases from other Swift files
+
+`testTransferDropsTheTrailingLimitNoticeOnly`, `testIsLimitNoticeCases` (core threadRouting.test.ts);
+`testTransferCopiesTheTranscriptAndItsSideFiles`, `testAnOldRunsSessionIsCopiedToTheMainProjectsOnce`,
+`testCarryOnRewritesTranscriptWhenSharedFolderAndForksToNewID` (as "a message id from before a move is found in the
+fork", lastdrop-node sessionLedger.test.ts); the relay's `testTheRelayHoldsAPassingErrorRetries…`,
+`testT3SpeakingDuringAWaitLetsTheHeldResultThroughAndCancelsTheRetry`, `testTheRelayHandsTheThreadOnWhenRetriesAreSpent`
+(core "retrying a passing error", and apps/server queryRunner.test.ts on the stream). `testThreadReaperChecksAndReapsLiveProcess`
+is replaced by "a usage limit mid-run is surfaced in the thread and ends the query" (no polling, no signal).
+
+### Added in step 4 (no Swift test)
+
+- lastdrop-node threadRouter.test.ts (8): the router over a temporary home (env per account, main as it is, the
+  user's own sign-in, warm/cold, ids after a move, a full account told, children with `pick`, troubled accounts, T3's fork).
+- lastdrop-node monitor.test.ts: the standalone app's `usage.json` read while it runs, nothing asked; its heartbeat.
+- lastdrop-node sessionLedger.test.ts: records, the id map and lineage, an unreadable file kept aside, pruning.
+- core threadRouting.test.ts: children pick with `pick`; message ids across one and two forks; the relay machine.
+- apps/server queryRunner.test.ts (8 replays with a fake runner) and queryRunner.contract.test.ts (the adapter's
+  shapes and the strings the wrapper relies on).
+
 ## Behaviour that differs
 
 - Times are epoch milliseconds; `decodeStatusFile` converts lastdrop's seconds. Retry-After is still
@@ -256,6 +304,15 @@ Totals for step 3: of 79 Swift cases (16 + 11 + 13 + 11 + 10 + 18), 56 are porte
   expands `~` with the environment's `HOME`.
 - `readingFromStatus` takes `fullSince` (Swift read it from `AgentRegistry`) and accepts a missing
   status (no reading, usable).
+- Step 4 review: "troubled" (retries spent) no longer drops the account from the candidates as Swift's
+  launcher did: a warm thread there stays, the account is only never a destination. A forced move (full, gone)
+  may carry `resumeSessionAt`, which Swift never moved (T3 pins a rewound head until a turn completes). A
+  route that fails or times out opens on the thread's recorded account, never Main with another account's id
+  (Swift ran claude as asked); the ledger is locked across processes and an unreadable one is refused (Swift set
+  it aside and started empty).
+- Step 4: full and troubled marks live in the server's memory (Swift: `subagents.json`), so a restart forgets them;
+  the next reading still says an account is full. A move's notice also says so when the account ran out before
+  the thread opened (Swift only notified at the reaper's SIGTERM).
 - `parseClaudeResult` covers Claude accounts only: Z.ai/OpenRouter rules come in step 6, and the
   `declined` approval descriptions with the agent runner (step 5).
 - Not ported: `SubagentUsage.usage` (app-heartbeat check, a runner's own read, the file lock: the fork's
