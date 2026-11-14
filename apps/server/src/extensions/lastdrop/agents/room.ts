@@ -25,13 +25,19 @@ export interface Room {
 export const makeRoom = (
   now: () => number = Date.now,
   marks: StoredMap<number> = makeStoredMap<number>(),
+  /** Out-of-room known from elsewhere (Z.ai and OpenRouter usage), until when. */
+  external: (step: AgentStep, now: number) => number | undefined = () => undefined,
 ): Room => {
-  const until = (step: AgentStep) => {
+  const marked = (step: AgentStep) => {
     const end = marks.get(stepKey(step));
     if (end === undefined) return undefined;
     if (end > now()) return end;
     marks.delete(stepKey(step));
     return undefined;
+  };
+  const until = (step: AgentStep) => {
+    const ends = [marked(step), external(step, now())].filter((e): e is number => e !== undefined);
+    return ends.length === 0 ? undefined : Math.max(...ends);
   };
   return {
     hasRoom: (step) => Effect.sync(() => until(step) === undefined),

@@ -13,6 +13,8 @@ export interface TestHome {
   readonly paths: LastdropPaths;
   /** Stores a keychain item the fake `security` returns for `service`. */
   setKeychain(service: string, value: string): void;
+  /** Stores an item for `service` and `account`, which wins over the service-only item for that account. */
+  setKeychainItem(service: string, account: string, value: string): void;
   write(path: string, value: unknown): void;
   read(path: string): Record<string, unknown>;
   remove(): void;
@@ -32,13 +34,19 @@ export function makeTestHome(): TestHome {
     security,
     `#!/bin/sh
 service=""
+account=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -s) service="$2"; shift 2;;
+    -a) account="$2"; shift 2;;
     *) shift;;
   esac
 done
 file="${items}/$(printf '%s' "$service" | od -An -tx1 | tr -d ' \\n')"
+if [ -n "$account" ]; then
+  own="${items}/$(printf '%s/%s' "$service" "$account" | od -An -tx1 | tr -d ' \\n')"
+  [ -f "$own" ] && file="$own"
+fi
 [ -f "$file" ] || exit 44
 cat "$file"
 `,
@@ -49,6 +57,8 @@ cat "$file"
     root,
     paths: lastdropPaths({ home, dataDir: `${home}/.t3/lastdrop`, security }),
     setKeychain: (service, value) => NodeFS.writeFileSync(`${items}/${hex(service)}`, value),
+    setKeychainItem: (service, account, value) =>
+      NodeFS.writeFileSync(`${items}/${hex(`${service}/${account}`)}`, value),
     write: (path, value) => {
       NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
       NodeFS.writeFileSync(path, typeof value === "string" ? value : JSON.stringify(value));
