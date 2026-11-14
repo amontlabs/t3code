@@ -152,9 +152,20 @@ export const findAgy = (
 const oneLine = (text: string): string =>
   Array.from(text.trim()).slice(-200).join("").replaceAll("\n", " ");
 
+/** One process group's kill: `agy` and anything it started, so nothing keeps the pipes open. */
+const killGroup = (child: NodeChildProcess.ChildProcess) => {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+};
+
 /**
  * Runs the judge with `judge`'s model and effort. Every failure is a deny with its reason; a model
- * `agy` won't run is named as such, never swapped for another. Never throws.
+ * `agy` won't run is named as such, never swapped for another. At the kill time or on `signal`, the
+ * whole process group is killed and the verdict is given at once. Never throws.
  */
 export const runCommandJudge = async (
   prompt: string,
@@ -164,11 +175,14 @@ export const runCommandJudge = async (
     readonly env?: NodeJS.ProcessEnv;
     /** Seconds before the process is killed; `JUDGE_TIMEOUT_SECONDS` + 30 by default. */
     readonly killAfterSeconds?: number;
+    /** Aborted when the session that asked closes. */
+    readonly signal?: AbortSignal;
   },
 ): Promise<Verdict> => {
   const judge = options.judge ?? DEFAULT_JUDGE;
   if (options.executable === undefined)
     return { allow: false, failure: "Antigravity (`agy`) was not found on this Mac" };
+  if (options.signal?.aborted === true) return { allow: false, failure: "the session closed" };
   let empty: string;
   try {
     empty = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "lastdrop-judge-"));
@@ -176,68 +190,84 @@ export const runCommandJudge = async (
     return { allow: false, failure: "could not make its empty folder" };
   }
   try {
-    const result = await new Promise<
-      | { readonly started: false }
-      | {
-          readonly started: true;
-          readonly stdout: string;
-          readonly stderr: string;
-          readonly code: number | null;
-          readonly killed: boolean;
-        }
-    >((resolve) => {
+    type Ended =
+      | { readonly type: "not-started" }
+      | { readonly type: "stopped"; readonly failure: string }
+      | { readonly type: "exited"; readonly stdout: string; readonly stderr: string; readonly code: number | null; readonly signal: NodeJS.Signals | null };
+    const ended = await new Promise<Ended>((resolve) => {
+      let settled = false;
+      const settle = (value: Ended) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killer);
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
       let child: NodeChildProcess.ChildProcess;
       try {
         child = NodeChildProcess.spawn(options.executable!, judgeArguments(prompt, judge), {
           cwd: empty,
           env: { ...(options.env ?? process.env), [NESTED_MARKER]: "1" },
           stdio: ["ignore", "pipe", "pipe"],
+          // Its own process group, so a kill reaches whatever it started.
+          detached: true,
         });
       } catch {
-        resolve({ started: false });
+        resolve({ type: "not-started" });
         return;
       }
       let stdout = "";
       let stderr = "";
-      let killed = false;
-      let settled = false;
       child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
       child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+      const stop = (failure: string) => {
+        killGroup(child);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle({ type: "stopped", failure });
+      };
       const killer = setTimeout(
-        () => {
-          killed = true;
-          child.kill("SIGKILL");
-        },
+        () => stop("timed out"),
         (options.killAfterSeconds ?? JUDGE_TIMEOUT_SECONDS + 30) * 1000,
       );
-      child.on("error", () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(killer);
-        resolve({ started: false });
-      });
-      child.on("close", (code, signal) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(killer);
-        resolve({ started: true, stdout, stderr, code, killed: killed || signal !== null });
-      });
+      const onAbort = () => stop("the session closed");
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted === true) onAbort();
+      child.on("error", () => settle({ type: "not-started" }));
+      child.on("close", (code, signal) => settle({ type: "exited", stdout, stderr, code, signal }));
     });
-    if (!result.started) return { allow: false, failure: "could not start agy" };
-    const verdict = parseVerdict(result.stdout);
+    if (ended.type === "not-started") return { allow: false, failure: "could not start agy" };
+    if (ended.type === "stopped") return { allow: false, failure: ended.failure };
+    const verdict = parseVerdict(ended.stdout);
     if (verdict.failure === undefined) return verdict;
-    if (result.killed) return { allow: false, failure: "timed out" };
-    if (result.code !== 0) {
-      const detail = oneLine(result.stderr.trim() === "" ? result.stdout : result.stderr);
+    if (ended.signal !== null) return { allow: false, failure: "timed out" };
+    if (ended.code !== 0) {
+      const detail = oneLine(ended.stderr.trim() === "" ? ended.stdout : ended.stderr);
       if (agyModelUnavailable(detail))
         return { allow: false, failure: `${judgeUnavailable(judge)} (${detail})` };
       return {
         allow: false,
-        failure: `agy exited with status ${result.code}${detail === "" ? "" : ` (${detail})`}`,
+        failure: `agy exited with status ${ended.code}${detail === "" ? "" : ` (${detail})`}`,
       };
     }
     return verdict;
   } finally {
     await NodeFSP.rm(empty, { recursive: true, force: true }).catch(() => {});
   }
+};
+
+/** At most `limit` judges at once across the server; the rest wait their turn. */
+export const makeJudgeLimit = (limit: number) => {
+  let running = 0;
+  const waiting: Array<() => void> = [];
+  return async <A>(task: () => Promise<A>): Promise<A> => {
+    if (running >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+    running += 1;
+    try {
+      return await task();
+    } finally {
+      running -= 1;
+      waiting.shift()?.();
+    }
+  };
 };
