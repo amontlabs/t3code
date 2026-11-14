@@ -180,7 +180,7 @@ describe("the profile folder", () => {
     expect(uuidOf(config)).toBe(otherUUID);
     expect(Object.keys(config["mcpServers"] as object)).toEqual(["t3"]);
     // No lock and no half-written file is left behind.
-    expect(NodeFS.readdirSync(profile)).toEqual([".claude.json"]);
+    expect(NodeFS.readdirSync(profile)).toEqual([".claude.json", "projects"]);
   });
 
   it("a held lock or an unreadable Main config leaves the profile as it is", async () => {
@@ -209,6 +209,32 @@ describe("the profile folder", () => {
     NodeFS.rmdirSync(`${file}.lock`);
     expect(await prepareProfile(t.paths, folder)).toBe(profile);
     expect(t.read(file)["numStartups"]).toBe(502);
+  });
+});
+
+describe("shared conversations in a profile (step 4 live finding)", () => {
+  it("a profile made before Main has any conversation still links them", async () => {
+    t.write(mainFile, { oauthAccount: { accountUuid: "u-main" } });
+    expect(has(`${shared}/projects`)).toBe(false);
+    await prepareProfile(t.paths, folder);
+    expect(link(`${profile}/projects`)).toBe(`${shared}/projects`);
+  });
+
+  it("a profile's own projects folder is folded into the shared one, then linked", async () => {
+    t.write(mainFile, { oauthAccount: { accountUuid: "u-main" } });
+    t.write(`${profile}/projects/p/kept-to-itself.jsonl`, '{"type":"user"}\n');
+    t.write(`${shared}/projects/p/twin.jsonl`, "shared copy\n");
+    t.write(`${profile}/projects/p/twin.jsonl`, "own copy\n");
+    await prepareProfile(t.paths, folder);
+    expect(link(`${profile}/projects`)).toBe(`${shared}/projects`);
+    expect(NodeFS.readFileSync(`${shared}/projects/p/kept-to-itself.jsonl`, "utf8")).toContain(
+      "user",
+    );
+    // The twin already in the shared folder wins; the profile's copy is kept aside, never deleted.
+    expect(NodeFS.readFileSync(`${shared}/projects/p/twin.jsonl`, "utf8")).toBe("shared copy\n");
+    const aside = NodeFS.readdirSync(profile).find((n) => n.startsWith("projects.before-sharing-"));
+    expect(aside).toBeDefined();
+    expect(NodeFS.readFileSync(`${profile}/${aside}/p/twin.jsonl`, "utf8")).toBe("own copy\n");
   });
 });
 

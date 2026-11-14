@@ -41,8 +41,39 @@ export async function withConfigLock(file: string, body: () => Promise<void>): P
   }
 }
 
+/**
+ * Conversations every account must share, linked even before Main has any: a profile made while
+ * `~/.claude/projects` didn't exist would otherwise keep its account's conversations to itself.
+ */
+const SHARED_FOLDERS = ["projects"];
+
+/**
+ * A profile's own `projects` folder (made before conversations were shared there) is folded into the shared
+ * one, every conversation kept (one already there wins), then replaced by the link.
+ */
+async function foldIntoShared(own: string, shared: string): Promise<void> {
+  const stat = await NodeFSP.lstat(own).catch(() => undefined);
+  if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) return;
+  for (const project of await NodeFSP.readdir(own)) {
+    const from = `${own}/${project}`;
+    if (!(await NodeFSP.stat(from).catch(() => undefined))?.isDirectory()) continue;
+    await NodeFSP.mkdir(`${shared}/${project}`, { recursive: true, mode: 0o700 });
+    for (const entry of await NodeFSP.readdir(from)) {
+      const target = `${shared}/${project}/${entry}`;
+      if (!(await exists(target))) await NodeFSP.rename(`${from}/${entry}`, target);
+    }
+  }
+  // Anything left had a twin in the shared folder: kept aside, never deleted.
+  await NodeFSP.rename(own, `${own}.before-sharing-${Date.now()}`);
+}
+
 /** Links what `~/.claude` holds and the profile doesn't have yet. Nothing already there is touched. */
 export async function linkShared(paths: LastdropPaths, dir: string): Promise<void> {
+  for (const name of SHARED_FOLDERS) {
+    const shared = `${paths.sharedClaude}/${name}`;
+    await NodeFSP.mkdir(shared, { recursive: true, mode: 0o700 }).catch(() => {});
+    await foldIntoShared(`${dir}/${name}`, shared).catch(() => {});
+  }
   let names: string[];
   try {
     names = await NodeFSP.readdir(paths.sharedClaude);

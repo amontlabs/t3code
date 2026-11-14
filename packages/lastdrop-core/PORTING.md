@@ -304,6 +304,12 @@ is replaced by "a usage limit mid-run is surfaced in the thread and ends the que
   expands `~` with the environment's `HOME`.
 - `readingFromStatus` takes `fullSince` (Swift read it from `AgentRegistry`) and accepts a missing
   status (no reading, usable).
+- Step 4 review: "troubled" (retries spent) no longer drops the account from the candidates as Swift's
+  launcher did: a warm thread there stays, the account is only never a destination. A forced move (full, gone)
+  may carry `resumeSessionAt`, which Swift never moved (T3 pins a rewound head until a turn completes). A
+  route that fails or times out opens on the thread's recorded account, never Main with another account's id
+  (Swift ran claude as asked); the ledger is locked across processes and an unreadable one is refused (Swift set
+  it aside and started empty).
 - Step 4: full and troubled marks live in the server's memory (Swift: `subagents.json`), so a restart forgets them;
   the next reading still says an account is full. A move's notice also says so when the account ran out before
   the thread opened (Swift only notified at the reaper's SIGTERM).

@@ -24,7 +24,7 @@ import {
 
 import { runEnvironment } from "./claudeProfile.ts";
 import { loadAccounts, signedInAccountOf } from "./claudeSignIn.ts";
-import { claudeFolder, type LastdropPaths } from "./paths.ts";
+import { claudeFolder, type LastdropPaths, profileDirectory } from "./paths.ts";
 import { currentSessionIn, lineageIn, type LedgerStore, SessionLedger } from "./sessionLedger.ts";
 import {
   conversationTail,
@@ -246,10 +246,12 @@ export class ThreadRouter {
     const identity = input.identity;
     const resume = identity.resume;
     const projects = sharedProjects(paths);
+    // Where an account may have kept a conversation to itself: its folder's own `projects` (runs from before
+    // sharing) and its profile's, if that was ever a real folder.
     const accountsFolders = candidates
       .map((c) => claudeFolder(paths, c.id))
       .filter((f): f is string => f !== undefined)
-      .map((f) => `${f}/projects`);
+      .flatMap((f) => [`${f}/projects`, `${profileDirectory(f, paths)}/projects`]);
     let current = "";
     let currentExists = true;
     if (resume !== undefined) {
