@@ -11,7 +11,7 @@
   ],
   "exempt": ["pnpm-lock.yaml"],
   "seams": {
-    "README.md": { "budget": 20, "why": "the fork's section above upstream's README" },
+    "README.md": { "budget": 15, "why": "the fork's section above upstream's README" },
     "apps/server/src/provider/builtInDrivers.ts": {
       "budget": 9,
       "why": "extension drivers and usage readers"

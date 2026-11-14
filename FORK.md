@@ -112,7 +112,7 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: `DESKTOP_APP_ID` itself is left alone (T3's passkey signing tests pin it; the fork never builds `--signed`). The staged package `name` stays T3's `"t3code"`: Electron names its safe-storage keychain item after it (`t3code Safe Storage`, account `t3code Key`), and the fork must read the secrets the official app encrypted in `~/.t3`.
 - **Conflict**: take upstream's file, re-apply the two edits.
 
-### `README.md` (budget 20)
+### `README.md` (budget 15)
 
 - **Lines**: the "T3 Code + lastdrop" section above upstream's README.
 - **Conflict**: take upstream's README, put the section back on top.
