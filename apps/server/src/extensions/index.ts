@@ -39,3 +39,6 @@ export const layer = Layer.empty;
 
 /** HTTP routes, merged beside T3's own. */
 export const routes = Layer.empty;
+
+/** Refuses a database migrated by a newer T3 build; `server.ts` runs it before opening the database. */
+export { refuseNewerDatabase } from "./databaseVersion.ts";

@@ -2,7 +2,7 @@
 
 Read this before resolving an upstream conflict or touching a T3 file.
 
-This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The `lastdrop` branch is the latest stable upstream tag (`vX.Y.Z`) plus a short stack of fork commits on top. The fork adds lastdrop (several Claude accounts picked by remaining limits, the user's own agents with fallbacks across providers) and installs as its own app beside the official T3 Code.
+This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The `lastdrop` branch is the latest stable upstream tag (`vX.Y.Z`) plus a short stack of fork commits on top. The fork adds lastdrop (several Claude accounts picked by remaining limits, the user's own agents with fallbacks across providers) and installs as its own app that opens the official T3 Code's data (`~/.t3`). Use one of the two apps at a time.
 
 ## Rules
 
@@ -13,17 +13,17 @@ This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3c
 
 ## Fork folders
 
-| Folder                                      | Owns                                                                                                                                                                                    |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server/src/extensions/`               | `index.ts`: the server lists T3 spreads (drivers, usage readers, provider clients for the server's copies, Claude query-runner wrapper, layer, routes). Later `extensions/lastdrop/**`. |
-| `apps/web/src/extensions/`                  | `index.tsx`: per-driver sections in a provider instance's settings card.                                                                                                                |
-| `apps/desktop/src/extensions/`              | App identity (`identity.ts`), startup (`startup.ts`), the one-time copy of `~/.t3` (`importOfficialHome.ts`), and their tests.                                                          |
-| `packages/client-runtime/src/extensions.ts` | Provider client definitions (label, icon, settings schema) shared by web and mobile.                                                                                                    |
-| `packages/lastdrop-*`                       | Future: `lastdrop-core` (pure logic), `lastdrop-provider` (T3 provider package).                                                                                                        |
-| `scripts/lastdrop/`                         | Guard (`check-fork-paths.ts`, `seams.json`), build settings (`desktop.ts`), mac signing hook (`sign-macos.ts`).                                                                         |
-| `docs/lastdrop/`                            | Fork docs.                                                                                                                                                                              |
-| `.github/workflows/lastdrop-*`              | Sync, release and guard workflows.                                                                                                                                                      |
-| `FORK.md`, README's top section             | This file; the README's fork section is a seam.                                                                                                                                         |
+| Folder                                      | Owns                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server/src/extensions/`               | `index.ts`: the server lists T3 spreads (drivers, usage readers, provider clients for the server's copies, Claude query-runner wrapper, layer, routes, newer-schema check). `dataDir.ts`: lastdrop's data folder. `databaseVersion.ts`: the newer-schema check. Later `extensions/lastdrop/**`. |
+| `apps/web/src/extensions/`                  | `index.tsx`: per-driver sections in a provider instance's settings card.                                                                                                                                                                                                                        |
+| `apps/desktop/src/extensions/`              | App identity (`identity.ts`), startup (`startup.ts`), and their tests.                                                                                                                                                                                                                          |
+| `packages/client-runtime/src/extensions.ts` | Provider client definitions (label, icon, settings schema) shared by web and mobile.                                                                                                                                                                                                            |
+| `packages/lastdrop-*`                       | Future: `lastdrop-core` (pure logic), `lastdrop-provider` (T3 provider package).                                                                                                                                                                                                                |
+| `scripts/lastdrop/`                         | Guard (`check-fork-paths.ts`, `seams.json`), build settings (`desktop.ts`), mac signing hook (`sign-macos.ts`).                                                                                                                                                                                 |
+| `docs/lastdrop/`                            | Fork docs.                                                                                                                                                                                                                                                                                      |
+| `.github/workflows/lastdrop-*`              | Sync, release and guard workflows.                                                                                                                                                                                                                                                              |
+| `FORK.md`, README's top section             | This file; the README's fork section is a seam.                                                                                                                                                                                                                                                 |
 
 ## Seams
 
@@ -57,12 +57,12 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: the wrapper around whatever layer provides `ClaudeAgentSdkQueryRunner`. If upstream renames the service or changes its `open` input, the wrapper's contract test (future) must be updated in the fork's folder.
 - **Conflict**: take upstream's file, wrap the Claude query-runner layer again.
 
-### `apps/server/src/server.ts` (budget 3)
+### `apps/server/src/server.ts` (budget 4)
 
-- **Lines**: import `* as Extensions` (165); `Extensions.layer,` last in `layerRuntimeCoreDependenciesBase`'s `Layer.mergeAll(...)` (688); `Extensions.routes,` last in the inner `Layer.mergeAll(...)` of `layerMakeRoutes` (806).
-- **Why**: the fork's long-lived services (accounts, usage fetching) and HTTP routes.
-- **Must survive**: `Extensions.layer` inside the merge that gets T3's core services provided below it; `Extensions.routes` beside T3's routes.
-- **Conflict**: take upstream's file, re-add the three lines in the equivalent merges.
+- **Lines**: import `* as Extensions` (165); `Extensions.layer,` last in `layerRuntimeCoreDependenciesBase`'s `Layer.mergeAll(...)` (688); `Extensions.routes,` last in the inner `Layer.mergeAll(...)` of `layerMakeRoutes` (806); `yield* Extensions.refuseNewerDatabase(config.dbPath);` right after `acquireServerOwnership(...)` in `layerMakeServer` (860).
+- **Why**: the fork's long-lived services (accounts, usage fetching) and HTTP routes; and the newer-schema check (see "Shared data with the official app").
+- **Must survive**: `Extensions.layer` inside the merge that gets T3's core services provided below it; `Extensions.routes` beside T3's routes; the check after the ownership lock and before anything opens the database.
+- **Conflict**: take upstream's file, re-add the four lines in the equivalent places.
 
 ### `packages/client-runtime/src/providerClients.ts` (budget 2)
 
@@ -81,7 +81,7 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 ### `apps/desktop/src/main.ts` (budget 1)
 
 - **Lines**: `import "./extensions/startup.ts";` as the **first** line (1).
-- **Why**: runs before any T3 module loads: turns on the fork's identity and sets `T3CODE_HOME` (see "App identity").
+- **Why**: runs before any T3 module loads: turns on the fork's identity (see "App identity and data").
 - **Must survive**: it stays the first import. If it moves below a T3 import, that module may read the identity before it is on.
 - **Conflict**: take upstream's file, put the import back on line 1.
 
@@ -95,7 +95,7 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 ### `apps/desktop/src/app/DesktopUserData.ts` (budget 4)
 
 - **Lines**: import `userDataNames` (6); `const names = input.isDevelopment` renamed `upstreamNames` (43); `const names = userDataNames(input.isDevelopment, upstreamNames);` after it (46).
-- **Why**: the Electron profile folder (`~/Library/Application Support/t3code-lastdrop`). A separate profile keeps Chromium storage apart and gives the fork its own single-instance lock, so both apps can run at once.
+- **Why**: the Electron profile folder (`~/Library/Application Support/t3code-lastdrop`). Chromium's storage must not be opened by two apps at once, so the profile stays separate even though the T3 home is shared.
 - **Must survive**: T3's names as the argument; `names` used below unchanged.
 - **Conflict**: take upstream's file; rename T3's `names` again and add the line.
 
@@ -107,10 +107,10 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 
 ### `scripts/build-desktop-artifact.ts` (budget 9)
 
-- **Lines**: import `* as Lastdrop from "./lastdrop/desktop.ts"` (62); `appId: Lastdrop.APP_ID,` in `createBuildConfig` (2785); the mac `sign` option `...(signed ? { sign: ... } : Lastdrop.macSelfSigning())` (2875-2877); `name: Lastdrop.PACKAGE_NAME,` in `stagePackageJson` (3878).
-- **Why**: the fork's bundle id (`com.amontlabs.t3code-lastdrop`); the packaged package name (`t3code-lastdrop`), which names Electron's safe-storage keychain item (T3's is `t3code Safe Storage`; sharing it would hand the fork the official app's key, behind a keychain prompt) and electron-updater's cache (`~/Library/Caches/t3code-lastdrop-updater`, so neither app deletes the other's pending update); and signing with the fork's self-signed certificate when `LASTDROP_MAC_SIGN_IDENTITY` is set (unset: T3's ad-hoc signing).
-- **Must survive**: `DESKTOP_APP_ID` itself is left alone (T3's passkey signing tests pin it; the fork never builds `--signed`).
-- **Conflict**: take upstream's file, re-apply the three edits.
+- **Lines**: import `* as Lastdrop from "./lastdrop/desktop.ts"` (62); `appId: Lastdrop.APP_ID,` in `createBuildConfig` (2785); the mac `sign` option `...(signed ? { sign: ... } : Lastdrop.macSelfSigning())` (2875-2877).
+- **Why**: the fork's bundle id (`com.amontlabs.t3code-lastdrop`); and signing with the fork's self-signed certificate when `LASTDROP_MAC_SIGN_IDENTITY` is set (unset: T3's ad-hoc signing).
+- **Must survive**: `DESKTOP_APP_ID` itself is left alone (T3's passkey signing tests pin it; the fork never builds `--signed`). The staged package `name` stays T3's `"t3code"`: Electron names its safe-storage keychain item after it (`t3code Safe Storage`, account `t3code Key`), and the fork must read the secrets the official app encrypted in `~/.t3`.
+- **Conflict**: take upstream's file, re-apply the two edits.
 
 ### `README.md` (budget 20)
 
@@ -119,29 +119,34 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 
 ## App identity and data
 
-The fork never touches the official app's data, so both install side by side and an official update cannot change the fork's data.
+The fork is its own app that opens the official app's data: the same T3 home (`~/.t3`, or `T3CODE_HOME`, resolved by T3's own code; dev runs: `~/.t3/dev`), database, settings and secrets. Everything the fork adds goes under its own folder or files, never into T3's files or schema.
 
 |                            | Official T3 Code                          | Fork                                                 |
 | -------------------------- | ----------------------------------------- | ---------------------------------------------------- |
 | App / bundle id            | `T3 Code (Beta)` / `com.t3tools.t3code`   | `T3 Code lastdrop` / `com.amontlabs.t3code-lastdrop` |
-| T3 home (`T3CODE_HOME`)    | `~/.t3`                                   | `~/.t3-lastdrop` (dev runs: `~/.t3-lastdrop-dev`)    |
+| T3 home (`T3CODE_HOME`)    | `~/.t3`                                   | same                                                 |
+| lastdrop's own files       |                                           | `~/.t3/lastdrop/` (dev runs: `~/.t3/dev/lastdrop/`)  |
 | Electron profile           | `~/Library/Application Support/t3code-v2` | `~/Library/Application Support/t3code-lastdrop`      |
-| `t3` command shim          | `~/.t3/bin/t3`                            | `~/.t3-lastdrop/bin/t3`                              |
-| Safe-storage keychain item | `t3code Safe Storage`                     | `t3code-lastdrop Safe Storage`                       |
-| Updater cache              | `~/Library/Caches/t3code-updater`         | `~/Library/Caches/t3code-lastdrop-updater`           |
+| `t3` command shim          | `~/.t3/bin/t3`                            | same file, pointing at whichever app ran last        |
+| Safe-storage keychain item | `t3code Safe Storage`                     | same                                                 |
+| Updater cache              | `~/Library/Caches/t3code-updater`         | same                                                 |
+| `t3code://` links          | registered                                | registered                                           |
 | Updates                    | pingdotgg/t3code releases                 | amontlabs/t3code releases                            |
 
-How: `apps/desktop/src/extensions/startup.ts` runs first. It calls `Identity.activate()` (the seams above then return the fork's names; until then they return T3's, which is what T3's tests see) and sets `T3CODE_HOME` to `~/.t3-lastdrop` unless the user set one. T3 already derives its state folder, CLI shim and backend home from `T3CODE_HOME`, so no T3 path code changes. The backend gets the home as an explicit argument and T3 strips `T3CODE_HOME` from the backend's environment.
+How: `apps/desktop/src/extensions/startup.ts` runs first and calls `Identity.activate()`: the app-name and profile seams then return the fork's names (until then they return T3's, which is what T3's tests see). It does not touch `T3CODE_HOME`. lastdrop's folder comes from `lastdropDataDir` / `resolveLastdropDataDir` in `apps/server/src/extensions/dataDir.ts`, derived from the server's resolved home; nothing creates it yet.
 
-**First launch copies `~/.t3` once** (`importOfficialHome.ts`, packaged app only, only when `~/.t3-lastdrop` does not exist and `T3CODE_HOME` is unset):
+Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, privacy permissions and the updater apart.
 
-- Copied: `userdata/` (database, settings, secrets, attachments, provider homes, client settings) and `tools/` (downloaded helper binaries). Files are APFS clones: instant, no extra space.
-- Left behind: the running server's files (`server-owner.sqlite`, `server-runtime.json`), `logs/`, `environment-id` (the fork is its own environment for remote clients and the relay; a fresh id is made), and top-level `bin/` (the fork writes its own shim), `caches/` (rebuilt), `worktrees/` and `scratch/` (git worktrees cannot be copied; threads keep their absolute paths, see below), `usage-host-id`.
-- SQLite while the official app runs: a database with a `-wal` file is snapshotted through a read-only connection with `VACUUM INTO`, which reads one committed state, WAL included, and writes nothing to the source. Copying `-db`, `-wal` and `-shm` one after another is not consistent (a checkpoint can land between the copies). A database without `-wal` has no open WAL writer, so its file is cloned as is, with a hot `-journal` if present (the fork's first open rolls it back); opening it instead could create `-wal`/`-shm` files in `~/.t3`. The copy is then switched back to WAL mode.
-- The copy is built in `~/.t3-lastdrop.importing-<pid>` and renamed into place, so a failed copy leaves nothing and runs again next launch; the user sees a dialog. `~/.t3` is never written.
-- Known limits: threads whose worktree or scratch folder is under `~/.t3/worktrees` or `~/.t3/scratch` keep those paths, so agents in those threads work in the official app's folders. Scheduled tasks are copied too: if both apps run, both fire them. Saved remote environments encrypted with the official app's safe-storage key do not decrypt in the fork and must be re-added. The `t3code://` URL scheme is shared with the official app (Clerk and Codex sign-in callbacks register it); macOS sends those links to one of the two apps.
+### Shared data with the official app
 
-**Data the fork will store** (none yet): its settings in provider instance `config` and its own files under `~/.t3-lastdrop/userdata/lastdrop/`.
+- **Keychain**: the staged package name stays `t3code`, so Electron reads the official app's `t3code Safe Storage` key and decrypts its saved environments and connection catalog. The fork's signature differs, so macOS asks once for access to that item ("Always Allow").
+- **One app at a time**: each app has its own Electron profile and single-instance lock, so both can be opened. T3's server takes an exclusive lock on `~/.t3/userdata/server-owner.sqlite` before it opens the database (`apps/server/src/serverOwnership.ts`). The second app's server exits with code 78, and that app shows T3's "This T3 home is unavailable" dialog and quits. Two servers never run on one home. Before its server exits, the second app may already have rewritten the `t3` command shim to point at itself.
+- **Newer schema**: the official app can update ahead of the fork and migrate the database. T3's migrator then runs nothing on the newer schema, and T3 refuses that only for its background service. The fork checks right after the ownership lock (`databaseVersion.ts`, read-only): if the database records migrations this build does not know, the server stops before opening it, nothing is written, and the startup-recovery window shows the message and offers the fork's update. The fork follows stable T3 releases within the hour, so this lasts until the next fork release. The fork never adds migrations of its own.
+- **Sign-in links**: both apps register `t3code://` (Clerk and Codex sign-in callbacks), and macOS sends a link to only one of them. Keep only one of the two installed.
+- **Updater cache**: shared. Each app checks a cached download against its own update's hash, so neither installs the other's update; at worst one deletes the other's pending download and it downloads again.
+- **Other shared state**: scheduled tasks, worktrees, the environment id and the server's runtime files are T3's own and belong to whichever app is running. Electron-profile state (window layout, Chromium storage) is per app.
+
+**Data the fork will store** (none yet): its settings in provider instance `config` and its own files under `~/.t3/lastdrop/`.
 
 ## Releases
 

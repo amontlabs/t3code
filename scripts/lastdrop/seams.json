@@ -28,7 +28,10 @@
       "budget": 3,
       "why": "Claude query-runner wrapper"
     },
-    "apps/server/src/server.ts": { "budget": 3, "why": "extension services and routes" },
+    "apps/server/src/server.ts": {
+      "budget": 4,
+      "why": "extension services and routes, newer-schema check"
+    },
     "packages/client-runtime/src/providerClients.ts": {
       "budget": 2,
       "why": "extension provider client definitions"
@@ -37,13 +40,13 @@
       "budget": 7,
       "why": "extension settings section per driver"
     },
-    "apps/desktop/src/main.ts": { "budget": 1, "why": "fork startup: identity and home" },
+    "apps/desktop/src/main.ts": { "budget": 1, "why": "fork startup: identity" },
     "apps/desktop/src/app/DesktopEnvironment.ts": { "budget": 3, "why": "app name" },
     "apps/desktop/src/app/DesktopUserData.ts": { "budget": 4, "why": "Electron profile folder" },
     "apps/desktop/package.json": { "budget": 2, "why": "product name" },
     "scripts/build-desktop-artifact.ts": {
-      "budget": 9,
-      "why": "bundle id, package name, self-signed mac signing"
+      "budget": 7,
+      "why": "bundle id, self-signed mac signing"
     }
   }
 }

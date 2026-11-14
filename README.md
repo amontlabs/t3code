@@ -7,7 +7,7 @@ What it adds:
 - **Several Claude accounts, used automatically** _(not built yet)_. Each conversation runs on the account with the most room left, and moves on to another account when one hits its limit.
 - **Your own agents** _(not built yet)_. Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus.
 - **Limits per account** _(not built yet)_. Hover over the usage icon to see what each account has left.
-- **Its own app and data folder.** It installs beside the official T3 Code and never changes its data. On first launch it copies your T3 Code projects and threads once.
+- **Uses your existing T3 Code data.** It opens the same projects, threads and settings as the official app (`~/.t3`) and keeps its own files in `~/.t3/lastdrop/`. Use one of the two apps at a time, and keep only one installed so sign-in links open the right one.
 
 Download it from [Releases](https://github.com/amontlabs/t3code/releases) (Apple Silicon Macs). The first time, open it from System Settings → Privacy & Security. How the fork is kept in sync: [FORK.md](./FORK.md).
 

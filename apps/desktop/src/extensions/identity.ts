@@ -1,23 +1,16 @@
 /**
- * The fork's own app identity, so it installs beside the official T3 Code and never shares its
- * data. The desktop entry point turns it on (`startup.ts`) before any T3 module reads it; until
- * then every lookup returns T3's own value, which keeps T3's tests about T3's identity true.
- * The bundle id lives in `scripts/lastdrop/desktop.ts`, read by the build script.
+ * The fork's app name and Electron profile; its T3 home and safe-storage key stay T3's
+ * (FORK.md, "App identity and data"). Off until `startup.ts` turns it on, so T3's tests still
+ * see T3's identity. The bundle id is in `scripts/lastdrop/desktop.ts`.
  */
 
-/** Folder under the home directory used as `T3CODE_HOME` when the user set none. */
-export const HOME_DIR_NAME = ".t3-lastdrop";
-export const DEV_HOME_DIR_NAME = ".t3-lastdrop-dev";
-
-/** The official app's home: read once by `importOfficialHome.ts`, never written. */
-export const OFFICIAL_HOME_DIR_NAME = ".t3";
-
 /** App name in the menu bar, About panel and window titles. */
-export const APP_BASE_NAME = "T3 Code lastdrop";
+const APP_BASE_NAME = "T3 Code lastdrop";
 
 /**
- * Electron profile folders under Application Support. A separate profile also gives the fork its
- * own single-instance lock, so both apps run at once.
+ * Electron profile folders under Application Support: Chromium storage must not be opened by two
+ * apps at once. Both apps can be open, but only one server owns the shared T3 home; the other's
+ * server refuses to start (T3's `server-owner.sqlite` lock) and that app quits.
  */
 const USER_DATA_NAMES = {
   development: { current: "t3code-lastdrop-dev", legacy: "t3code-lastdrop-dev" },
