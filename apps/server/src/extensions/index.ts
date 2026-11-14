@@ -4,9 +4,9 @@
  */
 import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
 import type { AnyProviderDriver } from "@t3tools/provider-core/server/driver";
-import * as Layer from "effect/Layer";
 
 import * as LastdropAccounts from "./lastdrop/accounts.ts";
+import * as LastdropQueryRunner from "./lastdrop/queryRunnerLive.ts";
 
 /** Services the extension drivers need to create instances. */
 export type ExtensionDriversEnv = never;
@@ -29,12 +29,11 @@ export const EXTENSION_USAGE_DRIVERS: ReadonlyArray<
 export const EXTENSION_PROVIDER_CLIENTS: ReadonlyArray<ProviderClientDefinition> = [];
 
 /**
- * Wraps the layer that opens every Claude Agent SDK query. lastdrop will pick the account here;
- * today it returns the layer unchanged.
+ * Wraps the layer that opens every Claude Agent SDK query: lastdrop picks the Claude account per
+ * thread there, moves threads between accounts and translates their session ids
+ * (`lastdrop/queryRunner.ts`). Under vitest and off macOS it returns T3's runner unchanged.
  */
-export const wrapClaudeQueryRunner = <A, E, R>(
-  queryRunner: Layer.Layer<A, E, R>,
-): Layer.Layer<A, E, R> => queryRunner;
+export const wrapClaudeQueryRunner = LastdropQueryRunner.wrapLive;
 
 /** Long-lived services, merged into the server's core dependencies: Claude accounts and usage. */
 export const layer = LastdropAccounts.layer;
