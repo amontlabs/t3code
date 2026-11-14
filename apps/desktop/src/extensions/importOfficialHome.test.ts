@@ -1,10 +1,13 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Fixtures mirror the sync code under test.
 import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Fixtures mirror the sync code under test.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Fixtures mirror the sync code under test.
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
-import { afterEach, assert, beforeEach, describe, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
 
 import { importOfficialHome } from "./importOfficialHome.ts";
 

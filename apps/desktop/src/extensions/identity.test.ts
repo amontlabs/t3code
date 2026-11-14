@@ -1,4 +1,4 @@
-import { assert, it } from "vitest";
+import { assert, it } from "@effect/vitest";
 
 import * as Identity from "./identity.ts";
 
