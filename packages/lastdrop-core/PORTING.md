@@ -1,17 +1,34 @@
-# Porting lastdrop-core from headroom
+# Porting lastdrop-core (and lastdrop-node) from headroom
 
 Pure logic ported from headroom (Swift, `main` at `d0730f5`): account picking, plan sizes, usage
-rules, rate-limit backoff, transient errors, and what Claude Code's result event says about the
-account. No I/O: the caller passes readings, environments, times (epoch ms) and randomness.
+rules, rate-limit backoff, transient errors, what Claude Code's result event says about the
+account, the account list, which profile keys are an account's own, the keeper's rules and reading
+Anthropic's usage answers. No I/O: the caller passes readings, environments, times (epoch ms) and
+randomness. The I/O half of step 3 is `packages/lastdrop-node` (Node, promises; the server wraps it
+in Effect); its tests are listed here too, with temporary homes and a fake `security`.
 
-| Swift                                                                                          | TS                                                                         |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `SubagentAccounts` (`pick`, `unknown`, `threadRoom`, `pickForThread`, `hasRoom`)               | `src/accounts.ts`                                                          |
-| `SubagentAccounts.ownAccountUUID`                                                              | `ownAccountUuid(env, signedInUuid)`: the `.claude.json` read is a callback |
-| `PlanSize`, `ClaudeProvider.planName`                                                          | `src/planSize.ts`                                                          |
-| `UsageWindow`, `SubagentUsage` `Status`/`Reading`/`reading`/`resets`/backoff, `AgentPool.room` | `src/usage.ts` (statuses are values; storage is the caller's)              |
-| `TransientError.reason`, `RetryPolicy`, `SubagentRunner.hasCode`                               | `src/transientError.ts`                                                    |
-| `SubagentRunner.parse`/`classify` (Claude accounts), `Result.failedToStart`/`handsOn`          | `src/result.ts`                                                            |
+| Swift                                                                                                                                                                                                                                                                                                                  | TS                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `SubagentAccounts` (`pick`, `unknown`, `threadRoom`, `pickForThread`, `hasRoom`)                                                                                                                                                                                                                                       | `src/accounts.ts`                                                            |
+| `SubagentAccounts.ownAccountUUID`                                                                                                                                                                                                                                                                                      | `ownAccountUuid(env, signedInUuid)`: the `.claude.json` read is a callback   |
+| `PlanSize`, `ClaudeProvider.planName`                                                                                                                                                                                                                                                                                  | `src/planSize.ts`                                                            |
+| `UsageWindow`, `SubagentUsage` `Status`/`Reading`/`reading`/`resets`/backoff, `AgentPool.room`                                                                                                                                                                                                                         | `src/usage.ts` (statuses are values; storage is the caller's)                |
+| `TransientError.reason`, `RetryPolicy`, `SubagentRunner.hasCode`                                                                                                                                                                                                                                                       | `src/transientError.ts`                                                      |
+| `SubagentRunner.parse`/`classify` (Claude accounts), `Result.failedToStart`/`handsOn`                                                                                                                                                                                                                                  | `src/result.ts`                                                              |
+| `Account`, `AccountsConfig`, `ClaudeAccount`, `ClaudeAccountsConfig` (Accounts.swift, ClaudeAccounts.swift)                                                                                                                                                                                                            | `src/accountsConfig.ts` (`accounts.json` decode/encode, migration)           |
+| `ClaudeProfile.ownKeys`/`isOwn`/`merged`/`ownState`/`isShared`                                                                                                                                                                                                                                                         | `src/claudeProfile.ts`                                                       |
+| `ClaudeKeeper` rules (`isDue`, `renewDue`, `nextAttempt`, `judge`, `endsSoon`; `check`/`finished` as `afterCheck`/`afterRenewal`)                                                                                                                                                                                      | `src/claudeKeeper.ts`                                                        |
+| `ClaudeProvider` parsing (`windows`, `reading`, `extraUsage`, `cachedUsage(fromConfig:)`, `resetGrants`, `isModelOnly`, `place`, `planDisplayName(fromProfile:)`, `credentials`, `signInFacts`, `keychainService`, `plan(shown:)`, `isCloudflarePage`, `rateLimitedMessage`), `ClaudeSignIn.isSignedIn`, `LimitResets` | `src/claudeUsage.ts`, `src/usage.ts`                                         |
+| `ClaudeCodeHeaders` (`oauth`, `userAgent`, `version`)                                                                                                                                                                                                                                                                  | `src/claudeCodeHeaders.ts`                                                   |
+| `SubagentUsage.update` for a reading and sign-in, `writeStatus`                                                                                                                                                                                                                                                        | `src/usage.ts` (`statusWithReading`, `statusWithSignIn`, `encodeStatusFile`) |
+| `AccountsConfig.load`/`ClaudeAccountsConfig.load`, `LastDropPaths`                                                                                                                                                                                                                                                     | lastdrop-node `claudeSignIn.ts` `loadAccounts` (read only), `paths.ts`       |
+| `Keychain` (`read`, `writeOwn`, `readOwn`)                                                                                                                                                                                                                                                                             | lastdrop-node `keychain.ts`                                                  |
+| `ClaudeProfile.prepare`/`link`/`sync`/`locked`, `ClaudeAccount.runEnvironment`, `SubagentRunner.environment`'s identity filter                                                                                                                                                                                         | lastdrop-node `claudeProfile.ts`                                             |
+| `ClaudeProvider.storedCredentials`/`signedInAccount`, `ClaudeSignIn.renew`, `SubagentRunner.executable`, `ClaudeCodeHeaders.installedVersion`                                                                                                                                                                          | lastdrop-node `claudeSignIn.ts`                                              |
+| `ClaudeProvider.fetch`/`snapshot`/`usage`/`resetGrants`/`planDisplayName`, `HourlyCache`                                                                                                                                                                                                                               | lastdrop-node `claudeUsage.ts`                                               |
+| `ClaudeKeeper` (the loop)                                                                                                                                                                                                                                                                                              | lastdrop-node `keeper.ts`                                                    |
+| `SubagentUsage` `usage.json` read-modify-write                                                                                                                                                                                                                                                                         | lastdrop-node `statusStore.ts` (`~/.t3/lastdrop/usage.json`)                 |
+| `AppModel` refresh of Claude accounts (`AppModel+Claude.swift`)                                                                                                                                                                                                                                                        | lastdrop-node `monitor.ts`                                                   |
 
 ## Tests: Swift → TS
 
@@ -100,7 +117,123 @@ Not ported:
 | `testPoolKeepsABlockedAccountsReadingLonger`        | "the pool keeps a blocked account's reading longer"       |
 
 `testOneProcessBlocksTheOthers` also checks that `ClaudeProvider.fetch` refuses while blocked; that
-assertion moves with the provider (step 3). The file round trip becomes passing the returned status.
+assertion moved with the provider: lastdrop-node claudeUsage.test.ts "one process blocks the others: a
+429 is recorded and nobody asks again". The file round trip becomes passing the returned status.
+
+### AccountsTests.swift (16 cases: 12 ported)
+
+| Swift                                                     | TS                                                                                                                                         |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `testEveryProviderHasOneMainAccount`                      | accountsConfig.test.ts "every provider has one main account"                                                                               |
+| `testWhereEachAccountKeepsItsLogin`                       | "where each account keeps its login"                                                                                                       |
+| `testAddingGoesToTheEndOfItsOwnPool`                      | "adding goes to the end of its own pool"                                                                                                   |
+| `testAddingRefusesUnusableAndTakenNames`                  | "adding refuses unusable and taken names"                                                                                                  |
+| `testMovingStaysInsideThePool`                            | "moving stays inside the pool"                                                                                                             |
+| `testMainAccountsCantBeRemoved`                           | "main accounts can't be removed"                                                                                                           |
+| `testNormalizeDropsDuplicatesAndRestoresMain`             | "normalize drops duplicates and restores main"                                                                                             |
+| `testMigratingTheOldClaudeListKeepsItsOrderAndThresholds` | "migrating the old Claude list keeps its order and thresholds"                                                                             |
+| `testLoadMigratesUntilSavedThenReadsItsOwnFile`           | "load migrates until saved, then reads its own file"; files: lastdrop-node signIn.test.ts "is read from the standalone lastdrop's folder…" |
+| `testReplacingTheClaudePoolLeavesOtherProvidersAlone`     | "replacing the Claude pool leaves other providers alone"                                                                                   |
+| `testNewAccountsNotifyAtTheLimitAndShowNothing`           | "new accounts notify at the limit and show nothing"                                                                                        |
+| `testSavingTheClaudeListKeepsEachAccountsSettings`        | "saving the Claude list keeps each account's settings"                                                                                     |
+
+Not ported: `testRemovingAnAccountOnlyTouchesItsOwnProvidersKeys` (the app's keychain items for Z.ai,
+OpenRouter, Antigravity: step 6 or dropped), `testAlertsSayHowFarAlong`,
+`testShortOfRoomTheMenuBarDropsAccountsFromTheEnd`, `testTheMenuBarKnowsWhenMacOSHidItsItem` (the menu bar
+app's notifications and status item: dropped).
+
+### ClaudeAccountsTests.swift (11 cases: 9 ported)
+
+| Swift                                      | TS                                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| `testKeychainServiceMatchesClaudeCode`     | claudeUsage.test.ts "the keychain service matches Claude Code"               |
+| `testFolders`                              | accountsConfig.test.ts "folders"                                             |
+| `testSlug`                                 | "slug"                                                                       |
+| `testNormalizeKeepsOneMainAndAddsAccounts` | "normalize keeps one main and adds accounts"                                 |
+| `testOldThresholdFileStillLoads`           | "old threshold file still loads"                                             |
+| `testClaudeResetGrants` (LimitResetsTests) | claudeUsage.test.ts "Claude reset grants"                                    |
+| `testModelOnlyGrantsGoOnTheirModelRow`     | "model-only grants go on their model row (Anthropic's answer of 2026-11-10)" |
+| `testClaudeCodeHeaders`                    | "Claude Code's headers" (the session id is the caller's: one per server run) |
+| `testExpiredResetsDrop`                    | "expired resets drop"                                                        |
+
+Not ported: `testCodexResetCredits` (Codex limits are T3's own), `testTooltipGroupsSameDeadline` (the
+panel's reset badge; with the hover limits on the usage icon, later).
+
+### ClaudeKeeperTests.swift (13 cases: 12 ported)
+
+| Swift                                                        | TS                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `testSignInFactsReadClaudeCodesBlob`                         | claudeUsage.test.ts "sign-in facts read Claude Code's blob"           |
+| `testJudgeNamesWhatOnlyTheUserCanFix`                        | claudeKeeper.test.ts "judge names what only the user can fix"         |
+| `testRenewsFourMinutesBeforeExpiryThenJustAfterThenBacksOff` | "renews four minutes before expiry, then just after, then backs off"  |
+| `testNoRenewalWithoutARefreshTokenAndAtOnceWithoutAToken`    | "no renewal without a refresh token, and at once without a token"     |
+| `testTheBlobIsReadEveryFiveMinutesAnyway`                    | "the blob is read every five minutes anyway"                          |
+| `testEndsSoonWarnsThreeDaysAhead`                            | "ends soon warns three days ahead"                                    |
+| `testAWindowPastItsResetCountsAsUnused`                      | "a window past its reset counts as unused"                            |
+| `testAReadingOlderThanTwoHoursIsUnknown`                     | "a reading older than two hours is unknown"                           |
+| `testAnAccountThatNeedsSignInIsNotUsable`                    | "an account that needs sign-in is not usable" (status value, no file) |
+| `testLimitReachedHoldsUntilANewerReading`                    | "limit reached holds until a newer reading" (`fullSince` passed in)   |
+| `testResetsAreKeptByRowName`                                 | "resets are kept by row name"                                         |
+| `testUpdateKeepsOtherWritersFields`                          | "an update keeps other writers' fields" (through the file encoding)   |
+
+Not ported: `testWithoutTheAppARunnerSeesASignInRedoneInTerminal` (a CLI runner reading usage itself when
+the app's heartbeat is old; in the fork the server is the only reader).
+
+### ClaudeProfileTests.swift (11 cases: 11 ported)
+
+| Swift                                                            | TS                                                                                                |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `testCachesAndAccountKeysAreOwnEverythingElseIsShared`           | claudeProfile.test.ts "caches and account keys are own, everything else is shared"                |
+| `testMergedIsMainsConfigWithTheAccountsOwnKeys`                  | "merged is Main's config with the account's own keys"                                             |
+| `testOwnStateFollowsTheProfileUntilTheFolderIsSignedInElsewhere` | "own state follows the profile until the folder is signed in elsewhere"                           |
+| `testPrepareBuildsTheProfileAndLeavesEverythingElseAlone`        | lastdrop-node claudeProfile.test.ts "prepare builds the profile and leaves everything else alone" |
+| `testNextStartKeepsTheAccountsAnswersAndTakesMainsChanges`       | "the next start keeps the account's answers and takes Main's changes"                             |
+| `testNothingInTheProfileIsReplaced`                              | "nothing in the profile is replaced"                                                              |
+| `testUnchangedConfigIsNotRewritten`                              | "an unchanged config is not rewritten"                                                            |
+| `testManyRunnersStartingAtOnceLeaveOneWholeConfig`               | "many runners starting at once leave one whole config" (16 concurrent calls in one process)       |
+| `testAHeldLockOrAnUnreadableMainConfigLeavesTheProfileAsItIs`    | "a held lock or an unreadable Main config leaves the profile as it is"                            |
+| `testRunEnvironmentRunsAnAccountInItsProfile`                    | "the run environment runs an account in its profile"                                              |
+| `testUsageCacheIsReadFromTheProfile`                             | "the usage cache is read from the profile"                                                        |
+
+### ClaudeUsageCacheTests.swift (10 cases: 10 ported)
+
+| Swift                                                  | TS                                                                                                                                           |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `testMatchingAccountIsRead`                            | claudeUsage.test.ts "the matching account is read"                                                                                           |
+| `testAnotherAccountsAnswerIsIgnored`                   | "another account's answer is ignored"                                                                                                        |
+| `testStaleOrFutureAnswerIsIgnored`                     | "a stale or future answer is ignored"                                                                                                        |
+| `testMalformedCacheIsIgnored`                          | "a malformed cache is ignored"                                                                                                               |
+| `testMissingFilesAndUnknownAccount`                    | "missing files and an unknown account (parsed configs)"; files: lastdrop-node claudeUsage.test.ts "missing and unreadable files are skipped" |
+| `testNewestMatchingFileWins`                           | "the newest matching file wins"                                                                                                              |
+| `testProviderReadsTheSharedFileForItsOwnAccount`       | lastdrop-node claudeUsage.test.ts "the provider reads the shared file for its own account"                                                   |
+| `testFetchServesTheCacheWithoutAskingEvenWhileBlocked` | lastdrop-node "fetch serves the cache without asking, even while blocked"                                                                    |
+| `testTheProfilesPlanWinsOverTheSignInsStamp`           | "the profile's plan wins over the sign-in's stamp"                                                                                           |
+| `testRenewalWaitsOnTheStoredSignIn`                    | "renewal waits on the stored sign-in"                                                                                                        |
+
+### ProviderMappingTests.swift (18 cases: 2 ported)
+
+| Swift                                 | TS                                                   |
+| ------------------------------------- | ---------------------------------------------------- |
+| `testClaudeWindowsAndPlan`            | claudeUsage.test.ts "Claude windows and plan"        |
+| `testClaudeExtraUsageOnlyWhenEnabled` | "Claude extra usage only when enabled" (en-US money) |
+
+Not ported: Codex (5) and Antigravity (5) mapping, dropped (T3 reads their limits); Z.ai (3) and
+OpenRouter (1), step 6; `testDurations` and `testOnlySessionAndWeeklyShowByDefault` (the Swift panel's
+formatting; the web section words its own).
+
+### Added in step 3 (no Swift test)
+
+- core claudeKeeper.test.ts: "a check starts a renewal when due and online, and gives up after failing long
+  past expiry" (`check`/`finished` as pure steps); "a reading updates numbers only when newer, and the plan
+  always" (the app's `SubagentUsage.update`, and the file round trip).
+- core claudeProfile.test.ts: "the same config in another layout is the same" (Swift used `NSDictionary`).
+- lastdrop-node claudeUsage.test.ts: "asks with Claude Code's headers, then the plan and grants once an
+  hour"; "says what only the user can fix" (no sign-in, the credentials file, 401, a Cloudflare page).
+- lastdrop-node signIn.test.ts: the keychain through a fake `security`, the signed-in account, the installed
+  Claude Code and its version, renewal with a fake `claude`, the keeper's loop.
+- lastdrop-node monitor.test.ts: the refresh loop (two cases).
+- apps/server extensions/lastdrop/accounts.test.ts: the service stays off under vitest.
+- apps/web extensions/lastdrop/accountsView.test.ts: the section's wording.
 
 ### Added (no Swift test)
 
@@ -108,8 +241,11 @@ usage.test.ts "reading a status for routing": four cases pinning rules the Swift
 through `usage.json` (resets projected, a session left out beside a read week, sign-in state, "full
 since" a limit answer).
 
-Totals: of 71 Swift cases in these files, 31 are ported (15 + 7 + 9) as 31 TS cases, plus 4 added = 35;
-the 40 others test runners, relays and files that later steps replace or drop.
+Totals for step 2: of 71 Swift cases in these files, 31 are ported (15 + 7 + 9) as 31 TS cases, plus 4
+added = 35; the 40 others test runners, relays and files that later steps replace or drop.
+
+Totals for step 3: of 79 Swift cases (16 + 11 + 13 + 11 + 10 + 18), 56 are ported (12 + 9 + 12 + 11 + 10 +
+2); the 23 others test the menu bar app, other providers or the CLI runner.
 
 ## Behaviour that differs
 
@@ -122,5 +258,12 @@ the 40 others test runners, relays and files that later steps replace or drop.
   status (no reading, usable).
 - `parseClaudeResult` covers Claude accounts only: Z.ai/OpenRouter rules come in step 6, and the
   `declined` approval descriptions with the agent runner (step 5).
-- Not ported: `SubagentUsage.usage` (app-heartbeat check, a runner's own read, the file lock),
-  `TransientError.signInWorks` (reads the keychain): I/O for step 3.
+- Not ported: `SubagentUsage.usage` (app-heartbeat check, a runner's own read, the file lock: the fork's
+  server is the only reader and writer of its `usage.json`), `TransientError.signInWorks` (reads the
+  keychain; with the query-runner wrapper, step 4).
+- Step 3: `decodeAccountsConfig` leaves out accounts of unknown providers and gives an account without
+  `addedAt` the current time (Swift failed the whole file). `Keychain.readOwn`'s move from the app's old
+  service name is not ported (the fork reads only Claude Code's items so far). `ClaudeSignIn`'s browser and
+  Terminal sign-ins (`openTerminalSignIn`, `browserSignIn`, `CLILogin`) are not ported: the section is read
+  only. The fork's `usage.json` lives in `~/.t3/lastdrop/`, apart from the standalone app's, so each keeps
+  its own 429 block. Extra usage money is formatted en-US.

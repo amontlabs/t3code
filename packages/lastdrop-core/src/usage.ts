@@ -11,6 +11,30 @@ export interface UsageWindow {
   readonly usedPercent?: number | undefined;
   /** Epoch ms. */
   readonly resetsAt?: number | undefined;
+  /** One-off resets that clear this row only (a model's launch grants). */
+  readonly resets?: LimitResets | undefined;
+}
+
+/** Resets of a usage limit the account can spend (Anthropic's grants). */
+export interface LimitResets {
+  readonly count: number;
+  /** When each remaining reset expires, soonest first (epoch ms); may be shorter than `count`. */
+  readonly expiries: ReadonlyArray<number>;
+}
+
+export const addResets = (
+  r: LimitResets,
+  count: number,
+  expiries: ReadonlyArray<number>,
+): LimitResets => ({
+  count: r.count + count,
+  expiries: [...r.expiries, ...expiries].toSorted((a, b) => a - b),
+});
+
+/** Without the resets whose deadline has passed. */
+export function currentResets(r: LimitResets, now: number): LimitResets {
+  const gone = r.expiries.filter((e) => e <= now).length;
+  return { count: Math.max(0, r.count - gone), expiries: r.expiries.filter((e) => e > now) };
 }
 
 /** Where a Claude account's sign-in stands, as the keeper last judged it. */
@@ -261,3 +285,76 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function dropUndefined<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
+
+/** `usage.json` as lastdrop writes it: dates in seconds since 1970, sorted keys. */
+export function encodeStatusFile(statuses: Readonly<Record<string, AccountStatus>>): string {
+  const seconds = (ms: number | undefined) => (ms === undefined ? undefined : ms / 1000);
+  const out: Record<string, unknown> = {};
+  for (const id of Object.keys(statuses).toSorted()) {
+    const s = statuses[id]!;
+    const resets =
+      s.resetsAt === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(s.resetsAt).map(([k, v]) => [k, v / 1000]));
+    out[id] = dropUndefined({
+      at: Number.isFinite(s.at) ? s.at / 1000 : DISTANT_PAST_SECONDS,
+      blockedUntil: seconds(s.blockedUntil),
+      failures: s.failures,
+      models: s.models,
+      plan: s.plan,
+      resetsAt: resets,
+      session: s.session,
+      signIn: s.signIn,
+      signInDetail: s.signInDetail,
+      signInEndsAt: seconds(s.signInEndsAt),
+      weekly: s.weekly,
+    });
+  }
+  return JSON.stringify(out, null, 2);
+}
+
+/** Swift's `Date.distantPast` in seconds: an entry never read. */
+const DISTANT_PAST_SECONDS = -62_135_769_600;
+
+/**
+ * The status after a successful reading at `at` (the app's `SubagentUsage.update`): numbers, models and
+ * resets from the windows when newer than what's kept; the plan whenever known.
+ */
+export function statusWithReading(
+  status: AccountStatus | undefined,
+  reading: {
+    readonly windows: ReadonlyArray<UsageWindow>;
+    readonly at: number;
+    readonly plan?: string | undefined;
+  },
+): AccountStatus {
+  let entry: AccountStatus = status ?? { at: -Infinity };
+  if (reading.at > entry.at) {
+    const r = readingFromWindows(reading.windows);
+    entry = dropUndefined({
+      ...entry,
+      session: r.session,
+      weekly: r.weekly,
+      models: Object.keys(r.models).length === 0 ? undefined : r.models,
+      resetsAt: resetsFromWindows(reading.windows),
+      at: reading.at,
+    });
+  }
+  return reading.plan === undefined ? entry : { ...entry, plan: reading.plan };
+}
+
+/** The status with the keeper's judgement of the sign-in. */
+export const statusWithSignIn = (
+  status: AccountStatus | undefined,
+  signIn: {
+    readonly state: SignInState;
+    readonly detail?: string | undefined;
+    readonly endsAt?: number | undefined;
+  },
+): AccountStatus =>
+  dropUndefined({
+    ...(status ?? { at: -Infinity }),
+    signIn: signIn.state,
+    signInDetail: signIn.detail,
+    signInEndsAt: signIn.endsAt,
+  });
