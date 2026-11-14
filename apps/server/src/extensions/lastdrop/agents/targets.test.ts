@@ -200,7 +200,8 @@ describe("lastdrop router targets", () => {
       const zai = yield* openOn({ agent: "cheap", available: [ZAI], runtimeMode: "auto" });
       assert.equal(zai.last.runtimePolicy.runtimeMode, "approval-required");
       const step = agents.find((agent) => agent.name === "live")!.chain[0]!;
-      assert.equal(entryRuntimeMode(step, "auto", undefined), "auto");
+      // Antigravity has no auto mode: even with its modes unknown, its prompts reach the person.
+      assert.equal(entryRuntimeMode(step, "auto", undefined), "approval-required");
       assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "approval-required");
     }).pipe(Effect.scoped),
   );

@@ -30,8 +30,14 @@ export const entryRuntimeMode = (
   mode: RuntimeMode,
   supported: ReadonlyArray<RuntimeMode> | undefined,
 ): RuntimeMode => {
-  // Until the command judge (step 7): Claude Code's auto check on these endpoints is untested.
-  if ((step.provider === "zai" || step.provider === "openrouter") && mode === "auto")
+  // Until the command judge (step 7): Claude Code's auto check on these endpoints is untested, and
+  // Antigravity has no auto mode, so its prompts must reach the person even if its modes are unknown.
+  if (
+    (step.provider === "zai" ||
+      step.provider === "openrouter" ||
+      step.provider === "antigravity") &&
+    mode === "auto"
+  )
     return "approval-required";
   return supportedOrAsk(mode, supported);
 };
