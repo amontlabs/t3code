@@ -8,6 +8,12 @@ import * as NodeURL from "node:url";
 export const APP_ID = "com.amontlabs.t3code-lastdrop";
 
 /**
+ * The packaged app's package name. Electron names its safe-storage keychain item after it
+ * (`t3code Safe Storage` for T3) and electron-builder its updater cache (`~/Library/Caches/<name>-updater`).
+ */
+export const PACKAGE_NAME = "t3code-lastdrop";
+
+/**
  * `mac` options to sign with the fork's self-signed certificate, no notarization; empty unless
  * `LASTDROP_MAC_SIGN_IDENTITY` is set. `identity: "-"` skips electron-builder's Apple-only
  * certificate lookup and hands signing to `sign-macos.ts`. Why: FORK.md, "Release signing".
