@@ -314,3 +314,14 @@ describe("ReadOnlyTables: lastdrop's matcher against Claude Code 2.1.319's own f
     expect(accepted.sort(), "Claude Code doesn't allow these").toEqual([]);
   });
 });
+
+describe("ReadOnlyCommands whitespace, as Swift reads it (never looser)", () => {
+  it("never splits or allows at a CRLF", () => {
+    refused(["gh pr list\r\ncomm x", "ls\r\nrm x"]);
+  });
+
+  it("does not take U+FEFF for a space, and takes U+0085 for one", () => {
+    refused(["echo﻿git tag"]);
+    expect(readOnlyCommands("ls\u0085-la")).toEqual(["ls"]);
+  });
+});

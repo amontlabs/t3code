@@ -3,13 +3,12 @@
  * `ReadOnlyCommands.swift`; flag tables are data). Never looser than Claude Code: an unknown flag, `$`,
  * a backtick, a file redirect, a subshell or control flow is never read-only.
  */
+import { chars, count, isWhitespace, splitAtSpaces, trim, WHITESPACE } from "./swiftText.ts";
 import { splitCommand, unwrapCommand } from "./permissionRules.ts";
 import { FLAG_TABLES, type FlagValue } from "./readOnlyFlagTables.ts";
 
 type Table = Readonly<Record<string, FlagValue>>;
 
-const trim = (text: string): string => text.replace(/^\s+|\s+$/gu, "");
-const length = (text: string): number => Array.from(text).length;
 const isDigits = (text: string): boolean => /^[0-9]+$/.test(text);
 const lookup = (table: Table, key: string): FlagValue | undefined =>
   Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
@@ -19,7 +18,8 @@ const tableFor = (name: string): Table | undefined =>
 /** The read-only commands `command` is made of (`["git status", "ls"]`), or undefined when any part isn't one. */
 export const readOnlyCommands = (input: string): Array<string> | undefined => {
   const command = trim(input);
-  if (command === "" || command.includes("$") || command.includes("`") || backgrounds(command))
+  // A carriage return is never read-only: bash splits at "\r\n", Swift does not (stricter than both).
+  if (command === "" || command.includes("\r") || command.includes("$") || command.includes("`") || backgrounds(command))
     return undefined;
   const parts = splitCommand(command, false);
   if (parts === undefined || parts.length === 0) return undefined;
@@ -42,7 +42,7 @@ export const backgrounds = (command: string): boolean => {
   let double = false;
   let escaped = false;
   let masked = "";
-  for (const c of command) {
+  for (const c of chars(command)) {
     if (escaped) {
       escaped = false;
       masked += "_";
@@ -83,14 +83,14 @@ export const commandWords = (part: string): Array<string> | undefined => {
   let double = false;
   let escaped = false;
   let started = false;
-  for (const c of part) {
+  for (const c of chars(part)) {
     if (escaped) {
       escaped = false;
       text += c;
       masked += "_";
       continue;
     }
-    if (!single && !double && /\s/u.test(c)) {
+    if (!single && !double && isWhitespace(c)) {
       if (started) {
         raw.push({ text, quoted: masked });
         text = "";
@@ -136,7 +136,7 @@ export const commandWords = (part: string): Array<string> | undefined => {
       i += 2;
       continue;
     }
-    if (Array.from(quoted).some((c) => "<>(){}\\".includes(c))) return undefined;
+    if (chars(quoted).some((c) => "<>(){}\\".includes(c))) return undefined;
     words.push(raw[i]!.text);
     i += 1;
   }
@@ -277,7 +277,7 @@ export const readOnlyName = (words: ReadonlyArray<string>): string | undefined =
   return first;
 };
 
-const isFlag = (word: string): boolean => length(word) > 1 && /^-[a-zA-Z0-9_-]/.test(word);
+const isFlag = (word: string): boolean => count(word) > 1 && /^-[a-zA-Z0-9_-]/.test(word);
 
 /**
  * Claude Code's flag rule: every flag in the table, by its name before `=`; a value of the flag's kind
@@ -293,7 +293,7 @@ export const flagsAllowed = (
   while (i < args.length) {
     const arg = args[i]!;
     if (arg === "--") return true;
-    if (!arg.startsWith("-") || length(arg) <= 1) {
+    if (!arg.startsWith("-") || count(arg) <= 1) {
       i += 1;
       continue;
     }
@@ -310,18 +310,18 @@ export const flagsAllowed = (
       if (
         ["grep", "egrep", "fgrep", "rg"].includes(command) &&
         !name.startsWith("--") &&
-        length(name) > 2
+        count(name) > 2
       ) {
         const short = lookup(table, name.slice(0, 2));
         if (short === "number" || short === "string") {
-          if (Array.from(name.slice(2)).every((c) => /[0-9]/.test(c))) {
+          if (chars(name.slice(2)).every((c) => /[0-9]/.test(c))) {
             i += 1;
             continue;
           }
         }
       }
-      if (!name.startsWith("--") && length(name) > 2) {
-        for (const letter of Array.from(name).slice(1))
+      if (!name.startsWith("--") && count(name) > 2) {
+        for (const letter of chars(name).slice(1))
           if (lookup(table, `-${letter}`) !== "none") return false;
         i += 1;
         continue;
@@ -356,7 +356,7 @@ export const flagsAllowed = (
         if (!isDigits(value)) return false;
         break;
       case "char":
-        if (length(value) !== 1) return false;
+        if (count(value) !== 1) return false;
         break;
       case "braces":
         if (value !== "{}") return false;
@@ -438,7 +438,7 @@ export const dangerous = (command: string, args: ReadonlyArray<string>): boolean
           after = true;
           i += 1;
         } else if (!after && arg.startsWith("-")) {
-          if (arg === "-S" || (!arg.startsWith("--") && length(arg) > 2 && arg.includes("S")))
+          if (arg === "-S" || (!arg.startsWith("--") && count(arg) > 2 && arg.includes("S")))
             return true;
           i += arg === "-T" ? 2 : 1;
         } else {
@@ -522,10 +522,10 @@ export const testIsSafe = (args: ReadonlyArray<string>): boolean =>
 
 /** A sed script made of addresses and the commands p d q Q = l n N g G h H x z D P, s///flags and y///. */
 export const sedScriptIsSafe = (script: string): boolean => {
-  const c = Array.from(script);
+  const c = chars(script);
   let i = 0;
   const isNumber = (ch: string | undefined) => ch !== undefined && /[0-9]/.test(ch);
-  const isSpace = (ch: string | undefined) => ch !== undefined && /\s/u.test(ch);
+  const isSpace = isWhitespace;
   const regex = (delimiter: string): boolean => {
     while (i < c.length) {
       if (c[i] === "\\") {
@@ -786,7 +786,7 @@ export const gitReadOnly = (input: ReadonlyArray<string>): string | undefined =>
             arg === "--list" ||
             arg === "-l" ||
             (!arg.startsWith("--") &&
-              length(arg) > 2 &&
+              count(arg) > 2 &&
               !arg.includes("=") &&
               arg.slice(1).includes("l"))
           )
@@ -874,13 +874,13 @@ export const dockerReadOnly = (args: ReadonlyArray<string>): string | undefined 
         (flag) =>
           arg === flag ||
           arg.startsWith(`${flag}=`) ||
-          (flag.length === 2 && length(arg) > 2 && arg.startsWith(flag)),
+          (flag.length === 2 && count(arg) > 2 && arg.startsWith(flag)),
       )
     )
       return undefined;
     if (arg.startsWith("-") && !arg.startsWith("--")) {
       const cluster: Array<string> = [];
-      for (const c of Array.from(arg).slice(1)) {
+      for (const c of chars(arg).slice(1)) {
         if (!/\p{L}/u.test(c)) break;
         cluster.push(c);
       }

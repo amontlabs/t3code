@@ -4,6 +4,8 @@
  * lastdrop-node's `loadPermissionRules` reads the settings files.
  */
 
+import { chars, count, isWhitespace, splitAtSpaces, trim, WHITESPACE } from "./swiftText.ts";
+
 /** `Bash(...)` specifiers; `*` stands for a bare `Bash` rule. */
 export interface PermissionRules {
   readonly allow: ReadonlyArray<string>;
@@ -22,8 +24,6 @@ export type RulesVerdict =
 
 export const EMPTY_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 
-const isWhitespace = (c: string | undefined): boolean => c !== undefined && /\s/u.test(c);
-const trim = (text: string): string => text.replace(/^\s+|\s+$/gu, "");
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** `Bash` → `*`; `Bash(npm test:*)` → `npm test:*`; other tools and parameter rules (`Bash(timeout:5)`) → undefined. */
@@ -75,9 +75,12 @@ export const checkRules = (rules: PermissionRules, input: string): RulesVerdict 
   const command = trim(input);
   if (command === "") return { type: "none" };
   // Deny and ask see every piece, including those inside substitutions, subshells and loops.
-  const pieces = splitCommand(command, true)?.map((part) => unwrapCommand(part, false).text) ?? [
-    command,
-  ];
+  // Swift keeps "\r\n" as one character that never splits; bash splits there, so deny and ask
+  // also see the pieces as if it were a newline (never narrower than Swift).
+  const loosePieces = (text: string) =>
+    splitCommand(text, true)?.map((part) => unwrapCommand(part, false).text) ?? [text];
+  const pieces = [...new Set([...loosePieces(command), ...loosePieces(command.replaceAll("\r\n", "\n"))])];
+
   for (const rule of rules.deny)
     if (pieces.some((piece) => matchesRule(rule, piece)))
       return { type: "deny", rule: `Bash(${rule})` };
@@ -85,7 +88,8 @@ export const checkRules = (rules: PermissionRules, input: string): RulesVerdict 
     if (pieces.some((piece) => matchesRule(rule, piece)))
       return { type: "ask", rule: `Bash(${rule})` };
   // Allow needs a command lastdrop fully understands, every part of it covered.
-  if (rules.allow.length === 0) return { type: "none" };
+  // A carriage return is never allowed by a pattern: bash and Swift read it differently.
+  if (rules.allow.length === 0 || command.includes("\r")) return { type: "none" };
   const parts = splitCommand(command, false);
   if (parts === undefined) return { type: "none" };
   const used: Array<string> = [];
@@ -163,16 +167,16 @@ export const splitCommand = (command: string, loose: boolean): Array<string> | u
   let double = false;
   let escaped = false;
   let dangling = false;
-  const chars = Array.from(command);
+  const list = chars(command);
   let i = 0;
   const cut = () => {
     const part = trim(current);
     current = "";
     if (part !== "") parts.push(part);
   };
-  while (i < chars.length) {
-    const c = chars[i]!;
-    const next = chars[i + 1];
+  while (i < list.length) {
+    const c = list[i]!;
+    const next = list[i + 1];
     if (escaped) {
       current += c;
       escaped = false;
@@ -261,14 +265,14 @@ export const splitCommand = (command: string, loose: boolean): Array<string> | u
     // Control-flow words in front of a command (`for … do rm x; done`) aren't the command.
     return parts
       .map((part) => {
-        const words = part.split(" ").filter((word) => word !== "");
+        const words = splitAtSpaces(part);
         while (words.length > 0 && LOOSE_KEYWORDS.has(words[0]!)) words.shift();
         return words.join(" ");
       })
       .filter((part) => part !== "");
   }
   // Control flow can't be judged part by part.
-  if (parts.some((part) => FLOW.has(part.split(" ")[0] ?? ""))) return undefined;
+  if (parts.some((part) => FLOW.has(splitAtSpaces(part)[0] ?? ""))) return undefined;
   return parts;
 };
 
@@ -287,7 +291,7 @@ export const shellWords = (part: string): Array<Word> => {
   let double = false;
   let escaped = false;
   let index = 0;
-  for (const c of part) {
+  for (const c of chars(part)) {
     if (!single && !double && !escaped && isWhitespace(c)) {
       if (start !== undefined) {
         words.push({ text: current, start });
@@ -365,7 +369,7 @@ export const redirects = (part: string): boolean => {
   let double = false;
   let escaped = false;
   let stripped = "";
-  for (const c of part) {
+  for (const c of chars(part)) {
     if (escaped) {
       escaped = false;
       stripped += "_";
@@ -389,7 +393,7 @@ export const redirects = (part: string): boolean => {
     stripped += single || double ? "_" : c;
   }
   // Harmless targets: /dev/null and file descriptors.
-  const rest = stripped.replace(/(\d*|&)>>?\s*\/dev\/null|\d*>&\d+|<&\d+/g, " ");
+  const rest = stripped.replace(new RegExp(`(\\d*|&)>>?[${WHITESPACE}]*/dev/null|\\d*>&\\d+|<&\\d+`, "gu"), " ");
   return rest.includes(">") || rest.includes("<");
 };
 

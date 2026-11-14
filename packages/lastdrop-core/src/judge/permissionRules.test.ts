@@ -149,3 +149,19 @@ describe("PermissionRules", () => {
     expect(checkRules(r, "command -v npm")).toEqual(NONE);
   });
 });
+
+describe("PermissionRules whitespace, as Swift reads it (never looser)", () => {
+  it("strips wrappers at Swift's whitespace, U+0085 included", () => {
+    const r = rules({ deny: ["Bash(rm:*)"] });
+    expect(checkRules(r, "builtin\u0085rm x")).toEqual({ type: "deny", rule: "Bash(rm:*)" });
+  });
+
+  it("denies across a CRLF, and never allows a carriage return", () => {
+    expect(checkRules(rules({ deny: ["Bash(rm *)"] }), "ls\r\nrm -rf x")).toEqual({ type: "deny", rule: "Bash(rm *)" });
+    expect(checkRules(rules({ allow: ["Bash(gh *)"] }), "gh pr list\r\ncomm x")).toEqual(NONE);
+  });
+
+  it("does not take U+FEFF for a space", () => {
+    expect(checkRules(rules({ allow: ["Bash(echo *)"] }), "echo﻿git tag")).toEqual(NONE);
+  });
+});
