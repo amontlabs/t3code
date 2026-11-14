@@ -44,6 +44,10 @@
     "apps/desktop/src/app/DesktopEnvironment.ts": { "budget": 3, "why": "app name" },
     "apps/desktop/src/app/DesktopUserData.ts": { "budget": 4, "why": "Electron profile folder" },
     "apps/desktop/package.json": { "budget": 2, "why": "product name" },
+    "apps/server/package.json": {
+      "budget": 1,
+      "why": "the server depends on lastdrop-node"
+    },
     "scripts/build-desktop-artifact.ts": {
       "budget": 7,
       "why": "bundle id, self-signed mac signing"

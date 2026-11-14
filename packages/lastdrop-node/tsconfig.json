@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // Plain Node I/O (files, `security`, `claude`, fetch) on promises; the server wraps it in Effect.
+        // Diagnostic severities are deep-merged with tsconfig.base.json.
+        "diagnosticSeverity": {
+          "nodeBuiltinImport": "off",
+          "globalDate": "off",
+          "globalRandom": "off",
+          "globalTimers": "off",
+          "globalFetch": "off",
+          "extendsNativeError": "off"
+        }
+      }
+    ]
+  },
+  "include": ["src"]
+}

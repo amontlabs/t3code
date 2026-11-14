@@ -13,17 +13,17 @@ This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3c
 
 ## Fork folders
 
-| Folder                                      | Owns                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server/src/extensions/`               | `index.ts`: the server lists T3 spreads (drivers, usage readers, provider clients for the server's copies, Claude query-runner wrapper, layer, routes, newer-schema check). `dataDir.ts`: lastdrop's data folder. `databaseVersion.ts`: the newer-schema check. Later `extensions/lastdrop/**`. |
-| `apps/web/src/extensions/`                  | `index.tsx`: per-driver sections in a provider instance's settings card.                                                                                                                                                                                                                        |
-| `apps/desktop/src/extensions/`              | App identity (`identity.ts`), startup (`startup.ts`), and their tests.                                                                                                                                                                                                                          |
-| `packages/client-runtime/src/extensions.ts` | Provider client definitions (label, icon, settings schema) shared by web and mobile.                                                                                                                                                                                                            |
-| `packages/lastdrop-*`                       | Future: `lastdrop-core` (pure logic), `lastdrop-provider` (T3 provider package).                                                                                                                                                                                                                |
-| `scripts/lastdrop/`                         | Guard (`check-fork-paths.ts`, `seams.json`), build settings (`desktop.ts`), mac signing hook (`sign-macos.ts`).                                                                                                                                                                                 |
-| `docs/lastdrop/`                            | Fork docs.                                                                                                                                                                                                                                                                                      |
-| `.github/workflows/lastdrop-*`              | Sync, release and guard workflows.                                                                                                                                                                                                                                                              |
-| `FORK.md`, README's top section             | This file; the README's fork section is a seam.                                                                                                                                                                                                                                                 |
+| Folder                                      | Owns                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server/src/extensions/`               | `index.ts`: the server lists T3 spreads (drivers, usage readers, provider clients for the server's copies, Claude query-runner wrapper, layer, routes, newer-schema check). `dataDir.ts`: lastdrop's data folder. `databaseVersion.ts`: the newer-schema check. `lastdrop/accounts.ts`: the Claude accounts service (sign-ins kept renewed, usage read) and its route `GET /api/lastdrop/accounts`. |
+| `apps/web/src/extensions/`                  | `index.tsx`: per-driver sections in a provider instance's settings card. `lastdrop/`: the read-only Accounts section on the Claude provider's card.                                                                                                                                                                                                                                                 |
+| `apps/desktop/src/extensions/`              | App identity (`identity.ts`), startup (`startup.ts`), and their tests.                                                                                                                                                                                                                                                                                                                              |
+| `packages/client-runtime/src/extensions.ts` | Provider client definitions (label, icon, settings schema) shared by web and mobile.                                                                                                                                                                                                                                                                                                                |
+| `packages/lastdrop-*`                       | `lastdrop-core`: pure logic (picking, usage rules, account list, profile keys, keeper rules; see its `PORTING.md`). `lastdrop-node`: Node I/O (account files, keychain through `/usr/bin/security`, profiles, Anthropic's usage endpoint, renewing sign-ins). Later `lastdrop-provider`.                                                                                                            |
+| `scripts/lastdrop/`                         | Guard (`check-fork-paths.ts`, `seams.json`), build settings (`desktop.ts`), mac signing hook (`sign-macos.ts`).                                                                                                                                                                                                                                                                                     |
+| `docs/lastdrop/`                            | Fork docs.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `.github/workflows/lastdrop-*`              | Sync, release and guard workflows.                                                                                                                                                                                                                                                                                                                                                                  |
+| `FORK.md`, README's top section             | This file; the README's fork section is a seam.                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Seams
 
@@ -74,9 +74,16 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 ### `apps/web/src/components/settings/ProviderInstanceCard.tsx` (budget 7)
 
 - **Lines**: import `ExtensionInstanceSection` from `~/extensions` (2); `<ExtensionInstanceSection environmentId instanceId provider={liveProvider} readOnly />` right after the `acpRegistry` `AcpSessionManagementSection` block (1389-1394).
-- **Why**: the fork's per-driver settings sections (accounts, agents), rendered only for the fork's driver kinds.
+- **Why**: per-driver settings sections from the fork's map: the Accounts section on T3's Claude provider (`claudeAgent`), later the fork's own drivers. Other drivers render nothing.
 - **Must survive**: the element inside the card's fragment, with the four props.
 - **Conflict**: take upstream's file, re-add the import and the element after the last per-driver section.
+
+### `apps/server/package.json` (budget 1)
+
+- **Lines**: `"@t3tools/lastdrop-node": "workspace:*"` in `dependencies`, before `@t3tools/provider-acp`.
+- **Why**: the server's extension folder imports the fork's Node package (which brings `lastdrop-core`); a workspace package resolves only once the server depends on it. The web needs none (it keeps its own copy of the accounts view type).
+- **Must survive**: the entry.
+- **Conflict**: take upstream's file, re-add the line, then `pnpm install --lockfile-only`.
 
 ### `apps/desktop/src/main.ts` (budget 1)
 
@@ -146,7 +153,13 @@ Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, pri
 - **Updater cache**: shared. Each app checks a cached download against its own update's hash, so neither installs the other's update; at worst one deletes the other's pending download and it downloads again.
 - **Other shared state**: scheduled tasks, worktrees, the environment id and the server's runtime files are T3's own and belong to whichever app is running. Electron-profile state (window layout, Chromium storage) is per app.
 
-**Data the fork will store** (none yet): its settings in provider instance `config` and its own files under `~/.t3/lastdrop/`.
+**Data the fork stores**: its own files under `~/.t3/lastdrop/`, later also settings in provider instance `config`.
+
+- `usage.json`: each Claude account's latest reading, rate-limit block and sign-in state (the standalone lastdrop's `usage.json` format, dates in seconds).
+- `lastdrop.log`: one line per renewal, refused request or sign-in that needs the user.
+- `helper/`: an empty folder `claude` starts in when renewing a sign-in.
+
+**Data the fork reads and shares with the standalone lastdrop** (never rewritten by the fork): the account list `~/Library/Application Support/lastdrop/accounts.json` (or the older `claude-accounts.json`), each account's sign-in folder `~/.claude-accounts/<key>` and its Claude Code keychain item. The fork does write each account's profile, `~/.claude-accounts/<key>/profile/` (links into `~/.claude` and a `.claude.json` rebuilt from Main's), exactly as the standalone app does before a run; renewing a sign-in starts `claude -p` in the account's folder, which renews its keychain item. The service runs only on macOS, and not under vitest (T3's own server tests start the layer).
 
 ## Releases
 

@@ -6,6 +6,8 @@ import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
 import type { AnyProviderDriver } from "@t3tools/provider-core/server/driver";
 import * as Layer from "effect/Layer";
 
+import * as LastdropAccounts from "./lastdrop/accounts.ts";
+
 /** Services the extension drivers need to create instances. */
 export type ExtensionDriversEnv = never;
 /** Services the extension drivers' usage readers need. */
@@ -34,11 +36,11 @@ export const wrapClaudeQueryRunner = <A, E, R>(
   queryRunner: Layer.Layer<A, E, R>,
 ): Layer.Layer<A, E, R> => queryRunner;
 
-/** Long-lived services, merged into the server's core dependencies. */
-export const layer = Layer.empty;
+/** Long-lived services, merged into the server's core dependencies: Claude accounts and usage. */
+export const layer = LastdropAccounts.layer;
 
-/** HTTP routes, merged beside T3's own. */
-export const routes = Layer.empty;
+/** HTTP routes, merged beside T3's own: the accounts view for the settings section. */
+export const routes = LastdropAccounts.routes;
 
 /** Refuses a database migrated by a newer T3 build; `server.ts` runs it before opening the database. */
 export { refuseNewerDatabase } from "./databaseVersion.ts";
