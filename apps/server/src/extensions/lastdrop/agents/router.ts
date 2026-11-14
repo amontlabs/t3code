@@ -286,7 +286,10 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
           : known !== undefined
             ? `${agent.name} continues on ${stepLabel(step)}: ${skipped.join("; ")}. The conversation is handed over.`
             : `${agent.name} runs on ${stepLabel(step)}: ${skipped.join("; ")}.`;
+        const closers: Array<Effect.Effect<void>> = [];
+        yield* Effect.addFinalizer(() => Effect.all(closers, { discard: true }));
         return makeSession({
+          closers,
           agent,
           index,
           step,
@@ -318,6 +321,8 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     /** The native thread this session resumes, when the entry was inferred, not stored. */
     readonly adoptedNativeId: string | undefined;
     readonly openNotice: string | undefined;
+    /** Run when the session's scope closes. */
+    readonly closers: Array<Effect.Effect<void>>;
   }): ProviderAdapterV2SessionRuntime => {
     const { agent, step, inner } = session;
     const innerId = step.instanceId;
@@ -339,6 +344,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       openPolicy: session.outerPolicy,
       respond: (request) => inner.respondToRuntimeRequest(request),
     });
+    session.closers.push(answers.close);
 
     const toInnerSelection = (outer: ModelSelection): ModelSelection => {
       if (outer.instanceId !== outerId) return outer;

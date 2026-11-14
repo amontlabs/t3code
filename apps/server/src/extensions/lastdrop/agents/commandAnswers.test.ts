@@ -81,6 +81,17 @@ const agents = allAgents(
   }),
 );
 
+/**
+ * What the agent asks: `prompt` is the tool's own input (a command, a file); the approval row only
+ * carries `summary`, as T3's ACP path does for Antigravity's run_command. `noTool`: no tool item first.
+ */
+interface Request {
+  readonly kind: ProviderRequestKind;
+  readonly prompt: string;
+  readonly summary?: string;
+  readonly noTool?: boolean;
+}
+
 interface Answer {
   readonly requestId: string;
   readonly decision?: string;
@@ -91,7 +102,7 @@ interface Answer {
 const makeAskingAdapter = (input: {
   readonly instanceId: ProviderInstanceId;
   readonly driver: string;
-  readonly request: { readonly kind: ProviderRequestKind; readonly prompt: string };
+  readonly request: Request;
   readonly answers: Array<Answer>;
   readonly modes: Array<string>;
   readonly supportsFeedback?: boolean;
@@ -198,6 +209,38 @@ const makeAskingAdapter = (input: {
                 output: "{ secret output }",
               },
             },
+            ...(input.request.noTool === true
+              ? []
+              : [
+                  {
+                    type: "turn_item.updated" as const,
+                    driver,
+                    turnItem:
+                      input.request.kind === "file-change"
+                        ? {
+                            ...base,
+                            id: TurnItemId.make("item:tool"),
+                            nativeItemRef: { driver, nativeId: "call-1", strength: "strong" as const },
+                            title: "replace_file_content",
+                            ordinal: 2,
+                            status: "running" as const,
+                            completedAt: null,
+                            type: "file_change" as const,
+                            fileName: input.request.prompt,
+                          }
+                        : {
+                            ...base,
+                            id: TurnItemId.make("item:tool"),
+                            nativeItemRef: { driver, nativeId: "call-1", strength: "strong" as const },
+                            title: "run_command",
+                            ordinal: 2,
+                            status: "running" as const,
+                            completedAt: null,
+                            type: "command_execution" as const,
+                            input: input.request.prompt,
+                          },
+                  },
+                ]),
             {
               type: "runtime_request.updated",
               driver,
@@ -224,13 +267,14 @@ const makeAskingAdapter = (input: {
               turnItem: {
                 ...base,
                 id: TurnItemId.make(`item:approval:${turnInput.runOrdinal}`),
-                ordinal: 2,
+                nativeItemRef: { driver, nativeId: "call-1", strength: "weak" },
+                ordinal: 3,
                 status: "waiting",
                 completedAt: null,
                 type: "approval_request",
                 requestId,
                 requestKind: input.request.kind,
-                prompt: input.request.prompt,
+                prompt: input.request.summary ?? "run_command",
               },
             },
           ]);
@@ -276,7 +320,7 @@ const ALLOW_RULES = { allow: ["npm test *"], deny: ["curl *"], ask: [] };
 
 const run = Effect.fn("run")(function* (input: {
   readonly agent: "live" | "review" | "cheap";
-  readonly request: { readonly kind: ProviderRequestKind; readonly prompt: string };
+  readonly request: Request;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode?: "default" | "plan";
   readonly judge?: CommandAnswerServices["judge"];
@@ -547,7 +591,7 @@ describe("lastdrop answers approval requests", () => {
         expectAnswer: true,
       });
       assert.deepEqual(edit.answers, [{ requestId: "request:1", decision: "decline" }]);
-      assert.deepEqual(edit.notices, ["Declined: edit: src/a.ts (read-only agent)"]);
+      assert.deepEqual(edit.notices, ['Declined: edit: {"file":"src/a.ts"} (read-only agent)']);
       assert.deepEqual(edit.prompts, []);
     }),
   );
@@ -641,8 +685,8 @@ describe("lastdrop answers approval requests", () => {
             logged.push(line);
             defaultCommandAnswerServices.log(line);
           },
-          judge: async (prompt) => {
-            const verdict = await defaultCommandAnswerServices.judge(prompt);
+          judge: async (prompt, signal) => {
+            const verdict = await defaultCommandAnswerServices.judge(prompt, signal);
             verdicts.push(JSON.stringify(verdict));
             return verdict;
           },

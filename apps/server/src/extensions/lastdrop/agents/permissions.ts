@@ -30,19 +30,23 @@ export const entryRuntimeMode = (
   step: AgentStep,
   mode: RuntimeMode,
   supported: ReadonlyArray<RuntimeMode> | undefined,
+  interactionMode: ProviderAdapterV2RuntimePolicy["interactionMode"] = "default",
 ): RuntimeMode => {
   if (mode === "auto") {
     const known = supported !== undefined && supported.length > 0;
-    // Antigravity has no auto mode, even while its modes are unknown: accept-edits, with lastdrop
-    // answering what it asks (the standalone app's mode for it).
-    if (step.provider === "antigravity" && (!known || supported.includes("auto-accept-edits")))
-      return "auto-accept-edits";
-    // OpenRouter: Claude Code's own auto check is untested there, so every command it asks about
-    // goes to lastdrop's rules and judge instead. Z.ai keeps Claude Code's check (verified in step 6).
-    if (step.provider === "openrouter" && (!known || supported.includes("auto-accept-edits")))
-      return "auto-accept-edits";
-    if (known && !supported.includes("auto") && supported.includes("auto-accept-edits"))
-      return "auto-accept-edits";
+    // Antigravity has no auto mode, even while its modes are unknown. OpenRouter: Claude Code's own
+    // auto check is untested there. Both are asked about every command, which lastdrop answers;
+    // Z.ai keeps Claude Code's check (verified in step 6).
+    const answered =
+      step.provider === "antigravity" ||
+      step.provider === "openrouter" ||
+      (known && !supported.includes("auto"));
+    if (answered) {
+      // In plan mode edits must reach lastdrop too, to be refused: accept-edits would let the
+      // provider's client allow them itself.
+      const target = interactionMode === "plan" ? "approval-required" : "auto-accept-edits";
+      if (!known || supported.includes(target)) return target;
+    }
   }
   return supportedOrAsk(mode, supported);
 };
@@ -52,7 +56,7 @@ export const entryRuntimePolicy = (
   policy: ProviderAdapterV2RuntimePolicy,
   supported: ReadonlyArray<RuntimeMode> | undefined,
 ): ProviderAdapterV2RuntimePolicy => {
-  const runtimeMode = entryRuntimeMode(step, policy.runtimeMode, supported);
+  const runtimeMode = entryRuntimeMode(step, policy.runtimeMode, supported, policy.interactionMode);
   return runtimeMode === policy.runtimeMode ? policy : { ...policy, runtimeMode };
 };
 

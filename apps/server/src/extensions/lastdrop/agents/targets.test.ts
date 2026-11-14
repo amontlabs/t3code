@@ -218,6 +218,13 @@ describe("lastdrop router targets", () => {
       assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "auto-accept-edits");
       // A target with neither mode still asks the person.
       assert.equal(entryRuntimeMode(step, "auto", ["approval-required"]), "approval-required");
+      // Plan mode: edits must reach lastdrop to be refused, so not accept-edits (review item 3).
+      assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES, "plan"), "approval-required");
+      assert.equal(entryRuntimeMode(step, "auto", undefined, "plan"), "approval-required");
+      const openrouterStep = agents.find((agent) => agent.name === "cheap")!.chain[1]!;
+      assert.equal(entryRuntimeMode(openrouterStep, "auto", [...ALL_RUNTIME_MODES], "plan"), "approval-required");
+      const zaiStep = agents.find((agent) => agent.name === "cheap")!.chain[0]!;
+      assert.equal(entryRuntimeMode(zaiStep, "auto", [...ALL_RUNTIME_MODES], "plan"), "auto");
     }).pipe(Effect.scoped),
   );
 

@@ -34,6 +34,7 @@ export {
   EMPTY_CONTEXT,
   readOnlyCommands,
   recordCall,
+  sortedJson,
   verdictSummary,
   type AgentJudge,
   type Decision,
