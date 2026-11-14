@@ -59,6 +59,8 @@ export const makeFakeAdapter = (input: {
   readonly failedRunOrdinals?: ReadonlySet<number>;
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failOpen?: boolean;
+  /** A failed run leaves a command running, as a limit mid-command does. */
+  readonly commandAtLimit?: boolean;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => ({
   instanceId: input.instanceId,
   driver: input.driver,
@@ -198,6 +200,34 @@ export const makeFakeAdapter = (input: {
               streaming: false,
             },
           },
+          ...(failed && input.commandAtLimit === true
+            ? [
+                {
+                  type: "turn_item.updated" as const,
+                  driver: input.driver,
+                  turnItem: {
+                    id: TurnItemId.make(
+                      `turn-item:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}:command`,
+                    ),
+                    threadId: turnInput.threadId,
+                    runId: turnInput.runId,
+                    nodeId: turnInput.rootNodeId,
+                    providerThreadId: turnInput.providerThread.id,
+                    providerTurnId,
+                    nativeItemRef: null,
+                    parentItemId: null,
+                    ordinal: turnInput.runOrdinal * 100 + 2,
+                    status: "running" as const,
+                    title: null,
+                    startedAt: eventTime,
+                    completedAt: null,
+                    updatedAt: eventTime,
+                    type: "command_execution" as const,
+                    input: "pnpm test",
+                  },
+                },
+              ]
+            : []),
           {
             type: "turn.terminal",
             driver: input.driver,

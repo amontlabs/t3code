@@ -1,8 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off - Temporary store files.
 /**
  * The router's targets with fake native adapters: Antigravity (no recorded fixtures in T3), Z.ai
  * and OpenRouter as Claude instances, an entry whose instance is missing or fails to open, the
  * permission mapping, and the driver's published snapshot.
  */
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { assert, describe, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
@@ -19,8 +24,10 @@ import * as Schema from "effect/Schema";
 import { ClaudeProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { allAgents, parseCatalog, type AgentDefinition } from "./catalog.ts";
 import { makeLastdropAgentsDriver } from "./driver.ts";
-import { entryRuntimeMode } from "./permissions.ts";
-import { makeFallbackSignals, makeRoom } from "./room.ts";
+import { ALL_RUNTIME_MODES, entryRuntimeMode } from "./permissions.ts";
+import { makeFallbackSignals, makeRoom, type Room } from "./room.ts";
+import type { NativeEntry } from "./shared.ts";
+import { makeStoredMap, type StoredMap } from "./store.ts";
 import { makeRouterAdapter } from "./router.ts";
 import { makeFakeAdapter, makeFakeCalls } from "./testkit.ts";
 
@@ -60,6 +67,10 @@ const openOn = Effect.fn("openOn")(function* (input: {
   readonly failOpen?: ReadonlyArray<ProviderInstanceId>;
   readonly runtimeMode?: "auto" | "full-access" | "approval-required";
   readonly agents?: ReadonlyArray<AgentDefinition>;
+  readonly room?: Room;
+  readonly nativeEntries?: StoredMap<NativeEntry>;
+  readonly initialNativeThreadId?: string;
+  readonly resumeDriver?: string;
 }) {
   const calls = yield* makeFakeCalls;
   const fake = (instanceId: ProviderInstanceId, driver: string) =>
@@ -81,8 +92,12 @@ const openOn = Effect.fn("openOn")(function* (input: {
     agents: () => input.agents ?? agents,
     resolveTarget: (id) =>
       Effect.succeed(input.available.includes(id) ? adapters.get(id) : undefined),
-    room: makeRoom(),
+    room: input.room ?? makeRoom(),
     fallbacks: makeFallbackSignals(),
+    ...(input.nativeEntries === undefined ? {} : { nativeEntries: input.nativeEntries }),
+    // Antigravity has no auto mode (`AntigravityProvider.ts`); Claude instances take every mode.
+    innerRuntimeModes: (id) =>
+      Effect.succeed(id === ANTIGRAVITY ? ANTIGRAVITY_MODES : [...ALL_RUNTIME_MODES]),
   });
   const runtime = yield* router.openSession({
     threadId: ThreadId.make("thread:targets"),
@@ -93,10 +108,18 @@ const openOn = Effect.fn("openOn")(function* (input: {
       interactionMode: "default",
       cwd: null,
     },
+    ...(input.initialNativeThreadId === undefined
+      ? {}
+      : { initialNativeThreadId: input.initialNativeThreadId }),
+    ...(input.resumeDriver === undefined
+      ? {}
+      : { resumeFromSession: { driver: input.resumeDriver } }),
   } as never);
   const opened = yield* Ref.get(calls.opened);
-  return { runtime, opened, last: opened.at(-1)! };
+  return { runtime, opened, last: opened.at(-1)!, router };
 });
+
+const ANTIGRAVITY_MODES = ["approval-required", "auto-accept-edits", "full-access"] as const;
 
 describe("lastdrop router targets", () => {
   it.effect("runs an Antigravity entry on the Antigravity instance, with its model", () =>
@@ -155,25 +178,138 @@ describe("lastdrop router targets", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("runs an auto thread's Antigravity entry in full access, others as they are", () =>
+  it.effect("asks for approval where the entry's instance has no auto mode", () =>
     Effect.gen(function* () {
+      // Antigravity lacks `auto`: T3's own rule makes it approval-required, so every prompt
+      // reaches the person (no silent approval) until the command judge lands.
       const antigravity = yield* openOn({
         agent: "live",
         available: [ANTIGRAVITY],
         runtimeMode: "auto",
       });
-      assert.equal(antigravity.last.runtimePolicy.runtimeMode, "full-access");
+      assert.equal(antigravity.last.runtimePolicy.runtimeMode, "approval-required");
       const claude = yield* openOn({ agent: "live", available: [CLAUDE], runtimeMode: "auto" });
       assert.equal(claude.last.runtimePolicy.runtimeMode, "auto");
-      const asked = yield* openOn({
+      const full = yield* openOn({
         agent: "live",
         available: [ANTIGRAVITY],
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
       });
-      assert.equal(asked.last.runtimePolicy.runtimeMode, "approval-required");
+      assert.equal(full.last.runtimePolicy.runtimeMode, "full-access");
+      // Z.ai and OpenRouter: Claude Code's auto check on their endpoints is untested.
+      const zai = yield* openOn({ agent: "cheap", available: [ZAI], runtimeMode: "auto" });
+      assert.equal(zai.last.runtimePolicy.runtimeMode, "approval-required");
       const step = agents.find((agent) => agent.name === "live")!.chain[0]!;
-      // A managed ceiling under full access keeps the thread's mode.
-      assert.equal(entryRuntimeMode(step, "auto", "auto-accept-edits"), "auto");
+      assert.equal(entryRuntimeMode(step, "auto", undefined), "auto");
+      assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "approval-required");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "keeps a moved thread on its entry after a restart, and resumes its native thread",
+    () =>
+      Effect.gen(function* () {
+        const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "lastdrop-entries-"));
+        try {
+          const file = NodePath.join(dir, "agent-threads.json");
+          const roomFile = NodePath.join(dir, "agent-room.json");
+          const before = makeStoredMap<NativeEntry>();
+          before.attach(file);
+          const marks = makeStoredMap<number>();
+          marks.attach(roomFile);
+          const room = makeRoom(Date.now, marks);
+          const live = agents.find((agent) => agent.name === "live")!;
+          yield* room.markOut(live.chain[0]!, null);
+          const first = yield* openOn({
+            agent: "live",
+            available: [ANTIGRAVITY, CLAUDE],
+            room,
+            nativeEntries: before,
+          });
+          const thread = yield* first.runtime.ensureThread({
+            threadId: ThreadId.make("thread:targets"),
+            modelSelection: { instanceId: LASTDROP, model: "live" },
+            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          } as never);
+          const nativeId = thread.nativeThreadRef!.nativeId!;
+          // A new server: maps loaded from the files only.
+          const after = makeStoredMap<NativeEntry>();
+          after.attach(file);
+          const reloaded = makeStoredMap<number>();
+          reloaded.attach(roomFile);
+          const reopened = yield* openOn({
+            agent: "live",
+            available: [ANTIGRAVITY, CLAUDE],
+            room: makeRoom(Date.now, reloaded),
+            nativeEntries: after,
+            initialNativeThreadId: nativeId,
+          });
+          assert.equal(reopened.last.modelSelection.instanceId, CLAUDE);
+          assert.equal(reopened.last.initialNativeThreadId, nativeId);
+          const resumed = yield* reopened.runtime.resumeThread({ providerThread: thread } as never);
+          assert.equal(resumed.nativeThreadRef!.nativeId, nativeId);
+          // The room marks came back too: Antigravity is still out after the restart.
+          assert.isFalse(yield* makeRoom(Date.now, reloaded).hasRoom(live.chain[0]!));
+          // Antigravity has room again: the thread still stays where its conversation is.
+          const stays = yield* openOn({
+            agent: "live",
+            available: [ANTIGRAVITY, CLAUDE],
+            nativeEntries: after,
+            initialNativeThreadId: nativeId,
+          });
+          assert.equal(stays.last.modelSelection.instanceId, CLAUDE);
+        } finally {
+          NodeFS.rmSync(dir, { recursive: true, force: true });
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("never resumes an unknown native thread when two entries share a driver", () =>
+    Effect.gen(function* () {
+      // Z.ai and OpenRouter are both Claude-driver instances; the map was lost.
+      const opened = yield* openOn({
+        agent: "cheap",
+        available: [ZAI, OPENROUTER],
+        nativeEntries: makeStoredMap<NativeEntry>(),
+        initialNativeThreadId: "openrouter:thread:targets",
+        resumeDriver: "claudeAgent",
+      });
+      assert.equal(opened.last.modelSelection.instanceId, ZAI);
+      assert.isUndefined(opened.last.initialNativeThreadId);
+      const failed = yield* Effect.flip(
+        opened.runtime.resumeThread({
+          providerThread: {
+            id: "provider-thread:x",
+            driver: "claudeAgent",
+            nativeThreadRef: {
+              driver: "claudeAgent",
+              nativeId: "openrouter:thread:targets",
+              strength: "strong",
+            },
+          },
+        } as never),
+      );
+      assert.equal(failed._tag, "ProviderAdapterResumeThreadError");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("gives capabilities when the first agent is out, and never fails", () =>
+    Effect.gen(function* () {
+      const room = makeRoom();
+      for (const agent of agents) for (const step of agent.chain) yield* room.markOut(step, null);
+      const { router } = yield* openOn({ agent: "live", available: [ANTIGRAVITY, CLAUDE] });
+      // Out of room everywhere: still the targets' common capabilities.
+      const outRouter = makeRouterAdapter({
+        instanceId: LASTDROP,
+        agents: () => agents,
+        resolveTarget: () => Effect.undefined,
+        room,
+        fallbacks: makeFallbackSignals(),
+      });
+      const none = yield* outRouter.getCapabilities();
+      assert.isDefined(none.sessions);
+      const both = yield* router.getCapabilities();
+      assert.isDefined(both.turns);
     }).pipe(Effect.scoped),
   );
 });
@@ -195,7 +331,8 @@ describe("lastdrop agents driver", () => {
       });
       const snapshot = decodeProvider(yield* instance.snapshot.getSnapshot);
       assert.equal(snapshot.driver, "lastdropAgents");
-      assert.equal(snapshot.displayName, "lastdrop");
+      assert.equal(snapshot.displayName, "lastdrop agents");
+      assert.deepEqual(snapshot.supportedRuntimeModes, [...ALL_RUNTIME_MODES]);
       assert.equal(snapshot.status, "ready");
       assert.deepEqual(
         snapshot.models.filter((model) => model.isLegacy !== true).map((model) => model.slug),

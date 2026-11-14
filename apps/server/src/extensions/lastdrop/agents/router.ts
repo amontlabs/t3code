@@ -9,8 +9,10 @@ import {
   type ModelSelection,
   type NodeId,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderCapabilities,
   type ProviderInstanceId,
   type RunId,
+  type RuntimeMode,
   type ServerProviderModel,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -26,9 +28,13 @@ import {
   type ProviderAdapterV2SessionRuntime,
 } from "@t3tools/provider-core/server/ProviderAdapter";
 
+import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
+
 import { stepLabel, stepSelection, type AgentDefinition, type AgentStep } from "./catalog.ts";
 import { entryRuntimePolicy } from "./permissions.ts";
 import type { FallbackSignals, Room } from "./room.ts";
+import type { NativeEntry } from "./shared.ts";
+import { makeStoredMap, type StoredMap } from "./store.ts";
 
 type Adapter = ProviderAdapterV2["Service"];
 
@@ -45,8 +51,12 @@ export interface RouterOptions {
   readonly resolveTarget: (instanceId: ProviderInstanceId) => Effect.Effect<Adapter | undefined>;
   readonly room: Room;
   readonly fallbacks: FallbackSignals;
-  /** Which chain entry made each native thread, by native id; shared by the driver's sessions. */
-  readonly nativeSteps?: Map<string, string>;
+  /** Which entry made each native thread, by native id; shared by the driver's sessions. */
+  readonly nativeEntries?: StoredMap<NativeEntry>;
+  /** The runtime modes the entry's instance supports (its snapshot's). */
+  readonly innerRuntimeModes?: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ReadonlyArray<RuntimeMode> | undefined>;
   /** The models the entry's instance publishes, for its effort option's id and levels. */
   readonly innerModels?: (
     instanceId: ProviderInstanceId,
@@ -54,13 +64,44 @@ export interface RouterOptions {
 }
 
 /** Maps the runtime policy at the top of an adapter input to what the entry's instance needs. */
-const withEntryPolicy = <A>(step: AgentStep, value: A): A =>
+const withEntryPolicy = <A>(
+  step: AgentStep,
+  supported: ReadonlyArray<RuntimeMode> | undefined,
+  value: A,
+): A =>
   isPlainObject(value) && isPlainObject(value.runtimePolicy)
     ? ({
         ...value,
-        runtimePolicy: entryRuntimePolicy(step, value.runtimePolicy as never),
+        runtimePolicy: entryRuntimePolicy(step, value.runtimePolicy as never, supported),
       } as A)
     : value;
+
+/**
+ * Capabilities every target offers: booleans all must be true, numbers the least, arrays the
+ * common values; the first target's other values. Instance-level calls carry no thread.
+ */
+const intersect = (values: ReadonlyArray<unknown>): unknown => {
+  const [first, ...rest] = values;
+  if (rest.length === 0) return first;
+  if (typeof first === "boolean") return values.every((value) => value === true);
+  if (typeof first === "number")
+    return Math.min(...values.filter((value): value is number => typeof value === "number"));
+  if (Array.isArray(first))
+    return first.filter((item) =>
+      rest.every((value) => Array.isArray(value) && value.includes(item)),
+    );
+  if (isPlainObject(first)) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(first))
+      out[key] = intersect(values.map((value) => (isPlainObject(value) ? value[key] : undefined)));
+    return out;
+  }
+  return first;
+};
+
+/** "2026-11-18 15:37 UTC". */
+const clock = (epochMs: number): string =>
+  `${DateTime.formatIso(DateTime.makeUnsafe(epochMs)).slice(0, 16).replace("T", " ")} UTC`;
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" &&
@@ -105,32 +146,74 @@ const restamp = (
 /** A chain entry's identity: instance, model and effort (the same model at two efforts differs). */
 const stepId = (step: AgentStep): string => `${step.instanceId}/${step.model}/${step.effort ?? ""}`;
 
+interface Picked {
+  readonly index: number;
+  readonly step: AgentStep;
+  readonly target: Adapter;
+}
+
 export const makeRouterAdapter = (options: RouterOptions): Adapter => {
   const outerId = options.instanceId;
-  const nativeSteps = options.nativeSteps ?? new Map<string, string>();
+  const nativeEntries = options.nativeEntries ?? makeStoredMap<NativeEntry>();
 
   const findAgent = (name: string) =>
     options.agents().find((candidate) => candidate.enabled && candidate.name === name);
 
-  /** The entry and its adapter, when its instance exists and it has room. */
-  const usable = Effect.fn("LastdropRouter.usable")(function* (step: AgentStep) {
+  /** The entry's adapter when its instance exists and it has room; else why not. */
+  const check = Effect.fn("LastdropRouter.check")(function* (step: AgentStep) {
     const target = yield* options.resolveTarget(step.instanceId);
-    if (target === undefined) return undefined;
-    if (!(yield* options.room.hasRoom(step))) return undefined;
-    return target;
+    if (target === undefined) return { reason: `${stepLabel(step)} is not set up` } as const;
+    if (!(yield* options.room.hasRoom(step))) {
+      const until = options.room.outUntil(step);
+      return {
+        reason: `${stepLabel(step)} reached a usage limit${until === undefined ? "" : ` (until ${clock(until)})`}`,
+      } as const;
+    }
+    return { target } as const;
   });
 
-  /** The first usable entry at or after `from`. */
-  const pickFrom = Effect.fn("LastdropRouter.pickFrom")(function* (
+  /** The first usable entry, in `order`. */
+  const firstUsable = Effect.fn("LastdropRouter.firstUsable")(function* (
     agent: AgentDefinition,
-    from: number,
+    order: ReadonlyArray<number>,
   ) {
-    for (let index = from; index < agent.chain.length; index++) {
+    for (const index of order) {
       const step = agent.chain[index]!;
-      const target = yield* usable(step);
-      if (target !== undefined) return { index, step, target };
+      const checked = yield* check(step);
+      if ("target" in checked) return { index, step, target: checked.target } satisfies Picked;
     }
     return undefined;
+  });
+
+  const chainOrder = (agent: AgentDefinition, first?: number) => [
+    ...(first === undefined ? [] : [first]),
+    ...agent.chain.map((_, index) => index).filter((index) => index !== first),
+  ];
+
+  /**
+   * The entry that made the session's native thread: from the stored map, else from the previous
+   * session's driver when exactly one entry runs on it. Unknown means it is never resumed.
+   */
+  const previousEntry = Effect.fn("LastdropRouter.previousEntry")(function* (
+    agent: AgentDefinition,
+    input: Parameters<Adapter["openSession"]>[0],
+  ) {
+    const nativeId = input.initialNativeThreadId;
+    if (nativeId === undefined) return undefined;
+    const stored = nativeEntries.get(nativeId);
+    if (stored !== undefined) {
+      const index = agent.chain.findIndex((step) => stepId(step) === stored.entry);
+      return index >= 0
+        ? index
+        : agent.chain.findIndex((step) => step.instanceId === stored.instanceId);
+    }
+    const driver = input.resumeFromSession?.driver;
+    if (driver === undefined) return undefined;
+    const drivers = yield* Effect.forEach(agent.chain, (step) =>
+      options.resolveTarget(step.instanceId).pipe(Effect.map((target) => target?.driver)),
+    );
+    const matches = drivers.flatMap((each, index) => (each === driver ? [index] : []));
+    return matches.length === 1 ? matches[0] : undefined;
   });
 
   const openSession: Adapter["openSession"] = Effect.fn("LastdropRouter.openSession")(
@@ -144,44 +227,39 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       const agent = findAgent(input.modelSelection.model);
       if (agent === undefined)
         return yield* fail(`lastdrop has no agent named ${input.modelSelection.model}.`);
-      // A thread already on an entry stays there while it has room: no handoff for nothing.
-      const previousId =
-        input.initialNativeThreadId === undefined
-          ? undefined
-          : nativeSteps.get(input.initialNativeThreadId);
-      const previousIndex = agent.chain.findIndex((step) => stepId(step) === previousId);
-      const kept =
-        previousIndex < 0
-          ? undefined
-          : yield* usable(agent.chain[previousIndex]!).pipe(
-              Effect.map((target) =>
-                target === undefined
-                  ? undefined
-                  : { index: previousIndex, step: agent.chain[previousIndex]!, target },
-              ),
-            );
-      let picked = kept ?? (yield* pickFrom(agent, 0));
-      // An entry that fails to open is skipped for the next one (sign-in, missing CLI).
-      let inner: ProviderAdapterV2SessionRuntime | undefined;
-      let models: ReadonlyArray<ServerProviderModel> | undefined;
-      let lastCause: unknown = undefined;
-      while (picked !== undefined) {
-        const { step, target } = picked;
+      const previous = yield* previousEntry(agent, input);
+      const known = previous !== undefined && previous >= 0 ? previous : undefined;
+      // A thread stays on its entry while it has room; else the chain in order. Each entry is
+      // checked and opened once; the notice names the one that opened, and why others did not.
+      const skipped: Array<string> = [];
+      for (const index of chainOrder(agent, known)) {
+        const step = agent.chain[index]!;
+        const checked = yield* check(step);
+        if (!("target" in checked)) {
+          skipped.push(checked.reason);
+          continue;
+        }
+        const target = checked.target;
         const innerModels =
           options.innerModels === undefined
             ? undefined
             : yield* options.innerModels(step.instanceId);
-        const sameEntry = previousId === stepId(step);
+        const supported =
+          options.innerRuntimeModes === undefined
+            ? undefined
+            : yield* options.innerRuntimeModes(step.instanceId);
+        const sameEntry = index === known;
         const innerInput = {
           ...input,
           modelSelection: stepSelection(step, input.modelSelection, innerModels),
-          // Another entry's native thread and session mean nothing to this one.
+          // Another entry's native thread and session are never resumed here.
           ...(sameEntry ? {} : { initialNativeThreadId: undefined, resumeFromSession: undefined }),
         };
         const opened = yield* Effect.result(
           target.openSession(
             withEntryPolicy(
               step,
+              supported,
               restamp(
                 innerInput,
                 outerId,
@@ -191,26 +269,30 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
             ),
           ),
         );
-        if (opened._tag === "Success") {
-          inner = opened.success;
-          models = innerModels;
-          break;
+        if (opened._tag === "Failure") {
+          skipped.push(`${stepLabel(step)} failed to open`);
+          continue;
         }
-        lastCause = opened.failure;
-        picked = yield* pickFrom(agent, picked.index + 1);
+        const moved = known !== undefined ? index !== known : index !== 0;
+        const notice = !moved
+          ? undefined
+          : known !== undefined
+            ? `${agent.name} continues on ${stepLabel(step)}: ${skipped.join("; ")}. The conversation is handed over.`
+            : `${agent.name} runs on ${stepLabel(step)}: ${skipped.join("; ")}.`;
+        return makeSession({
+          agent,
+          index,
+          step,
+          target,
+          inner: opened.success,
+          innerModels,
+          supported,
+          outerSelection: input.modelSelection,
+          adoptedNativeId: sameEntry ? input.initialNativeThreadId : undefined,
+          openNotice: notice,
+        });
       }
-      if (picked === undefined || inner === undefined)
-        return yield* fail(
-          lastCause ??
-            `No entry of ${agent.name} has room: ${agent.chain.map(stepLabel).join(", ")}.`,
-        );
-      return makeSession({
-        agent,
-        ...picked,
-        inner,
-        innerModels: models,
-        outerSelection: input.modelSelection,
-      });
+      return yield* fail(`No entry of ${agent.name} can run: ${skipped.join("; ")}.`);
     },
   );
 
@@ -221,17 +303,24 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     readonly target: Adapter;
     readonly inner: ProviderAdapterV2SessionRuntime;
     readonly innerModels: ReadonlyArray<ServerProviderModel> | undefined;
+    readonly supported: ReadonlyArray<RuntimeMode> | undefined;
     readonly outerSelection: ModelSelection;
+    /** The native thread this session resumes, when the entry was inferred, not stored. */
+    readonly adoptedNativeId: string | undefined;
+    readonly openNotice: string | undefined;
   }): ProviderAdapterV2SessionRuntime => {
     const { agent, step, inner } = session;
     const innerId = step.instanceId;
     const thisStep = stepId(step);
     let outerSelection = session.outerSelection;
+    let pendingNotice = session.openNotice;
     /** The turn each provider thread runs now: a notice row needs its run and node. */
     const turns = new Map<
       string,
       { readonly threadId: ThreadId; readonly runId: RunId; readonly nodeId: NodeId }
     >();
+    if (session.adoptedNativeId !== undefined)
+      nativeEntries.set(session.adoptedNativeId, { entry: thisStep, instanceId: innerId });
 
     const toInnerSelection = (outer: ModelSelection): ModelSelection => {
       if (outer.instanceId !== outerId) return outer;
@@ -239,7 +328,11 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       return stepSelection(step, outer, session.innerModels);
     };
     const toInner = <A>(value: A): A =>
-      withEntryPolicy(step, restamp(value, outerId, innerId, toInnerSelection) as A);
+      withEntryPolicy(
+        step,
+        session.supported,
+        restamp(value, outerId, innerId, toInnerSelection) as A,
+      );
     const toOuter = <A>(value: A): A =>
       restamp(value, innerId, outerId, (selection) =>
         selection.model === step.model ? outerSelection : { ...selection, instanceId: outerId },
@@ -247,50 +340,89 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
 
     const remember = (thread: OrchestrationV2ProviderThread) => {
       const nativeId = thread.nativeThreadRef?.nativeId;
-      if (nativeId != null) nativeSteps.set(nativeId, thisStep);
+      if (nativeId != null) nativeEntries.set(nativeId, { entry: thisStep, instanceId: innerId });
       return thread;
     };
 
-    /** At a usage limit: mark the entry out; with a next entry, a notice and a signal to go on. */
+    const noticeEvent = Effect.fn("LastdropRouter.noticeEvent")(function* (input: {
+      readonly driver: ProviderAdapterV2Event["driver"];
+      readonly providerThreadId: string;
+      readonly providerTurnId: string;
+      readonly ordinal: number;
+      readonly title: string;
+      readonly message: string;
+    }) {
+      const turn = turns.get(input.providerThreadId);
+      if (turn === undefined) return undefined;
+      const now = yield* DateTime.now;
+      return {
+        type: "turn_item.updated",
+        driver: input.driver,
+        turnItem: {
+          id: TurnItemId.make(`lastdrop-notice:${input.providerTurnId}:${input.ordinal}`),
+          threadId: turn.threadId,
+          runId: turn.runId,
+          nodeId: turn.nodeId,
+          providerThreadId: input.providerThreadId,
+          providerTurnId: input.providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: input.ordinal,
+          status: "completed",
+          title: input.title,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "system_notice",
+          message: input.message,
+        },
+      } as ProviderAdapterV2Event;
+    });
+
+    /** The first turn of a session that is not on the agent's usual entry says which one runs. */
+    const atTurnStart = Effect.fn("LastdropRouter.atTurnStart")(function* (
+      event: Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }>,
+    ) {
+      if (pendingNotice === undefined) return [event];
+      const notice = yield* noticeEvent({
+        driver: event.driver,
+        providerThreadId: event.providerTurn.providerThreadId,
+        providerTurnId: event.providerTurn.id,
+        ordinal: 0,
+        title: `Running on ${stepLabel(step)}`,
+        message: pendingNotice,
+      });
+      if (notice === undefined) return [event];
+      pendingNotice = undefined;
+      return [event, notice];
+    });
+
+    /** At a usage limit: mark the entry out; when another entry can run, say so and go on. */
     const atTerminal = Effect.fn("LastdropRouter.atTerminal")(function* (
       event: Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>,
     ) {
       if (event.status !== "failed" || event.failure?.class !== "usage_limit") return [event];
       yield* options.room.markOut(step, event.failure.resetAt);
-      const next = yield* pickFrom(agent, session.index + 1);
+      const other = yield* firstUsable(
+        agent,
+        agent.chain.map((_, index) => index).filter((index) => index !== session.index),
+      );
       const turn = turns.get(event.providerThreadId);
-      if (next === undefined || turn === undefined) return [event];
-      const message = `${agent.name} reached a usage limit on ${stepLabel(step)}. lastdrop continues on ${stepLabel(next.step)}, with this conversation handed over.`;
+      if (other === undefined || turn === undefined) return [event];
       yield* options.fallbacks.offer({
         threadId: turn.threadId,
         agent: agent.name,
         from: stepLabel(step),
-        to: stepLabel(next.step),
       });
-      const now = yield* DateTime.now;
-      const notice: ProviderAdapterV2Event = {
-        type: "turn_item.updated",
+      const notice = yield* noticeEvent({
         driver: event.driver,
-        turnItem: {
-          id: TurnItemId.make(`lastdrop-fallback:${event.providerTurnId}`),
-          threadId: turn.threadId,
-          runId: turn.runId,
-          nodeId: turn.nodeId,
-          providerThreadId: event.providerThreadId,
-          providerTurnId: event.providerTurnId,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: (event.failureItemOrdinal ?? event.runOrdinal * 100) + 1,
-          status: "completed",
-          title: "Continuing on the next model",
-          startedAt: now,
-          completedAt: now,
-          updatedAt: now,
-          type: "system_notice",
-          message,
-        },
-      } as ProviderAdapterV2Event;
-      return [notice, event];
+        providerThreadId: event.providerThreadId,
+        providerTurnId: event.providerTurnId,
+        ordinal: (event.failureItemOrdinal ?? event.runOrdinal * 100) + 1,
+        title: "Continuing on another entry",
+        message: `${agent.name} reached a usage limit on ${stepLabel(step)}. lastdrop continues on the next entry with room; the next run names it.`,
+      });
+      return notice === undefined ? [event] : [notice, event];
     });
 
     const mapEvents = (
@@ -298,7 +430,11 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     ): Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error> =>
       events.pipe(
         Stream.mapEffect((event) =>
-          event.type === "turn.terminal" ? atTerminal(event) : Effect.succeed([event]),
+          event.type === "turn.terminal"
+            ? atTerminal(event)
+            : event.type === "provider_turn.updated"
+              ? atTurnStart(event)
+              : Effect.succeed([event]),
         ),
         Stream.flatMap((batch) => Stream.fromIterable(batch)),
         Stream.map((event) => toOuter(event)),
@@ -311,12 +447,15 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
         ? undefined
         : (callInput: I) => call(toInner(callInput)).pipe(Effect.map((out) => toOuter(out)));
 
-    /** The thread came from another chain entry (or provider): this session cannot resume it. */
+    /**
+     * The native thread is not this instance's: made on another instance, or by an entry nobody
+     * recorded. A native thread is never resumed on a different instance.
+     */
     const fromOtherEntry = (thread: OrchestrationV2ProviderThread): boolean => {
       const nativeId = thread.nativeThreadRef?.nativeId;
-      const made = nativeId == null ? undefined : nativeSteps.get(nativeId);
-      if (made !== undefined) return made !== thisStep;
-      return thread.driver !== inner.driver;
+      if (nativeId == null) return thread.driver !== inner.driver;
+      const made = nativeEntries.get(nativeId);
+      return made === undefined || made.instanceId !== innerId;
     };
 
     const threadCall = <I, O>(call: (input: I) => Effect.Effect<O, ProviderAdapterV2Error>) =>
@@ -365,7 +504,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
         const existing = input.existingProviderThread;
         // A row another entry made keeps its id; its native parts are this entry's to make.
         const adopted =
-          existing !== undefined && fromOtherEntry(existing)
+          existing !== undefined && (fromOtherEntry(existing) || existing.driver !== inner.driver)
             ? {
                 ...input,
                 existingProviderThread: {
@@ -430,26 +569,41 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     ) as ProviderAdapterV2SessionRuntime;
   };
 
-  /** The entry a new session of `model` would open on now, for capabilities and transitions. */
-  const currentEntry = Effect.fn("LastdropRouter.currentEntry")(function* (model?: string) {
-    const agents = options.agents();
-    const agent = (model === undefined ? undefined : findAgent(model)) ?? agents[0];
+  /** The entry a new session of `model` would open on now, for transitions. */
+  const currentEntry = Effect.fn("LastdropRouter.currentEntry")(function* (model: string) {
+    const agent = findAgent(model);
     if (agent === undefined) return undefined;
-    return yield* pickFrom(agent, 0);
+    return yield* firstUsable(agent, chainOrder(agent));
+  });
+
+  /** What every target instance offers; T3's ACP defaults when none is set up. Never fails. */
+  const capabilities = Effect.fn("LastdropRouter.capabilities")(function* () {
+    const ids = [
+      ...new Set(options.agents().flatMap((agent) => agent.chain.map((step) => step.instanceId))),
+    ];
+    const found = yield* Effect.forEach(ids, (id) =>
+      options
+        .resolveTarget(id)
+        .pipe(
+          Effect.flatMap((target) =>
+            target === undefined
+              ? Effect.undefined
+              : target.getCapabilities().pipe(Effect.orElseSucceed(() => undefined)),
+          ),
+        ),
+    );
+    const known = found.filter(
+      (caps): caps is OrchestrationV2ProviderCapabilities => caps !== undefined,
+    );
+    return known.length === 0
+      ? AcpProviderCapabilitiesV2
+      : (intersect(known) as OrchestrationV2ProviderCapabilities);
   });
 
   return {
     instanceId: outerId,
     driver: LASTDROP_DRIVER,
-    getCapabilities: () =>
-      currentEntry().pipe(
-        Effect.flatMap((entry) =>
-          entry === undefined
-            ? Effect.die("lastdrop has no agent with room.")
-            : entry.target.getCapabilities(),
-        ),
-        Effect.orDie,
-      ),
+    getCapabilities: capabilities,
     planSelectionTransition: (input) =>
       input.current.model !== input.target.model
         ? // Another agent may run elsewhere: a new provider thread with T3's handoff.
@@ -458,13 +612,14 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
             Effect.flatMap((entry) =>
               entry === undefined
                 ? Effect.succeed({ type: "create_with_handoff" as const })
-                : entry.target.planSelectionTransition({
-                    ...input,
-                    current: stepSelection(entry.step, input.current),
-                    target: stepSelection(entry.step, input.target),
-                  }),
+                : entry.target
+                    .planSelectionTransition({
+                      ...input,
+                      current: stepSelection(entry.step, input.current),
+                      target: stepSelection(entry.step, input.target),
+                    })
+                    .pipe(Effect.orElseSucceed(() => ({ type: "create_with_handoff" as const }))),
             ),
-            Effect.orDie,
           ),
     openSession,
   };

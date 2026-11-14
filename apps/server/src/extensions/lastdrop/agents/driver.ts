@@ -23,6 +23,7 @@ import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textG
 
 import { agentModels } from "./catalog.ts";
 import { makeCatalogSource, standaloneCatalogFiles, type CatalogSource } from "./catalogSource.ts";
+import { ALL_RUNTIME_MODES } from "./permissions.ts";
 import { makeRouterAdapter } from "./router.ts";
 import { LASTDROP_AGENTS_DRIVER, LastdropAgentsSettings } from "./settings.ts";
 import * as Shared from "./shared.ts";
@@ -60,7 +61,7 @@ export const makeLastdropAgentsDriver = (
   openSource: () => CatalogSource = () => makeCatalogSource({ files: standaloneCatalogFiles() }),
 ): ProviderDriver<LastdropAgentsSettings> => ({
   driverKind: LASTDROP_AGENTS_DRIVER,
-  metadata: { displayName: "lastdrop", supportsMultipleInstances: false },
+  metadata: { displayName: "lastdrop agents", supportsMultipleInstances: false },
   configSchema: LastdropAgentsSettings,
   defaultConfig: () => decodeSettings({}),
   create: Effect.fn("LastdropAgentsDriver.create")(function* ({
@@ -77,7 +78,7 @@ export const makeLastdropAgentsDriver = (
     const stamp = withInstanceIdentity({
       instanceId,
       driverKind: LASTDROP_AGENTS_DRIVER,
-      displayName: displayName ?? "lastdrop",
+      displayName: displayName ?? "lastdrop agents",
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
@@ -139,6 +140,8 @@ export const makeLastdropAgentsDriver = (
         slashCommands: [],
         skills: [],
         supportsTextGeneration: false,
+        // Every mode reaches the router, which takes each entry to what its instance supports.
+        supportedRuntimeModes: [...ALL_RUNTIME_MODES],
         supportsConversationRollback: true,
       } as Parameters<typeof stamp>[0]);
     });
@@ -182,7 +185,8 @@ export const makeLastdropAgentsDriver = (
       innerModels: Shared.targets.models,
       room: Shared.room,
       fallbacks: Shared.fallbacks,
-      nativeSteps: Shared.nativeSteps,
+      nativeEntries: Shared.nativeEntries,
+      innerRuntimeModes: Shared.targets.runtimeModes,
     });
     return {
       instanceId,

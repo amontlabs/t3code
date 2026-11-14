@@ -7,6 +7,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import type { AgentStep } from "./catalog.ts";
+import { makeStoredMap, type StoredMap } from "./store.ts";
 
 /** How long an entry stays out when its limit came without a reset time. */
 const DEFAULT_OUT_MS = 60 * 60 * 1000;
@@ -17,24 +18,31 @@ export interface Room {
   readonly hasRoom: (step: AgentStep) => Effect.Effect<boolean>;
   /** Marks the entry out until `resetAt` (ISO), else for `DEFAULT_OUT_MS`. */
   readonly markOut: (step: AgentStep, resetAt: string | null | undefined) => Effect.Effect<void>;
+  /** When the entry's mark ends (epoch ms), if it is out. */
+  readonly outUntil: (step: AgentStep) => number | undefined;
 }
 
-export const makeRoom = (now: () => number = Date.now): Room => {
-  const outUntil = new Map<string, number>();
+export const makeRoom = (
+  now: () => number = Date.now,
+  marks: StoredMap<number> = makeStoredMap<number>(),
+): Room => {
+  const until = (step: AgentStep) => {
+    const end = marks.get(stepKey(step));
+    if (end === undefined) return undefined;
+    if (end > now()) return end;
+    marks.delete(stepKey(step));
+    return undefined;
+  };
   return {
-    hasRoom: (step) =>
-      Effect.sync(() => {
-        const until = outUntil.get(stepKey(step));
-        if (until === undefined) return true;
-        if (until > now()) return false;
-        outUntil.delete(stepKey(step));
-        return true;
-      }),
+    hasRoom: (step) => Effect.sync(() => until(step) === undefined),
+    outUntil: until,
     markOut: (step, resetAt) =>
       Effect.sync(() => {
         const parsed = resetAt == null ? Number.NaN : Date.parse(resetAt);
-        const until = Number.isFinite(parsed) && parsed > now() ? parsed : now() + DEFAULT_OUT_MS;
-        outUntil.set(stepKey(step), until);
+        marks.set(
+          stepKey(step),
+          Number.isFinite(parsed) && parsed > now() ? parsed : now() + DEFAULT_OUT_MS,
+        );
       }),
   };
 };
@@ -43,9 +51,8 @@ export const makeRoom = (now: () => number = Date.now): Room => {
 export interface PendingFallback {
   readonly threadId: ThreadId;
   readonly agent: string;
-  /** The entry the run ended on and the one it continues on, as the model list writes them. */
+  /** The entry the run ended on. The next run's notice names the one it continues on. */
   readonly from: string;
-  readonly to: string;
 }
 
 /** Hand-off from the router (which sees the limit) to the reactor (which re-sends the run). */

@@ -20,7 +20,7 @@ export type LastdropAgentsSettings = typeof LastdropAgentsSettings.Type;
 
 export const lastdropAgentsClient = defineProviderClient({
   driverKind: LASTDROP_AGENTS_DRIVER,
-  label: "lastdrop",
+  label: "lastdrop agents",
   featured: false,
   settingsSchema: LastdropAgentsSettings,
 });

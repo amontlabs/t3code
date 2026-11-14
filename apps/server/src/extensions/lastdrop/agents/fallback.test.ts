@@ -27,7 +27,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../../../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import type { AgentDefinition } from "./catalog.ts";
-import { CONTINUE_TEXT, runFallbackReactor } from "./fallback.ts";
+import { CONTINUE_TEXT, INTERRUPTED_COMMAND_NOTE, runFallbackReactor } from "./fallback.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeRouterAdapter } from "./router.ts";
 import { makeFakeAdapter, makeFakeCalls } from "./testkit.ts";
@@ -35,6 +35,7 @@ import { makeFakeAdapter, makeFakeCalls } from "./testkit.ts";
 const LASTDROP = ProviderInstanceId.make("lastdrop");
 const CODEX = ProviderInstanceId.make("codex");
 const CLAUDE = ProviderInstanceId.make("claudeAgent");
+const ANTIGRAVITY = ProviderInstanceId.make("antigravity");
 const threadId = ThreadId.make("thread:lastdrop-fallback");
 const projectId = ProjectId.make("project:lastdrop-fallback");
 
@@ -44,6 +45,13 @@ const BUILD: AgentDefinition = {
   enabled: true,
   chain: [
     { provider: "codex", instanceId: CODEX, providerLabel: "Codex", model: "gpt-6.1-sol" },
+    // Has room, but fails to open: the reopen goes past it, and the notice must say so.
+    {
+      provider: "antigravity",
+      instanceId: ANTIGRAVITY,
+      providerLabel: "Antigravity",
+      model: "claude-sonnet-5-5",
+    },
     { provider: "claude", instanceId: CLAUDE, providerLabel: "Claude", model: "sonnet" },
   ],
 };
@@ -66,6 +74,7 @@ describe("lastdrop fallback partway through a run", () => {
           capabilities: CodexProviderCapabilitiesV2,
           calls: codexCalls,
           failedRunOrdinals: new Set([1]),
+          commandAtLimit: true,
           failure: makeProviderFailure({
             message: "You've hit your usage limit.",
             class: "usage_limit",
@@ -78,13 +87,28 @@ describe("lastdrop fallback partway through a run", () => {
           capabilities: ClaudeProviderCapabilitiesV2,
           calls: claudeCalls,
         });
+        const antigravity = makeFakeAdapter({
+          instanceId: ANTIGRAVITY,
+          driver: ProviderDriverKind.make("antigravity"),
+          capabilities: ClaudeProviderCapabilitiesV2,
+          calls: yield* makeFakeCalls,
+          failOpen: true,
+        });
         const room = makeRoom();
         const signals = makeFallbackSignals();
         const lastdrop = makeRouterAdapter({
           instanceId: LASTDROP,
           agents: () => [BUILD],
           resolveTarget: (id) =>
-            Effect.succeed(id === CODEX ? codex : id === CLAUDE ? claude : undefined),
+            Effect.succeed(
+              id === CODEX
+                ? codex
+                : id === CLAUDE
+                  ? claude
+                  : id === ANTIGRAVITY
+                    ? antigravity
+                    : undefined,
+            ),
           room,
           fallbacks: signals,
         });
@@ -144,16 +168,34 @@ describe("lastdrop fallback partway through a run", () => {
             ],
           );
           // The switch is in the thread, not silent.
-          const notice = projection.turnItems.find((item) => item.type === "system_notice");
-          assert.isDefined(notice);
-          assert.include(
-            notice!.type === "system_notice" ? notice!.message : "",
-            "build reached a usage limit on Codex · gpt-6.1-sol. lastdrop continues on Claude · sonnet",
+          const notices = projection.turnItems.flatMap((item) =>
+            item.type === "system_notice" ? [{ run: item.runId, message: item.message }] : [],
+          );
+          const [run1, run2] = projection.runs;
+          // Run 1 says it stops at the limit and names no entry: the reopen decides.
+          assert.deepEqual(
+            notices.filter((notice) => notice.run === run1!.id).map((notice) => notice.message),
+            [
+              "build reached a usage limit on Codex · gpt-6.1-sol. lastdrop continues on the next entry with room; the next run names it.",
+            ],
+          );
+          // Run 2 names exactly the entry it runs on, and why the others did not.
+          assert.deepEqual(
+            notices.filter((notice) => notice.run === run2!.id).map((notice) => notice.message),
+            [
+              "build continues on Claude · sonnet: Codex · gpt-6.1-sol reached a usage limit (until " +
+                notices
+                  .find((notice) => notice.run === run2!.id)!
+                  .message.split("(until ")[1]!
+                  .split(")")[0] +
+                "); Antigravity · claude-sonnet-5-5 failed to open. The conversation is handed over.",
+            ],
           );
           // Claude ran the continuation in a new native conversation, at the run's effort.
           const claudeTurns = yield* Ref.get(claudeCalls.turns);
           assert.equal(claudeTurns.length, 1);
-          assert.equal(claudeTurns[0]!.text, CONTINUE_TEXT);
+          // The limit came mid-command: the next entry is told to check before redoing it.
+          assert.equal(claudeTurns[0]!.text, `${CONTINUE_TEXT}\n\n${INTERRUPTED_COMMAND_NOTE}`);
           assert.deepEqual(claudeTurns[0]!.modelSelection, {
             instanceId: CLAUDE,
             model: "sonnet",
@@ -193,6 +235,102 @@ describe("lastdrop fallback partway through a run", () => {
                 },
               },
               registry,
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.live("says at open which entry runs, when the first has no room", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("lastdrop-open-notice");
+        const claudeCalls = yield* makeFakeCalls;
+        const claude = makeFakeAdapter({
+          instanceId: CLAUDE,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          capabilities: ClaudeProviderCapabilitiesV2,
+          calls: claudeCalls,
+        });
+        const codexOut = makeFakeAdapter({
+          instanceId: CODEX,
+          driver: ProviderDriverKind.make("codex"),
+          capabilities: CodexProviderCapabilitiesV2,
+          calls: yield* makeFakeCalls,
+        });
+        const room = makeRoom();
+        yield* room.markOut(BUILD.chain[0]!, "2099-01-01T00:00:00.000Z");
+        const lastdrop = makeRouterAdapter({
+          instanceId: LASTDROP,
+          agents: () => [BUILD],
+          // Antigravity is not set up here; Codex is, but out of room.
+          resolveTarget: (id) =>
+            Effect.succeed(id === CLAUDE ? claude : id === CODEX ? codexOut : undefined),
+          room,
+          fallbacks: makeFallbackSignals(),
+        });
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Open notice",
+            modelSelection: SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("first"),
+            messageId: MessageId.make("first"),
+            threadId,
+            text: "Hello",
+            attachments: [],
+            modelSelection: SELECTION,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* orchestrator.streamStoredEvents.pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "run.updated" &&
+                (event.payload.status === "completed" || event.payload.status === "failed"),
+            ),
+            Stream.runHead,
+            Effect.andThen(worker.drain()),
+          );
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(projection.runs[0]!.status, "completed");
+          assert.deepEqual(
+            projection.turnItems.flatMap((item) =>
+              item.type === "system_notice" ? [item.message] : [],
+            ),
+            [
+              "build runs on Claude · sonnet: Codex · gpt-6.1-sol reached a usage limit (until 2099-01-01 00:00 UTC); Antigravity · claude-sonnet-5-5 is not set up.",
+            ],
+          );
+          assert.equal((yield* Ref.get(claudeCalls.turns)).length, 1);
+        }).pipe(
+          Effect.provide(
+            ProviderReplayHarness.layerWithRegistry(
+              {
+                name: "lastdrop-open-notice",
+                runtimePolicyOverride: {
+                  cwd,
+                  approvalPolicy: "never",
+                  sandboxPolicy: { type: "readOnly" },
+                },
+              },
+              ProviderAdapterRegistry.layerFromAdapters([claude, lastdrop]),
             ),
           ),
         );

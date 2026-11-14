@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
+import { resolveLastdropDataDir } from "../../dataDir.ts";
 import { runFallbackReactor } from "./fallback.ts";
 import { LASTDROP_AGENTS_DRIVER } from "./settings.ts";
 import * as Shared from "./shared.ts";
@@ -44,6 +45,10 @@ export const layer = Layer.effectDiscard(
         ),
       models: (instanceId) =>
         usableInstance(instanceId).pipe(Effect.map((usable) => usable?.snapshot.models)),
+      runtimeModes: (instanceId) =>
+        usableInstance(instanceId).pipe(
+          Effect.map((usable) => usable?.snapshot.supportedRuntimeModes),
+        ),
       refreshUsage: (instanceId) =>
         instances.getInstance(instanceId).pipe(
           Effect.flatMap((instance) => instance?.snapshot.refreshUsage ?? Effect.void),
@@ -51,6 +56,7 @@ export const layer = Layer.effectDiscard(
         ),
     });
     yield* Effect.addFinalizer(() => Shared.unbindTargets);
+    yield* Shared.attachStore(yield* resolveLastdropDataDir);
     yield* runFallbackReactor(Shared.fallbacks).pipe(Effect.forkScoped);
   }),
 ).pipe(Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry));
