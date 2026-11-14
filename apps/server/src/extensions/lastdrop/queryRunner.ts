@@ -209,15 +209,14 @@ export function wrapQueryRunner(
       const lead: SDKMessage[] = [];
       if (isRejectedRateLimit(message)) rejected = true;
       if (!isResult(message)) {
-        const emit: SDKMessage[] = [message];
-        // The thread had to leave its account: say so, once its turn is under way.
-        if (pendingNotice !== undefined) {
-          emit.push(
-            noticeMessage(pendingNotice, (message as { session_id?: string }).session_id ?? ""),
-          );
+        // The thread had to leave its account: say so just before its first answer (earlier frames, such as
+        // `init`, arrive before the adapter's turn takes notices).
+        if (pendingNotice !== undefined && message.type === "assistant") {
+          const notice = noticeMessage(pendingNotice, message.session_id);
           pendingNotice = undefined;
+          return { emit: [notice, message], end: false };
         }
-        return { emit, end: false };
+        return { emit: [message], end: false };
       }
       if (pendingNotice !== undefined) {
         lead.push(noticeMessage(pendingNotice, message.session_id));

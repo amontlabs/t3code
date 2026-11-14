@@ -36,7 +36,8 @@ The rules are headroom's (docs/claude-accounts.md, "T3 Code threads"):
 - A move never carries a session id to another account: the query opens with `resume: <current>`,
   `forkSession: true` and a new `sessionId`. The ledger maps T3's id to the new one.
 - A move because the account ran out is never silent: the thread shows a notice (a `system`/`informational`
-  message the adapter turns into a `system_notice` item) before its first answer on the new account.
+  message the adapter turns into a `system_notice` item) just before its first answer on the new account
+  (Claude Code's earlier frames, such as `init`, come before the adapter's turn takes notices).
 
 ## The id map
 
@@ -55,8 +56,10 @@ Every id T3 passes back is translated:
 | `forkSession(sessionId, upToMessageId)` | the current conversation and the message's copy; the fork is recorded |
 | `subagentLaunchToolUseId(sessionId)`    | tried in each conversation of the lineage, current first              |
 
-Claude Code gives each copied message a new uuid when it forks and records `forkedFrom: {sessionId, messageUuid}`
-on the copy; the wrapper follows that chain across several moves. The adapter's own transcript check
+A move's own fork (Claude Code 2.1.322's `--fork-session`, checked live) keeps every message's uuid, so a rewind
+id from before the move is found as it is. T3's own forks (the SDK's `forkSession`, a file copy) give each copied
+message a new uuid and record `forkedFrom: {sessionId, messageUuid}`; the wrapper follows that chain across forks.
+The adapter's own transcript check
 (`claudeTranscriptState`) reads T3's id directly; that transcript stays in place, so it still finds a conversation.
 Message `session_id`s in the stream are left as Claude Code sends them (task-output tailing needs the real one).
 
@@ -84,3 +87,13 @@ two apps never double the requests. Otherwise the fork polls as in step 3 and ro
 
 - Full and troubled marks are in the server's memory; a restart forgets them (the next reading still counts).
 - A thread whose account changed by hand outside lastdrop isn't known to the ledger: it counts as Main's.
+
+## Checked live (2026-11-14)
+
+Built server (`vp pack`), throwaway `HOME` and `T3CODE_HOME`, `~/.claude.json` copied, Main's sign-in read from
+the login keychain (the throwaway's `Library/Keychains` linked to the real one), the standalone app's
+`app.heartbeat` and `usage.json` linked read-only. `t3 thread start/send` with Haiku 4.5: a new thread opened on
+Main through the wrapper; with the conversation marked in the ledger as another account's (not signed in there),
+the next message moved it with `resume` + `forkSession` + a new id, the conversation carried over, the thread
+showed the notice, and a second move forked the fork. Not checked live: a move between two real accounts, a real
+usage limit or passing error mid-run, rewind after a move in the UI.

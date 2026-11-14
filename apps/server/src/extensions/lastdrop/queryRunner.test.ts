@@ -367,7 +367,9 @@ describe("the query-runner wrapper (replays)", () => {
           result: "You've hit your session limit · resets 5pm",
           api_error_status: 429,
         });
-        const fake = fakeRunner(() => [[init(), limited, answer()]]);
+        const fake = fakeRunner((n) =>
+          n === 1 ? [[init(), limited, answer()]] : [[init(), answer(), result()]],
+        );
         const { runner } = wrap(w, fake);
         const messages = yield* drain(
           yield* runner.open(openInput("thread-1", { sessionId: "X" })),
@@ -391,6 +393,11 @@ describe("the query-runner wrapper (replays)", () => {
         );
         const next = yield* runner.open(openInput("thread-1", { resume: "X" }));
         const nextMessages = yield* drain(next);
+        // The notice comes just before the first answer, never with Claude Code's first frames.
+        const at = nextMessages.findIndex(
+          (m) => m.type === "system" && (m as { subtype?: string }).subtype === "informational",
+        );
+        assert.equal(nextMessages[at + 1]?.type, "assistant");
         assert.equal(
           env(fake.opened[1]!)["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
           claudeFolder(w.t.paths, "Pro"),
