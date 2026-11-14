@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 /** The user's agents (driver `lastdropAgents`): Claude's models and the standalone app's agents. */
 const lastdropAgentsClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("lastdropAgents"),
-  label: "lastdrop",
+  label: "lastdrop agents",
   featured: false,
   settingsSchema: makeProviderSettingsSchema({
     enabled: Schema.Boolean.pipe(
