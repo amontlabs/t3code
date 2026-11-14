@@ -1,4 +1,5 @@
 import { Spinner } from "~/components/ui/spinner";
+import { ExtensionInstanceSection } from "~/extensions";
 
 import {
   AlertTriangleIcon,
@@ -1385,6 +1386,12 @@ export function ProviderInstanceCard({
           readOnly={readOnly}
         />
       ) : null}
+      <ExtensionInstanceSection
+        environmentId={environmentId}
+        instanceId={instanceId}
+        provider={liveProvider}
+        readOnly={readOnly}
+      />
 
       {driverOption !== undefined ? (
         <SettingsSection title="Models">

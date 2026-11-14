@@ -16,6 +16,7 @@ import type {
   ProviderUsageReaderEnv,
 } from "@t3tools/provider-core/server/driver";
 import { KiroDriver, type KiroDriverEnv } from "@t3tools/provider-kiro/server";
+import * as Extensions from "../extensions/index.ts";
 
 export type BuiltInDriversEnv =
   | AcpRegistryDriverEnv
@@ -28,7 +29,8 @@ export type BuiltInDriversEnv =
   | KiroDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
-  | MuseDriverEnv;
+  | MuseDriverEnv
+  | Extensions.ExtensionDriversEnv;
 
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
@@ -42,6 +44,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   PiDriver,
   MuseDriver,
   AcpRegistryDriver,
+  ...Extensions.EXTENSION_DRIVERS,
 ];
 
 export type BuiltInUsageReadersEnv =
@@ -52,7 +55,8 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof AntigravityDriver>
   | ProviderUsageReaderEnv<typeof CursorDriver>
   | ProviderUsageReaderEnv<typeof PiDriver>
-  | ProviderUsageReaderEnv<typeof MuseDriver>;
+  | ProviderUsageReaderEnv<typeof MuseDriver>
+  | Extensions.ExtensionUsageReadersEnv;
 
 /** Order matters: aggregation keeps the first duplicate record. */
 export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
@@ -66,4 +70,5 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   MuseDriver,
   AntigravityDriver,
   CursorDriver,
+  ...Extensions.EXTENSION_USAGE_DRIVERS,
 ];
