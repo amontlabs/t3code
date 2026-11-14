@@ -38,8 +38,10 @@ export const make = Effect.gen(function* () {
         const current = yield* settings.getSettings;
         const thread = yield* projections.getThread(threadId);
         const claudeInstance = Object.hasOwn(current.providerInstances, thread.providerInstanceId)
-          ? current.providerInstances[thread.providerInstanceId]?.driver === "claudeAgent"
-          : thread.providerInstanceId === "claudeAgent";
+          ? /^(claudeAgent|lastdropAgents)$/.test(
+              current.providerInstances[thread.providerInstanceId]?.driver ?? "",
+            ) // lastdrop: FORK.md
+          : /^(claudeAgent|lastdropAgents)$/.test(thread.providerInstanceId);
         if (
           !claudeInstance ||
           resolveIdleCompaction(current, thread.providerInstanceId) !== "beforeCacheExpires" ||

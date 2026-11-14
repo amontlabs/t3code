@@ -2,7 +2,12 @@
  * lastdrop's web extensions. T3's components render these at small seams listed in FORK.md.
  * With an empty map nothing renders, so the web app behaves exactly as upstream.
  */
-import type { EnvironmentId, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import type { ComponentType } from "react";
 
 import { AccountsSection } from "./lastdrop/AccountsSection";
@@ -41,4 +46,25 @@ export function ExtensionInstanceSection(props: {
       readOnly={readOnly ?? false}
     />
   );
+}
+
+/** The backend each lastdrop model row runs on first, by the model's `subProvider`. */
+const LASTDROP_BACKEND_DRIVERS: Readonly<Record<string, ProviderDriverKind>> = {
+  Claude: ProviderDriverKind.make("claudeAgent"),
+  "Z.ai": ProviderDriverKind.make("claudeAgent"),
+  OpenRouter: ProviderDriverKind.make("claudeAgent"),
+  Codex: ProviderDriverKind.make("codex"),
+  Antigravity: ProviderDriverKind.make("antigravity"),
+};
+
+/**
+ * The driver whose icon a model row shows: for lastdrop's agents, the backend the agent runs on
+ * (Antigravity, Codex, Claude); for every other provider, its own.
+ */
+export function modelIconDriver(
+  driverKind: ProviderDriverKind,
+  subProvider: string | undefined,
+): ProviderDriverKind {
+  if (driverKind !== "lastdropAgents" || subProvider === undefined) return driverKind;
+  return LASTDROP_BACKEND_DRIVERS[subProvider] ?? driverKind;
 }
