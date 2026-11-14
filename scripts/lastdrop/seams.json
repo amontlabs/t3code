@@ -11,7 +11,10 @@
   ],
   "exempt": ["pnpm-lock.yaml"],
   "seams": {
-    "README.md": { "budget": 15, "why": "the fork's section above upstream's README" },
+    "README.md": {
+      "budget": 15,
+      "why": "the fork's section above upstream's README"
+    },
     "apps/server/src/provider/builtInDrivers.ts": {
       "budget": 9,
       "why": "extension drivers and usage readers"
@@ -40,10 +43,22 @@
       "budget": 7,
       "why": "extension settings section per driver"
     },
-    "apps/desktop/src/main.ts": { "budget": 1, "why": "fork startup: identity" },
-    "apps/desktop/src/app/DesktopEnvironment.ts": { "budget": 3, "why": "app name" },
-    "apps/desktop/src/app/DesktopUserData.ts": { "budget": 4, "why": "Electron profile folder" },
-    "apps/desktop/package.json": { "budget": 2, "why": "product name" },
+    "apps/desktop/src/main.ts": {
+      "budget": 1,
+      "why": "fork startup: identity"
+    },
+    "apps/desktop/src/app/DesktopEnvironment.ts": {
+      "budget": 3,
+      "why": "app name"
+    },
+    "apps/desktop/src/app/DesktopUserData.ts": {
+      "budget": 4,
+      "why": "Electron profile folder"
+    },
+    "apps/desktop/package.json": {
+      "budget": 2,
+      "why": "product name"
+    },
     "apps/server/package.json": {
       "budget": 1,
       "why": "the server depends on lastdrop-node"
@@ -51,6 +66,14 @@
     "scripts/build-desktop-artifact.ts": {
       "budget": 7,
       "why": "bundle id, self-signed mac signing"
+    },
+    "apps/web/src/components/chat/ModelListRow.tsx": {
+      "budget": 3,
+      "why": "model row icon from the agent's backend"
+    },
+    "apps/server/src/orchestration-v2/IdleCompactionService.ts": {
+      "budget": 6,
+      "why": "idle compaction for lastdrop agent threads"
     }
   }
 }

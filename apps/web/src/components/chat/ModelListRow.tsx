@@ -10,6 +10,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { modelPickerModelKey } from "./modelPickerKeys";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { modelIconDriver } from "~/extensions";
 
 export const ModelListRow = memo(function ModelListRow(props: {
   index: number;
@@ -55,7 +56,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
     >
       {/* One row shape in every tab: the logo names the provider, so Favorites needs no second line. */}
       <ProviderInstanceIcon
-        driverKind={props.driverKind}
+        driverKind={modelIconDriver(props.driverKind, props.subProvider)}
         displayName={props.providerDisplayName}
         accentColor={props.providerAccentColor}
         acpRegistryAgentId={props.acpRegistryAgentId}
