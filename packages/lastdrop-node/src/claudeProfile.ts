@@ -65,7 +65,7 @@ export async function linkShared(paths: LastdropPaths, dir: string): Promise<voi
  * Skipped while Main's config can't be read; throws while the lock stays held (the next start does it).
  */
 export async function syncProfile(paths: LastdropPaths, folder: string): Promise<void> {
-  const file = profileConfigFile(folder);
+  const file = profileConfigFile(folder, paths);
   const main = await readJsonObject(paths.sharedConfig);
   if (!main) return;
   await withConfigLock(file, async () => {
@@ -96,7 +96,7 @@ export async function prepareProfile(
   folder: string,
   log: (line: string) => void = () => {},
 ): Promise<string | undefined> {
-  const dir = profileDirectory(folder);
+  const dir = profileDirectory(folder, paths);
   if (!(await exists(folder))) return undefined; // no sign-in folder: no account to run as
   try {
     await NodeFSP.mkdir(dir, { recursive: true, mode: 0o700 });

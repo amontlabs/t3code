@@ -5,7 +5,7 @@
  */
 import * as NodeFSP from "node:fs/promises";
 
-import { readText, writeAtomic } from "./files.ts";
+import { writeAtomic } from "./files.ts";
 
 export interface LedgerSession {
   /** "main", or an account's folder name. */
@@ -88,6 +88,46 @@ export function decodeLedger(text: string): LedgerStore {
   };
 }
 
+/** The ledger file exists but isn't a ledger: routing refuses rather than guess. */
+export class LedgerUnreadableError extends Error {
+  readonly file: string;
+  constructor(file: string, cause: unknown) {
+    super(
+      `lastdrop's session ledger ${file} can't be read (${(cause as Error)?.message ?? cause}); fix it or move it aside`,
+    );
+    this.file = file;
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A lock older than this was left by a process that died holding it. */
+export const STALE_LOCK_MS = 10_000;
+
+/** Runs `body` holding `lock` (a folder: making it is taking it). Waits up to ~5 s, breaking a stale lock. */
+export async function withLock<T>(lock: string, body: () => Promise<T>): Promise<T> {
+  await NodeFSP.mkdir(lock.slice(0, lock.lastIndexOf("/")), { recursive: true, mode: 0o700 });
+  for (let tries = 0; ; tries++) {
+    try {
+      await NodeFSP.mkdir(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = await NodeFSP.stat(lock).catch(() => undefined);
+      if (stat && Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
+        await NodeFSP.rm(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (tries >= 200) throw new Error(`the lock ${lock} stayed held`, { cause: error });
+      await sleep(25);
+    }
+  }
+  try {
+    return await body();
+  } finally {
+    await NodeFSP.rm(lock, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 const emptyStore = (): LedgerStore => ({ sessions: {}, threads: {}, appThreads: {} });
 
 /** Keeps at most `MAX_SESSIONS`, dropping the oldest first and never one newer than 30 days. */
@@ -130,35 +170,40 @@ export class SessionLedger {
     this.file = file;
   }
 
-  /** The store as it is now; an unreadable file reads as empty (and is set aside at the next write). */
+  /**
+   * The store as it is now; a missing file is an empty ledger. A file that exists but can't be read throws
+   * `LedgerUnreadableError`: it is never taken for an empty ledger (every thread would then count as Main's).
+   */
   async read(): Promise<LedgerStore> {
-    const text = await readText(this.file);
-    if (text === undefined) return emptyStore();
+    let text: string;
+    try {
+      text = await NodeFSP.readFile(this.file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyStore();
+      throw new LedgerUnreadableError(this.file, error);
+    }
     try {
       return decodeLedger(text);
-    } catch {
-      return emptyStore();
+    } catch (error) {
+      throw new LedgerUnreadableError(this.file, error);
     }
   }
 
-  /** Read, change and write, one change at a time. A file that can't be read is kept aside, never overwritten. */
+  /**
+   * Read, change and write under the ledger's lock (a folder next to it, so another server on the same
+   * home waits too), replacing the file atomically. Throws on an unreadable ledger, leaving it as it is.
+   */
   update<T>(change: (store: LedgerStore) => T | Promise<T>): Promise<T> {
-    const next = this.queue.then(async () => {
-      const text = await readText(this.file);
-      let store = emptyStore();
-      if (text !== undefined) {
-        try {
-          store = decodeLedger(text);
-        } catch {
-          await NodeFSP.rename(this.file, `${this.file}.unreadable-${Date.now()}`);
-        }
-      }
-      const before = JSON.stringify(store);
-      const result = await change(store);
-      const after = JSON.stringify(store);
-      if (after !== before) await writeAtomic(this.file, after);
-      return result;
-    });
+    const next = this.queue.then(() =>
+      withLock(`${this.file}.lock`, async () => {
+        const store = await this.read();
+        const before = JSON.stringify(store);
+        const result = await change(store);
+        const after = JSON.stringify(store);
+        if (after !== before) await writeAtomic(this.file, after);
+        return result;
+      }),
+    );
     this.queue = next.catch(() => {});
     return next;
   }

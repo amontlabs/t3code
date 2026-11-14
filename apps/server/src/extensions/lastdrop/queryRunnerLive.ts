@@ -76,7 +76,18 @@ export const wrapLive = <E, R>(
       }
       const dataDir = lastdropDataDir(config.value);
       const home = NodeOS.homedir();
-      const paths = lastdropPaths({ home, dataDir });
+      // Live checks only (docs/lastdrop/claude-routing.md): sign in through the accounts' real folders while
+      // their profiles are built elsewhere, and make choosing fail on purpose. Unset, they change nothing.
+      const setting = (name: string) =>
+        Config.String(name).pipe(
+          Config.option,
+          Effect.map(Option.getOrUndefined),
+          Effect.orElseSucceed(() => undefined),
+        );
+      const claudeFolders = yield* setting("LASTDROP_CLAUDE_FOLDERS");
+      const profiles = yield* setting("LASTDROP_PROFILES");
+      const fault = yield* setting("LASTDROP_FAULT_ROUTE");
+      const paths = lastdropPaths({ home, dataDir, claudeFolders, profiles });
       const log = fileLogger(`${dataDir}/lastdrop.log`);
       const router = new ThreadRouter({
         paths,
@@ -91,7 +102,12 @@ export const wrapLive = <E, R>(
         log("routing: T3's projection is not readable here; every thread picks as a main thread");
       log("routing: Claude queries choose their account (lastdrop)");
       return wrapQueryRunner(inner, {
-        router,
+        router:
+          fault === "throw"
+            ? Object.assign(Object.create(router) as ThreadRouter, {
+                route: () => Promise.reject(new Error("LASTDROP_FAULT_ROUTE=throw")),
+              })
+            : router,
         lineage: lineage ?? (() => Effect.succeed(MAIN_THREAD)),
         hostEnvironment: yield* HostProcess.Environment,
         log,

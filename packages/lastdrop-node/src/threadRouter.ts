@@ -63,7 +63,14 @@ export interface Route {
   readonly notice?: string | undefined;
   /** Why the query runs as asked, when it does. */
   readonly untouched?: string | undefined;
+  /**
+   * The route's ledger writes. Nothing is written while choosing: the caller commits only a route it uses,
+   * so a route that came back too late never writes.
+   */
+  readonly commit: () => Promise<void>;
 }
+
+const NOTHING = async () => {};
 
 export interface RouterOptions {
   readonly paths: LastdropPaths;
@@ -136,8 +143,6 @@ export class ThreadRouter {
       );
       // Only signing in again would let it run anything: threads on it move.
       if (!reading.usable) continue;
-      // Its API kept failing through every retry a moment ago: threads there move, new ones go elsewhere.
-      if ((this.troubledUntil.get(key) ?? -Infinity) > now) continue;
       candidates.push({
         id: key,
         name: account.name ?? key,
@@ -158,7 +163,55 @@ export class ThreadRouter {
     };
   }
 
-  /** Where a query opens: the account, its environment, and the ids it opens with. */
+  /** Its passing errors outlasted every retry a moment ago (not gone: a warm thread stays). */
+  isTroubled(account: string): boolean {
+    return (this.troubledUntil.get(account) ?? -Infinity) > this.now();
+  }
+
+  /**
+   * Where a query opens when choosing failed or took too long: the thread's recorded account, its ids
+   * translated, nothing written. Throws when that can't be built (an unreadable ledger, a profile that
+   * can't be prepared): the caller then refuses to open, rather than run another account's id on Main.
+   */
+  async recorded(input: Pick<RouteInput, "identity" | "env">): Promise<Route> {
+    const store = await this.options.ledger.read();
+    const identity = await this.translatedIdentity(store, input.identity);
+    if (userAuthOverride(input.env) !== undefined || identity.resume === undefined) {
+      // A new thread has no id any account has seen: Claude Code's own choice is safe.
+      return {
+        identity,
+        env: defined(input.env),
+        decision: undefined,
+        untouched: "fallback",
+        commit: NOTHING,
+      };
+    }
+    const session = identity.resume;
+    const account = store.sessions[session]?.account ?? MAIN_KEY;
+    const env = await runEnvironment(this.options.paths, account, input.env);
+    if (account !== MAIN_KEY && env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] === undefined) {
+      throw new Error(`the sign-in folder of Claude account ${account} is missing`);
+    }
+    this.log(
+      `thread ${session.slice(0, 8)}: stay on ${account} (fallback: choosing failed or took too long)`,
+    );
+    return {
+      identity,
+      env,
+      decision: {
+        identity,
+        account,
+        action: "stay",
+        reason: "fallback",
+        writes: [],
+        session,
+        forced: false,
+      },
+      commit: NOTHING,
+    };
+  }
+
+  /** Where a query opens: the account, its environment, and the ids it opens with. Writes nothing. */
   async route(input: RouteInput): Promise<Route> {
     const { paths, ledger } = this.options;
     const now = this.now();
@@ -171,6 +224,7 @@ export class ThreadRouter {
         env: defined(input.env),
         decision: undefined,
         untouched: `${override} is set`,
+        commit: NOTHING,
       };
     }
     const own =
@@ -178,13 +232,15 @@ export class ThreadRouter {
         ? undefined
         : store.appThreads[input.parentThreadId]?.account;
     const { candidates, ceiling } = await this.candidates(input.model, own);
-    // No account to run on (nobody is signed in anywhere): the choice is Claude Code's.
-    if (candidates.length === 0) {
+    // No account to start a new thread on (nobody is signed in anywhere): the choice is Claude Code's. A resumed
+    // thread is still decided: it never opens untouched with an id another account has seen.
+    if (candidates.length === 0 && input.identity.resume === undefined) {
       return {
         identity: await translated,
         env: defined(input.env),
         decision: undefined,
         untouched: "no signed-in account",
+        commit: NOTHING,
       };
     }
     const identity = input.identity;
@@ -219,6 +275,7 @@ export class ThreadRouter {
         transcript: transcript ?? { lastAssistantAt: undefined, justCompacted: false },
         now,
         isFull: (a) => this.isFull(a),
+        troubled: (a) => this.isTroubled(a),
         newSessionId: this.options.newSessionId,
         choose: input.delegated ? (list) => pick(list, ceiling) : pickForThread,
       },
@@ -231,24 +288,23 @@ export class ThreadRouter {
             decision.identity.resume,
             projects,
           )) ?? decision.identity.resumeSessionAt);
-    await this.apply(decision.writes, now);
-    await ledger.setAppThreadAccount(input.threadId, decision.account, now);
     const label = (resume ?? decision.session).slice(0, 8) || input.threadId.slice(0, 8);
-    this.log(`thread ${label}: ${decision.action} on ${decision.account} (${decision.reason})`);
     const notice =
-      decision.forced && decision.from !== undefined
-        ? moveNotice({
-            from: decision.from,
-            to: decision.account,
-            why: candidates.some((c) => c.id === decision.from) ? "full" : "gone",
-          })
+      decision.forcedBy !== undefined && decision.from !== undefined
+        ? moveNotice({ from: decision.from, to: decision.account, why: decision.forcedBy })
         : undefined;
+    const env = await runEnvironment(paths, decision.account, input.env);
     return {
+      commit: async () => {
+        await this.apply(decision.writes, now);
+        await ledger.setAppThreadAccount(input.threadId, decision.account, now);
+        this.log(`thread ${label}: ${decision.action} on ${decision.account} (${decision.reason})`);
+      },
       identity: {
         ...decision.identity,
         ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
       },
-      env: await runEnvironment(paths, decision.account, input.env),
+      env,
       decision,
       ...(notice === undefined ? {} : { notice }),
     };
@@ -314,6 +370,11 @@ export class ThreadRouter {
 
   /** T3 forked a conversation itself (a file copy, no request): the fork starts on its source's account. */
   async recordFork(source: string, forked: string): Promise<void> {
+    // A fork that wrote nothing is no conversation to place.
+    if ((await findTranscript(forked, sharedProjects(this.options.paths))) === undefined) {
+      this.log(`fork ${forked.slice(0, 8)} of ${source.slice(0, 8)}: no transcript, not recorded`);
+      return;
+    }
     const store = await this.options.ledger.read();
     const current = currentSessionIn(store, source);
     await this.options.ledger.record({
@@ -330,11 +391,13 @@ export class ThreadRouter {
     account: string,
     model: string | undefined,
     delegated: boolean,
-  ): Promise<string> {
+  ): Promise<{ readonly notice: string; readonly to: string | undefined }> {
     const { candidates, ceiling } = await this.candidates(model);
-    const others = candidates.filter((c) => c.id !== account);
+    const others = candidates.filter(
+      (c) => c.id !== account && !this.isTroubled(c.id) && !this.isFull(c.id),
+    );
     const next = delegated ? pick(others, ceiling) : pickForThread(others);
-    return moveNotice({ from: account, to: next?.id, why: "limit" });
+    return { notice: moveNotice({ from: account, to: next?.id, why: "limit" }), to: next?.id };
   }
 }
 

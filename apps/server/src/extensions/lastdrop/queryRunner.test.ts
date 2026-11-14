@@ -14,6 +14,9 @@ import {
 import { ThreadId } from "@t3tools/contracts";
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -22,7 +25,7 @@ import type {
   ClaudeAgentSdkQueryRunnerShape,
   ClaudeAgentSdkQuerySession,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
+import { type QueryRouter, type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
 
 const MIN = 60_000;
 /** A transcript line's timestamp (plain data, written as Claude Code writes it). */
@@ -189,14 +192,20 @@ const wrap = (
   w: World,
   fake: Fake,
   lineage: (threadId: string) => ThreadLineage = () => ({ delegated: false }),
+  extra: {
+    readonly router?: QueryRouter;
+    readonly deadlineMs?: number;
+    readonly sleep?: (ms: number) => Effect.Effect<void>;
+  } = {},
 ) => {
   const waits: number[] = [];
   const runner = wrapQueryRunner(fake.runner, {
-    router: w.router,
+    router: extra.router ?? w.router,
     lineage: (id) => Effect.succeed(lineage(id)),
     hostEnvironment: { PATH: "/bin" },
-    sleep: (ms) => Effect.sync(() => void waits.push(ms)),
+    sleep: extra.sleep ?? ((ms) => Effect.sync(() => void waits.push(ms))),
     random: Effect.succeed(0),
+    ...(extra.deadlineMs === undefined ? {} : { deadlineMs: extra.deadlineMs }),
   });
   return { runner, waits };
 };
@@ -334,7 +343,8 @@ describe("the query-runner wrapper (replays)", () => {
           env(fake.opened[0]!)["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
           claudeFolder(w.t.paths, "Pro"),
         );
-        // T3's own fork of the thread, up to that message.
+        // T3's own fork of the thread, up to that message (the SDK writes the fork's transcript).
+        w.t.write(`${projects}/p/forked-by-t3.jsonl`, line({ type: "user", uuid: "f1" }));
         yield* runner.forkSession({
           sessionId: "X",
           options: { upToMessageId: "x2" },
@@ -499,6 +509,189 @@ describe("the query-runner wrapper (replays)", () => {
         const input = openInput("thread-1", { sessionId: "X" }, { ANTHROPIC_API_KEY: "sk-x" });
         yield* drain(yield* runner.open(input));
         assert.deepEqual(opts(fake.opened[0]!), opts(input));
+      }),
+    ),
+  );
+
+  // Review fixes: the open never runs another account's id on Main, and late routes never write.
+  const recordOnPro = (w: World) =>
+    Effect.promise(async () => {
+      await w.ledger.record({ session: "B1", account: "Pro", at: w.now });
+      w.t.write(
+        `${w.t.paths.sharedClaude}/projects/p/B1.jsonl`,
+        line({ type: "assistant", uuid: "b", timestamp: iso(w.now - MIN) }),
+      );
+    });
+
+  it.effect("a route that throws opens the thread on its recorded account, never Main", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        yield* recordOnPro(w);
+        const throwing: QueryRouter = Object.assign(Object.create(w.router), {
+          route: () => Promise.reject(new Error("boom")),
+        });
+        const fake = fakeRunner(() => [[init(), result()]]);
+        const { runner } = wrap(w, fake, undefined, { router: throwing });
+        yield* drain(yield* runner.open(openInput("thread-1", { resume: "B1" })));
+        assert.equal(opts(fake.opened[0]!)["resume"], "B1");
+        assert.isUndefined(opts(fake.opened[0]!)["forkSession"]);
+        assert.equal(
+          env(fake.opened[0]!)["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
+          claudeFolder(w.t.paths, "Pro"),
+        );
+      }),
+    ),
+  );
+
+  it.effect("a route past the deadline is dropped and never writes the ledger afterwards", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        yield* recordOnPro(w);
+        let lateCommits = 0;
+        const asked = yield* Deferred.make<void>();
+        let finish: () => void = () => {};
+        const late = new Promise<void>((resolve) => (finish = resolve));
+        const slow: QueryRouter = Object.assign(Object.create(w.router), {
+          route: async (input: Parameters<QueryRouter["route"]>[0]) => {
+            Deferred.doneUnsafe(asked, Effect.void);
+            await late;
+            const route = await w.router.route(input);
+            return { ...route, commit: async () => void (lateCommits += 1) };
+          },
+        });
+        const fake = fakeRunner(() => [[init(), result()]]);
+        const { runner } = wrap(w, fake, undefined, { router: slow, deadlineMs: 3000 });
+        const before = yield* Effect.promise(() => w.ledger.read());
+        const opening = yield* Effect.forkChild(
+          runner.open(openInput("thread-1", { resume: "B1" })),
+        );
+        yield* Deferred.await(asked);
+        yield* TestClock.adjust("4 seconds");
+        yield* drain(yield* Fiber.join(opening));
+        // The late route comes back now: it is never committed.
+        finish();
+        yield* Effect.promise(() => late);
+        yield* Effect.yieldNow;
+        assert.equal(lateCommits, 0);
+        assert.deepEqual(yield* Effect.promise(() => w.ledger.read()), before);
+        // The thread opened on its own account.
+        assert.equal(opts(fake.opened[0]!)["resume"], "B1");
+        assert.equal(
+          env(fake.opened[0]!)["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
+          claudeFolder(w.t.paths, "Pro"),
+        );
+      }),
+    ),
+  );
+
+  it.effect("with no route and no readable ledger, the open is refused with a clear error", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        w.t.write(`${w.t.paths.dataDir}/sessions.json`, "{broken");
+        const fake = fakeRunner(() => [[init(), result()]]);
+        const { runner } = wrap(w, fake);
+        const exit = yield* runner.open(openInput("thread-1", { resume: "B1" })).pipe(Effect.exit);
+        assert.equal(exit._tag, "Failure");
+        assert.include(String(exit), "couldn't open this thread on its Claude account");
+        assert.lengthOf(fake.opened, 0);
+      }),
+    ),
+  );
+
+  it.effect("a limit with nowhere to move keeps the query open, as plain T3 does", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        w.router.markFull("Pro");
+        w.router.markFull("main");
+        const limited = result({
+          is_error: true,
+          result: "You've hit your session limit",
+          api_error_status: 429,
+        });
+        const fake = fakeRunner(() => [[init(), limited]]);
+        const { runner } = wrap(w, fake);
+        const messages = yield* drain(
+          yield* runner.open(openInput("thread-1", { sessionId: "X" })),
+        );
+        assert.equal(fake.closed, 0);
+        const last = messages.at(-1) as unknown as { type: string; errors?: string[] };
+        assert.equal(last.type, "result");
+        assert.isUndefined(last.errors);
+        assert.isTrue(
+          messages.some(
+            (m) =>
+              (m as { content?: string }).content?.includes("no other account has room") === true,
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("notices get random ids: a restart never repeats a turn item id", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        const limited = () =>
+          result({
+            is_error: true,
+            result: "You've hit your session limit",
+            api_error_status: 429,
+          });
+        const ids: string[] = [];
+        for (let i = 0; i < 2; i++) {
+          // A new wrapper each time: as after a server restart.
+          const fake = fakeRunner(() => [[init(), limited()]]);
+          const { runner } = wrap(w, fake);
+          const messages = yield* drain(
+            yield* runner.open(openInput(`thread-${i}`, { sessionId: `S${i}` })),
+          );
+          for (const m of messages)
+            if ((m as { subtype?: string }).subtype === "informational") ids.push(m.uuid!);
+        }
+        assert.lengthOf(ids, 2);
+        assert.notEqual(ids[0], ids[1]);
+        assert.match(ids[0]!, /^[0-9a-f-]{36}$/u);
+      }),
+    ),
+  );
+
+  it.effect("closing during a retry wait lets the held result through at once", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        const failed = result({
+          is_error: true,
+          result: "API Error: 503 credential validation failed",
+          api_error_status: 503,
+        });
+        const fake = fakeRunner(() => [[init(), failed]]);
+        const waiting = yield* Deferred.make<void>();
+        const { runner } = wrap(w, fake, undefined, {
+          sleep: () => Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never)),
+        });
+        const session = yield* runner.open(openInput("thread-1", { sessionId: "X" }));
+        const fiber = yield* Effect.forkChild(drain(session));
+        yield* Deferred.await(waiting);
+        yield* session.close;
+        const messages = yield* Fiber.join(fiber);
+        assert.equal(messages.at(-1)?.type, "result");
+        assert.isTrue((messages.at(-1) as unknown as { is_error: boolean }).is_error);
+      }),
+    ),
+  );
+
+  it.effect("a notice is delivered even when the stream ends before any answer", () =>
+    withWorld((w) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await w.ledger.record({ session: "G", account: "Gone", at: w.now });
+        });
+        const fake = fakeRunner(() => [[init()]]);
+        const { runner } = wrap(w, fake);
+        const messages = yield* drain(yield* runner.open(openInput("thread-1", { resume: "G" })));
+        assert.isTrue(
+          messages.some(
+            (m) => (m as { content?: string }).content?.includes("no longer signed in") === true,
+          ),
+        );
       }),
     ),
   );

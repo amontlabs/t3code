@@ -81,6 +81,8 @@ export interface ThreadDecision {
   readonly session: string;
   /** It left an account that was full, removed or signed out: the user is told, never silently. */
   readonly forced: boolean;
+  /** Why it had to leave, for a forced move: the notice says exactly this. */
+  readonly forcedBy?: "full" | "gone" | undefined;
   /** The account it left, for a move. */
   readonly from?: string | undefined;
 }
@@ -92,6 +94,11 @@ export interface DecideInput {
   readonly now: number;
   /** A recent "limit reached" answer (Swift's `AgentRegistry.isFull`). */
   readonly isFull?: (account: string) => boolean;
+  /**
+   * Its passing errors outlasted every retry a moment ago. Not gone: a warm thread stays there (and shows the
+   * error); it is only never a destination.
+   */
+  readonly troubled?: (account: string) => boolean;
   readonly newSessionId: () => string;
   /**
    * Where new work goes: `pickForThread` for a main thread; a delegated child passes `pick` with its
@@ -109,7 +116,11 @@ export function isKnownFull(c: Candidate, isFull: (account: string) => boolean):
 export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDecision {
   const { ledger, candidates, transcript, now } = input;
   const isFull = input.isFull ?? (() => false);
-  const choose = input.choose ?? pickForThread;
+  const troubled = input.troubled ?? (() => false);
+  const pickFrom = input.choose ?? pickForThread;
+  // Troubled accounts are never where work goes, unless nothing else is left.
+  const choose = (list: ReadonlyArray<Candidate>) =>
+    pickFrom(list.filter((c) => !troubled(c.id))) ?? pickFrom(list);
   // Nothing to continue: a new thread. It starts on the roomiest account; main is the floor when no
   // account can be trusted with it.
   if (open.resume === undefined) {
@@ -154,9 +165,6 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
     session: current,
     forced: false,
   });
-  // `resumeSessionAt` names a message of the current conversation's lineage: another account's fork would
-  // carry it under another id, so a rewind never moves.
-  if (open.resumeSessionAt !== undefined) return stay("resume-session-at");
   const activity = lastActivityAt(transcript);
   const warm = activity !== undefined && now - activity < WARM_AFTER_MS;
   const free = !warm || transcript.justCompacted;
@@ -165,7 +173,12 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
   // leaves it even when warm. Only a KNOWN limit counts as full; an unreadable account stays while warm.
   const gone = candidate === undefined;
   const full = candidate !== undefined && isKnownFull(candidate, isFull);
-  if (!free && !gone && !full) return stay("warm");
+  // A rewind (`resumeSessionAt`) moves only when it can't stay: T3 keeps the rewound head pinned until a turn
+  // completes, so a rewind at a limit would otherwise never leave. Claude Code's fork keeps message ids, so
+  // the rewind's message is found in the fork under the same id.
+  if (open.resumeSessionAt !== undefined && !gone && !full) return stay("resume-session-at");
+  if (!free && !gone && !full)
+    return stay(troubled(onCurrent) ? "warm (its API is failing)" : "warm");
   // Moving costs a full re-read: only toward known room, unless it can't stay where it is.
   const picked = choose(candidates.filter((c) => !(full && c.id === onCurrent)));
   const known =
@@ -194,6 +207,7 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
     ],
     session: moved,
     forced: gone || full,
+    ...(gone ? { forcedBy: "gone" as const } : full ? { forcedBy: "full" as const } : {}),
     from: onCurrent,
   };
 }

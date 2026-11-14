@@ -125,4 +125,54 @@ describe("the wrapper's contract with T3's Claude adapter", () => {
     assert.include(adapter, "queryRunner.forkSession({");
     assert.include(adapter, ".subagentLaunchToolUseId({");
   });
+
+  it("a notice's uuid is its turn item's id, so it must be unique", () => {
+    const adapter = source("../../orchestration-v2/Adapters/ClaudeAdapterV2.ts");
+    assert.match(
+      adapter,
+      /message\.subtype === "informational" && message\.level !== "info"[\s\S]{0,900}const nativeItemId = message\.uuid;[\s\S]{0,300}turnItemFromProviderItem\(/u,
+    );
+    const ids = source("../../../../../packages/provider-core/src/server/IdAllocator.ts");
+    assert.match(ids, /turnItemFromProviderItem: \(input\) =>/u);
+  });
+
+  it("a rewind's head stays pinned until a turn completes or writes (so a forced move must carry it)", () => {
+    const adapter = source("../../orchestration-v2/Adapters/ClaudeAdapterV2.ts");
+    assert.include(
+      adapter,
+      '(input.status === "completed" || input.context.nativeMessageCursor !== null) &&',
+    );
+    assert.include(
+      adapter,
+      "...(clearConversationHead ? { nativeConversationHeadRef: null } : {}),",
+    );
+    // ...and every open after a rollback passes it as `resumeSessionAt`.
+    assert.include(
+      adapter,
+      "const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);",
+    );
+  });
+
+  it("a stream that ends after its result frees the thread for a new query", () => {
+    const adapter = source("../../orchestration-v2/Adapters/ClaudeAdapterV2.ts");
+    // The query that ended gives up the live slot; the next turn opens a new one (through the wrapper).
+    assert.include(adapter, "current?.query === querySession ? [true, null] : [false, current]");
+    assert.include(adapter, "yield* finalizeActiveTurnAfterQueryExit(");
+  });
+
+  it("the SDK takes `sessionId` beside `resume` once `forkSession` is set", () => {
+    const sdk = NodeFS.readFileSync(
+      NodePath.join(here, "../../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts"),
+      "utf8",
+    );
+    assert.include(sdk, "Cannot be used with `continue` or `resume` unless");
+    assert.include(
+      sdk,
+      "`forkSession` is also set (to specify a custom ID for the forked session).",
+    );
+    assert.match(sdk, /forkSession\?: boolean;/u);
+    assert.match(sdk, /resumeSessionAt\?: string;/u);
+    // That the fork keeps message uuids (so a rewind's id stays valid after a move) is Claude Code's behaviour,
+    // checked live (docs/lastdrop/claude-routing.md, "Checked live"), not pinnable here.
+  });
 });

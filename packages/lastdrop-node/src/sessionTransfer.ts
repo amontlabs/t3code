@@ -23,12 +23,21 @@ export const TAIL_BYTES = 512 * 1024;
 /** How far back an answer is looked for at most. */
 export const MAX_TAIL_BYTES = 8 * 1024 * 1024;
 
+/** Where each session's transcript was found last: a hit is checked, never trusted blindly. */
+const found = new Map<string, string>();
+
 /** The session's transcript under `projects`, whatever the project folder. */
 export async function findTranscript(
   session: string,
   projects: string,
 ): Promise<string | undefined> {
   if (session === "") return undefined;
+  const key = `${projects}\0${session}`;
+  const known = found.get(key);
+  if (known !== undefined) {
+    if (await exists(known)) return known;
+    found.delete(key);
+  }
   let names: string[];
   try {
     names = await NodeFSP.readdir(projects);
@@ -37,17 +46,34 @@ export async function findTranscript(
   }
   for (const name of names) {
     const file = `${projects}/${name}/${session}.jsonl`;
-    if (await exists(file)) return file;
+    if (await exists(file)) {
+      if (found.size > 5000) found.clear();
+      found.set(key, file);
+      return file;
+    }
   }
   return undefined;
 }
 
-/** Whether the session's transcript has a line yet (a fresh id may have none, or only metadata). */
+/** A line of the conversation itself (a prompt or an answer), not metadata. */
+export function isConversationLine(line: string): boolean {
+  if (!line.includes('"type"')) return false;
+  try {
+    const type = (JSON.parse(line) as { type?: unknown }).type;
+    return type === "user" || type === "assistant";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the session's transcript holds a conversation line yet. A fresh id may have no file, or only
+ * metadata from a first open that failed: neither has been answered on any account.
+ */
 export async function hasTranscriptLines(session: string, projects: string): Promise<boolean> {
   const file = await findTranscript(session, projects);
-  if (!file) return false;
-  const stat = await NodeFSP.stat(file).catch(() => undefined);
-  return (stat?.size ?? 0) > 0;
+  const text = file === undefined ? undefined : await readText(file);
+  return text !== undefined && text.split("\n").some(isConversationLine);
 }
 
 async function tail(file: string, bytes: number): Promise<{ text: string; whole: boolean }> {
@@ -70,9 +96,26 @@ async function tail(file: string, bytes: number): Promise<{ text: string; whole:
  * after the last answer can fill the whole tail: it reads further back, in growing chunks, until an answer
  * shows up or the limit (or the file's start) is reached.
  */
+const tails = new Map<string, { size: number; mtimeMs: number; transcript: Transcript }>();
+
 export async function conversationTail(session: string, projects: string): Promise<Transcript> {
   const file = await findTranscript(session, projects);
   if (!file) return COLD;
+  // Unchanged since the last read: the same answer, without reading megabytes again.
+  const stat = await NodeFSP.stat(file).catch(() => undefined);
+  const cached = tails.get(file);
+  if (stat && cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    return cached.transcript;
+  }
+  const transcript = await readTail(file);
+  if (stat) {
+    if (tails.size > 1000) tails.clear();
+    tails.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, transcript });
+  }
+  return transcript;
+}
+
+async function readTail(file: string): Promise<Transcript> {
   let bytes = TAIL_BYTES;
   for (;;) {
     let read: { text: string; whole: boolean };

@@ -332,6 +332,102 @@ describe("a conversation that was never written", () => {
   });
 });
 
+describe("review fixes: troubled accounts and rewinds at a limit", () => {
+  const troubledA = (a: string) => a === "A";
+
+  it("a warm thread on a troubled account stays (troubled is not gone)", () => {
+    const d = decideThread(
+      { resume: "X" },
+      {
+        ledger: ledger({}, { X: "A" }),
+        candidates: [candidate("A", 10, 10), candidate("B", 0, 0)],
+        transcript: transcript(5 * MIN),
+        now,
+        newSessionId: () => "n",
+        troubled: troubledA,
+      },
+    );
+    expect(d.action).toBe("stay");
+    expect(d.account).toBe("A");
+    expect(d.forced).toBe(false);
+    expect(d.reason).toContain("failing");
+  });
+
+  it("a troubled account is never a destination while another has room", () => {
+    const fresh = decideThread(
+      { sessionId: "N" },
+      {
+        ledger: ledger(),
+        candidates: [candidate("A", 0, 0), candidate("B", 50, 50)],
+        transcript: COLD,
+        now,
+        newSessionId: () => "n",
+        troubled: troubledA,
+      },
+    );
+    expect(fresh.account).toBe("B");
+    // A cold thread on it moves, silently: moving costs nothing.
+    const cold = decideThread(
+      { resume: "X" },
+      {
+        ledger: ledger({}, { X: "A" }),
+        candidates: [candidate("A", 0, 0), candidate("B", 50, 50)],
+        transcript: transcript(2 * HOUR),
+        now,
+        newSessionId: () => "n",
+        troubled: troubledA,
+      },
+    );
+    expect(cold.action).toBe("move");
+    expect(cold.account).toBe("B");
+    expect(cold.forced).toBe(false);
+  });
+
+  it("every account troubled: a thread stays on its own account", () => {
+    const d = decideThread(
+      { resume: "X" },
+      {
+        ledger: ledger({}, { X: "B" }),
+        candidates: [candidate("A", 0, 0), candidate("B", 10, 10)],
+        transcript: transcript(5 * MIN),
+        now,
+        newSessionId: () => "n",
+        troubled: () => true,
+      },
+    );
+    expect(d.action).toBe("stay");
+    expect(d.account).toBe("B");
+  });
+
+  it("a rewound thread at a limit moves, keeping the rewind's message id", () => {
+    const d = decide(
+      { resume: "X", resumeSessionAt: "msg-1" },
+      {
+        sessions: { X: "A" },
+        candidates: [candidate("A", 100, 50), candidate("B", 10, 10)],
+        transcript: transcript(5 * MIN),
+      },
+    );
+    expect(d.action).toBe("move");
+    expect(d.account).toBe("B");
+    expect(d.identity).toEqual({
+      resume: "X",
+      resumeSessionAt: "msg-1",
+      forkSession: true,
+      sessionId: "moved-1",
+    });
+    expect(d.forcedBy).toBe("full");
+  });
+
+  it("a forced move says why: full or gone", () => {
+    const gone = decide(
+      { resume: "X" },
+      { sessions: { X: "Gone" }, candidates: [candidate("B", 0, 0)], transcript: transcript(MIN) },
+    );
+    expect(gone.forcedBy).toBe("gone");
+  });
+});
+
 describe("T3's own fork", () => {
   it("a T3 fork picks a fresh account and records its session", () => {
     const open = { resume: "X", forkSession: true, sessionId: "M" };

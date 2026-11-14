@@ -28,16 +28,17 @@ import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import type {
-  ClaudeAgentSdkQueryOpenInput,
+import {
+  type ClaudeAgentSdkQueryOpenInput,
   ClaudeAgentSdkQueryRunnerError,
-  ClaudeAgentSdkQueryRunnerShape,
-  ClaudeAgentSdkQuerySession,
+  type ClaudeAgentSdkQueryRunnerShape,
+  type ClaudeAgentSdkQuerySession,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 
 /** The router's surface the wrapper uses (lastdrop-node's `ThreadRouter`; tests may stand in another). */
 export interface QueryRouter {
   route(input: RouteInput): Promise<Route>;
+  recorded(input: Pick<RouteInput, "identity" | "env">): Promise<Route>;
   currentSession(session: string): Promise<string>;
   messageId(session: string, uuid: string): Promise<{ session: string; uuid: string }>;
   lineage(session: string): Promise<ReadonlyArray<string>>;
@@ -45,7 +46,11 @@ export interface QueryRouter {
   markFull(account: string): void;
   markTroubled(account: string): void;
   signInWorks(account: string): Promise<boolean>;
-  limitNotice(account: string, model: string | undefined, delegated: boolean): Promise<string>;
+  limitNotice(
+    account: string,
+    model: string | undefined,
+    delegated: boolean,
+  ): Promise<{ readonly notice: string; readonly to: string | undefined }>;
 }
 
 /** Where a thread sits in T3's projection: a delegated child picks with the subagents' rule. */
@@ -102,16 +107,18 @@ export function withIdentity(
   return rest as unknown as ClaudeAgentSdkQueryOpenInput["options"];
 }
 
-let noticeCount = 0;
-/** A notice the adapter shows in the thread (`system_notice` turn item: an `informational` notice). */
+/**
+ * A notice the adapter shows in the thread (`system_notice` turn item: an `informational` notice). Its uuid
+ * becomes the turn item's id, so it is random: a counter would repeat after a restart.
+ */
 function noticeMessage(content: string, sessionId: string): SDKMessage {
-  noticeCount += 1;
   return {
     type: "system",
     subtype: "informational",
     level: "notice",
     content,
-    uuid: `00000000-1a57-4d70-8000-${noticeCount.toString(16).padStart(12, "0")}`,
+    // @effect-diagnostics-next-line cryptoRandomUUID:off - a message id built in plain code, like the SDK's own.
+    uuid: globalThis.crypto.randomUUID(),
     session_id: sessionId,
   } as unknown as SDKSystemMessage;
 }
@@ -161,19 +168,17 @@ export function wrapQueryRunner(
   const io = <A>(run: () => Promise<A>) =>
     Effect.tryPromise({ try: run, catch: (cause) => new LastdropRoutingError({ cause }) });
 
-  /** Only the ids, when choosing failed or took too long: the thread opens where it was. */
-  const fallback = Effect.fn("LastdropQueryRunner.fallback")(
-    function* (identity: ThreadIdentity) {
-      if (identity.resume === undefined) return identity;
-      const at = identity.resumeSessionAt;
-      if (at !== undefined) {
-        const moved = yield* io(() => router.messageId(identity.resume!, at));
-        return { ...identity, resume: moved.session, resumeSessionAt: moved.uuid };
-      }
-      return { ...identity, resume: yield* io(() => router.currentSession(identity.resume!)) };
-    },
-    (effect, identity) => effect.pipe(Effect.orElseSucceed(() => identity)),
-  );
+  const deadline = Duration.millis(options.deadlineMs ?? 3000);
+  /** Refuses the open: never Main's sign-in with an id another account has seen. */
+  const refuse = (threadId: string, why: string) =>
+    Effect.fail(
+      new ClaudeAgentSdkQueryRunnerError({
+        method: "open",
+        cause: new Error(
+          `lastdrop couldn't open this thread on its Claude account (${why}). Send the message again; if it keeps failing, check ~/.t3/lastdrop/lastdrop.log.`,
+        ),
+      }),
+    ).pipe(Effect.tap(() => Effect.sync(() => log(`thread ${threadId}: open refused (${why})`))));
 
   const watch = (
     session: ClaudeAgentSdkQuerySession,
@@ -193,6 +198,10 @@ export function wrapQueryRunner(
     const closeOnce = Effect.suspend(() => {
       if (closed) return Effect.void;
       closed = true;
+      // A retry waiting: its held result goes to T3 now, so the stream never waits out the timer.
+      const held = machine.release();
+      if (held !== undefined && released !== undefined)
+        Deferred.doneUnsafe(released, Effect.succeed(held));
       return session.close;
     });
 
@@ -232,15 +241,24 @@ export function wrapQueryRunner(
       rejected = false;
       if (accountLimit) {
         router.markFull(account);
-        const notice = yield* io(() =>
+        const { notice, to } = yield* io(() =>
           router.limitNotice(account, input.model, input.delegated),
         ).pipe(
-          Effect.orElseSucceed(
-            () => `lastdrop: Claude account ${account} reached its usage limit.`,
-          ),
+          Effect.orElseSucceed(() => ({
+            notice: `lastdrop: Claude account ${account} reached its usage limit.`,
+            to: undefined,
+          })),
         );
+        if (to === undefined) {
+          // Nowhere to move: T3's own handling (the session stays open, background work keeps running).
+          log(`thread ${label} on ${account}: usage limit, and no other account has room`);
+          return {
+            emit: [...lead, noticeMessage(notice, message.session_id), message],
+            end: false,
+          };
+        }
         log(
-          `thread ${label} on ${account}: usage limit; ending the query so the next message moves`,
+          `thread ${label} on ${account}: usage limit; ending the query so the next message moves to ${to}`,
         );
         return {
           emit: [...lead, noticeMessage(notice, message.session_id), withNotice(message, notice)],
@@ -302,7 +320,12 @@ export function wrapQueryRunner(
       Stream.concat(
         Stream.suspend(() => {
           const held = machine.release();
-          return held === undefined ? Stream.empty : Stream.make(held);
+          // A notice still waiting for an answer goes out before the stream ends.
+          const out: SDKMessage[] = [];
+          if (pendingNotice !== undefined) out.push(noticeMessage(pendingNotice, ""));
+          pendingNotice = undefined;
+          if (held !== undefined) out.push(held);
+          return Stream.fromIterable(out);
         }),
       ),
       Stream.ensuring(Effect.suspend(() => (ended ? closeOnce.pipe(Effect.ignore) : Effect.void))),
@@ -327,36 +350,57 @@ export function wrapQueryRunner(
         Record<string, string | undefined>
       >;
       const model = typeof input.options.model === "string" ? input.options.model : undefined;
-      const routed = yield* io(() =>
-        router.route({
-          threadId: input.threadId,
-          identity,
-          model,
-          env,
-          delegated: lineage.delegated,
-          parentThreadId: lineage.parentThreadId,
-        }),
-      ).pipe(
-        Effect.timeoutOption(Duration.millis(options.deadlineMs ?? 3000)),
+      const routeInput = {
+        threadId: input.threadId,
+        identity,
+        model,
+        env,
+        delegated: lineage.delegated,
+        parentThreadId: lineage.parentThreadId,
+      };
+      // A route that comes back too late is dropped unused: it wrote nothing, and never will.
+      const routed = yield* io(() => router.route(routeInput)).pipe(
+        Effect.timeoutOption(deadline),
         Effect.map((o) => (o._tag === "Some" ? o.value : undefined)),
         Effect.catchCause((cause) =>
           Effect.sync(() => {
-            log(
-              `thread ${input.threadId}: choosing an account failed (${String(cause)}); opening where it was`,
-            );
+            log(`thread ${input.threadId}: choosing an account failed (${String(cause)})`);
             return undefined;
           }),
         ),
       );
-      const route: Route | undefined = routed;
-      const opened: ThreadIdentity =
-        route === undefined ? yield* fallback(identity) : route.identity;
+      let route: Route;
+      if (routed !== undefined) {
+        // The route's ledger writes, before the query opens: a thread opened on B is recorded on B.
+        const committed = yield* io(routed.commit).pipe(
+          Effect.timeoutOption(deadline),
+          Effect.map((o) => o._tag === "Some"),
+          Effect.orElseSucceed(() => false),
+        );
+        if (!committed)
+          return yield* refuse(input.threadId, "its session ledger couldn't be written");
+        route = routed;
+      } else {
+        // Stay where the thread was recorded, or don't open at all.
+        const recorded = yield* io(() => router.recorded({ identity, env })).pipe(
+          Effect.timeoutOption(deadline),
+          Effect.map((o) => (o._tag === "Some" ? o.value : undefined)),
+          Effect.orElseSucceed(() => undefined),
+        );
+        if (recorded === undefined) {
+          return yield* refuse(
+            input.threadId,
+            "choosing its account failed and its recorded account couldn't be read",
+          );
+        }
+        route = recorded;
+      }
       const session = yield* inner.open({
         ...input,
         options: withIdentity(
           input.options,
-          opened,
-          route?.decision === undefined ? undefined : route.env,
+          route.identity,
+          route.decision === undefined ? undefined : route.env,
         ),
       });
       return watch(session, route, { model, delegated: lineage.delegated });

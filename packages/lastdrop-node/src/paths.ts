@@ -19,22 +19,31 @@ export interface LastdropPaths {
   readonly sharedConfig: string;
   /** `/usr/bin/security`; tests pass a fake. */
   readonly security: string;
+  /**
+   * Where accounts' profiles are built: `<folder>/profile` when unset (the standalone app's place). A live
+   * check in a throwaway home sets it, so an account's real sign-in folder is only read.
+   */
+  readonly profiles?: string | undefined;
 }
 
 export function lastdropPaths(input: {
   readonly home: string;
   readonly dataDir: string;
   readonly security?: string;
+  readonly profiles?: string | undefined;
+  /** The sign-in folders' parent; `<home>/.claude-accounts` when unset. */
+  readonly claudeFolders?: string | undefined;
 }): LastdropPaths {
   const { home } = input;
   return {
     home,
     swiftSupport: `${home}/Library/Application Support/lastdrop`,
     dataDir: input.dataDir,
-    claudeFolders: `${home}/.claude-accounts`,
+    claudeFolders: input.claudeFolders ?? `${home}/.claude-accounts`,
     sharedClaude: `${home}/.claude`,
     sharedConfig: `${home}/.claude.json`,
     security: input.security ?? "/usr/bin/security",
+    ...(input.profiles === undefined ? {} : { profiles: input.profiles }),
   };
 }
 
@@ -55,5 +64,9 @@ export const claudeFolder = (p: LastdropPaths, key: string): string | undefined 
   key === "main" ? undefined : `${p.claudeFolders}/${key}`;
 
 /** The profile of a sign-in folder (`<folder>/profile`), for `CLAUDE_CONFIG_DIR`. */
-export const profileDirectory = (folder: string) => `${folder}/profile`;
-export const profileConfigFile = (folder: string) => `${profileDirectory(folder)}/.claude.json`;
+export const profileDirectory = (folder: string, p?: Pick<LastdropPaths, "profiles">) =>
+  p?.profiles === undefined
+    ? `${folder}/profile`
+    : `${p.profiles}/${folder.slice(folder.lastIndexOf("/") + 1)}`;
+export const profileConfigFile = (folder: string, p?: Pick<LastdropPaths, "profiles">) =>
+  `${profileDirectory(folder, p)}/.claude.json`;

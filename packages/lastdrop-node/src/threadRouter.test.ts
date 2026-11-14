@@ -56,7 +56,18 @@ beforeEach(() => {
 });
 afterEach(() => t.remove());
 
-const route = (identity: Record<string, string | boolean>, extra: Record<string, unknown> = {}) =>
+const route = async (
+  identity: Record<string, string | boolean>,
+  extra: Record<string, unknown> = {},
+) => {
+  const r = await routeOnly(identity, extra);
+  await r.commit();
+  return r;
+};
+const routeOnly = (
+  identity: Record<string, string | boolean>,
+  extra: Record<string, unknown> = {},
+) =>
   router.route({
     threadId: "thread-1",
     identity,
@@ -163,8 +174,9 @@ describe("the thread router", () => {
     expect(r.decision?.action).toBe("move");
     expect(r.decision?.account).toBe("Pro");
     expect(r.notice).toContain("Ultra is at its usage limit");
+    expect(r.decision?.forcedBy).toBe("full");
     expect(r.notice).toContain("Pro");
-    expect(await router.limitNotice("Ultra", "claude-haiku-5-5", false)).toContain(
+    expect((await router.limitNotice("Ultra", "claude-haiku-5-5", false)).notice).toContain(
       "on Claude account Pro",
     );
   });
@@ -182,13 +194,87 @@ describe("the thread router", () => {
   it("an account whose retries were spent is left alone for a while", async () => {
     router.markTroubled("Ultra");
     expect((await route({ sessionId: "X" })).decision?.account).toBe("Pro");
+    // Troubled is not gone: a warm thread there stays, and is told nothing false.
+    await ledger.record({ session: "W", account: "Ultra", at });
+    t.write(
+      `${shared()}/proj/W.jsonl`,
+      line({ type: "assistant", uuid: "w", timestamp: stamp(at - MIN) }),
+    );
+    const warm = await route({ resume: "W" });
+    expect(warm.decision?.action).toBe("stay");
+    expect(warm.decision?.account).toBe("Ultra");
+    expect(warm.notice).toBeUndefined();
     at += 11 * MIN;
     expect((await route({ sessionId: "Y" })).decision?.account).toBe("Ultra");
   });
 
   it("T3's own fork starts on its source's account", async () => {
     await ledger.record({ session: "X", account: "Pro", at });
+    t.write(`${shared()}/proj/F.jsonl`, line({ type: "user", uuid: "f" }));
     await router.recordFork("X", "F");
     expect((await ledger.read()).sessions["F"]).toMatchObject({ account: "Pro", from: "X" });
+  });
+
+  it("choosing writes nothing until the route is committed", async () => {
+    const r = await routeOnly({ sessionId: "X" });
+    expect((await ledger.read()).sessions["X"]).toBeUndefined();
+    await r.commit();
+    expect((await ledger.read()).sessions["X"]?.account).toBe("Ultra");
+  });
+
+  it("every account troubled: a resumed thread stays on its recorded account", async () => {
+    await ledger.record({ session: "B1", account: "Pro", at });
+    t.write(
+      `${shared()}/proj/B1.jsonl`,
+      line({ type: "assistant", uuid: "b", timestamp: stamp(at - MIN) }),
+    );
+    for (const a of ["main", "Pro", "Ultra"]) router.markTroubled(a);
+    const r = await route({ resume: "B1" });
+    expect(r.decision?.account).toBe("Pro");
+    expect(r.identity).toEqual({ resume: "B1" });
+    expect(r.env["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBe(claudeFolder(t.paths, "Pro"));
+  });
+
+  it("nobody usable: a resumed thread is still decided, never opened untouched with its id", async () => {
+    await ledger.record({ session: "B2", account: "Pro", at });
+    statuses = Object.fromEntries(
+      Object.entries(statuses).map(([k, v]) => [k, { ...v, signIn: "needsSignIn" as const }]),
+    );
+    const r = await route({ resume: "B2" });
+    expect(r.untouched).toBeUndefined();
+    expect(r.decision?.action).toBe("move");
+    expect(r.identity.sessionId).not.toBe("B2");
+  });
+
+  it("the fallback opens on the recorded account, ids translated, writing nothing", async () => {
+    await ledger.record({ session: "X", account: "Pro", at });
+    await ledger.record({ session: "C", account: "Pro", at, forkedAt: at, from: "X" });
+    await ledger.setCurrent("C", "X", at);
+    t.write(`${shared()}/proj/C.jsonl`, line({ type: "assistant", uuid: "c" }));
+    const before = await ledger.read();
+    const r = await router.recorded({ identity: { resume: "X" }, env: { PATH: "/bin" } });
+    expect(r.identity).toEqual({ resume: "C" });
+    expect(r.decision?.account).toBe("Pro");
+    expect(r.env["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBe(claudeFolder(t.paths, "Pro"));
+    expect(await ledger.read()).toEqual(before);
+    // A ledger that can't be read: no guess.
+    t.write(`${t.paths.dataDir}/sessions.json`, "{broken");
+    await expect(router.recorded({ identity: { resume: "X" }, env: {} })).rejects.toThrow(
+      /can't be read/,
+    );
+    await expect(routeOnly({ resume: "X" })).rejects.toThrow(/can't be read/);
+  });
+
+  it("a limit with nowhere else to go names no account", async () => {
+    router.markFull("main");
+    router.markFull("Pro");
+    expect((await router.limitNotice("Ultra", undefined, false)).to).toBeUndefined();
+    expect((await router.limitNotice("main", undefined, false)).to).toBe("Ultra");
+  });
+
+  it("a T3 fork that wrote no transcript is not recorded", async () => {
+    await ledger.record({ session: "X", account: "Pro", at });
+    await router.recordFork("X", "nothing-written");
+    expect((await ledger.read()).sessions["nothing-written"]).toBeUndefined();
   });
 });

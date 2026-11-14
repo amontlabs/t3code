@@ -18,6 +18,7 @@ import {
   conversationTail,
   copyTranscript,
   findTranscript,
+  hasTranscriptLines,
   messageIdIn,
   transcriptInShared,
 } from "./sessionTransfer.ts";
@@ -70,12 +71,51 @@ describe("the session ledger", () => {
     expect(NodeFS.existsSync(`${t.paths.dataDir}/sessions.json`)).toBe(true);
   });
 
-  it("an unreadable ledger is kept aside, never written over", async () => {
+  it("an unreadable ledger is refused, never read as empty or written over", async () => {
     t.write(`${t.paths.dataDir}/sessions.json`, "{not json");
+    await expect(ledger.read()).rejects.toThrow(/can't be read/);
+    await expect(ledger.setCurrent("C", "X", now)).rejects.toThrow(/can't be read/);
+    expect(NodeFS.readFileSync(`${t.paths.dataDir}/sessions.json`, "utf8")).toBe("{not json");
+  });
+
+  it("two ledgers on one file (two servers) never lose a write", async () => {
+    const other = new SessionLedger(`${t.paths.dataDir}/sessions.json`);
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        (i % 2 === 0 ? ledger : other).setCurrent(`c${i}`, `t${i}`, now),
+      ),
+    );
+    expect(Object.keys((await ledger.read()).threads)).toHaveLength(20);
+    expect(NodeFS.existsSync(`${t.paths.dataDir}/sessions.json.lock`)).toBe(false);
+  });
+
+  it("a stale lock left by a dead process is broken", async () => {
+    const lock = `${t.paths.dataDir}/sessions.json.lock`;
+    NodeFS.mkdirSync(lock, { recursive: true });
+    // Touched in 2001: long past the stale age.
+    NodeFS.utimesSync(lock, 1_000_000_000, 1_000_000_000);
     await ledger.setCurrent("C", "X", now);
-    const kept = NodeFS.readdirSync(t.paths.dataDir).filter((n) => n.includes("unreadable"));
-    expect(kept).toHaveLength(1);
     expect(currentSessionIn(await ledger.read(), "X")).toBe("C");
+  });
+
+  it("a metadata-only transcript (a failed first open) counts as unanswered", async () => {
+    t.write(
+      `${shared}/p/m.jsonl`,
+      line({ type: "summary", summary: "x" }) + line({ type: "custom-title", title: "t" }),
+    );
+    expect(await hasTranscriptLines("m", shared)).toBe(false);
+    NodeFS.appendFileSync(`${shared}/p/m.jsonl`, line({ type: "user", uuid: "u" }));
+    expect(await hasTranscriptLines("m", shared)).toBe(true);
+    // The record then follows the account the thread really runs on.
+    await ledger.record({ session: "m2", account: "A", at: now });
+    t.write(`${shared}/p/m2.jsonl`, line({ type: "summary", summary: "x" }));
+    await ledger.record({
+      session: "m2",
+      account: "B",
+      at: now,
+      hasTranscriptLines: () => hasTranscriptLines("m2", shared),
+    });
+    expect((await ledger.read()).sessions["m2"]?.account).toBe("B");
   });
 
   it("keeps at most the newest sessions, never one under 30 days old", () => {
