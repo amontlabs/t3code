@@ -11,11 +11,16 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 
 // serverSettings.ts first, as T3's hydration test does: it breaks an import cycle through the extensions.
 import { ServerSettingsService } from "../../../serverSettings.ts";
 import { deriveProviderInstanceConfigMap } from "../../../provider/ProviderInstanceRegistryHydration.ts";
-import { ensureAgentsInstanceOn, LASTDROP_AGENTS_INSTANCE as LASTDROP } from "./defaultOn.ts";
+import {
+  ensureAgentsInstanceOn,
+  keepAgentsInstanceOn,
+  LASTDROP_AGENTS_INSTANCE as LASTDROP,
+} from "./defaultOn.ts";
 import { LASTDROP_AGENTS_DRIVER } from "./settings.ts";
 
 const PROJECT = ProjectId.make("project-1");
@@ -114,5 +119,49 @@ describe("lastdrop agents on by default", () => {
       assert.strictEqual(outcome, "raced");
       assert.deepStrictEqual((yield* settings.getSettings).providerInstances[LASTDROP], userEntry);
     }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+  );
+
+  /** The keeper, with T3's test settings and a change stream of the given writes (it ends after them). */
+  const keep = (
+    writes: (settings: ServerSettingsService["Service"]) => Stream.Stream<ServerSettings, unknown>,
+  ) =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsService;
+      yield* keepAgentsInstanceOn({
+        ...settings,
+        subscribeChanges: Effect.succeed(writes(settings).pipe(Stream.orDie)),
+      });
+      return yield* settings.getSettings;
+    }).pipe(Effect.provide(ServerSettingsService.layerTest()));
+
+  it.effect('"Reset to defaults" (the entry removed) turns it back on', () =>
+    Effect.gen(function* () {
+      const after = yield* keep((settings) =>
+        Stream.fromEffect(
+          settings.updateProviderInstance({ operation: "remove", instanceId: LASTDROP }),
+        ),
+      );
+      assert.deepStrictEqual(after.providerInstances[LASTDROP], {
+        driver: LASTDROP_AGENTS_DRIVER,
+        enabled: true,
+      });
+      assert.deepStrictEqual(read(after), ON);
+    }),
+  );
+
+  it.effect("a user switching it off later is left off", () =>
+    Effect.gen(function* () {
+      const after = yield* keep((settings) =>
+        Stream.fromEffect(
+          settings.updateProviderInstance({
+            operation: "upsert",
+            instanceId: LASTDROP,
+            instance: { driver: LASTDROP_AGENTS_DRIVER, enabled: false },
+          }),
+        ),
+      );
+      assert.strictEqual(after.providerInstances[LASTDROP]?.enabled, false);
+      assert.deepStrictEqual(read(after), OFF);
+    }),
   );
 });
