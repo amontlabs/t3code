@@ -68,3 +68,6 @@ export function modelIconDriver(
   if (driverKind !== "lastdropAgents" || subProvider === undefined) return driverKind;
   return LASTDROP_BACKEND_DRIVERS[subProvider] ?? driverKind;
 }
+
+/** The sidebar's Usage button, with each account's limits on hover (`SidebarChrome.tsx` seam). */
+export { UsageSidebarItem } from "./lastdrop/UsageSidebarItem";

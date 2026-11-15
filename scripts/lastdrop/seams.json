@@ -32,8 +32,8 @@
       "why": "Claude query-runner wrapper"
     },
     "apps/server/src/server.ts": {
-      "budget": 4,
-      "why": "extension services and routes, newer-schema check"
+      "budget": 7,
+      "why": "extension services and routes, newer-schema check, usage limit sources wrapper"
     },
     "packages/client-runtime/src/providerClients.ts": {
       "budget": 2,
@@ -70,6 +70,10 @@
     "scripts/build-desktop-artifact.ts": {
       "budget": 7,
       "why": "bundle id, self-signed mac signing"
+    },
+    "apps/web/src/components/sidebar/SidebarChrome.tsx": {
+      "budget": 3,
+      "why": "Usage button with each account's limits on hover"
     },
     "apps/web/src/components/chat/ModelListRow.tsx": {
       "budget": 3,

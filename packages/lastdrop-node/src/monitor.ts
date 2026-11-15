@@ -11,7 +11,9 @@ import {
   isMain,
   type LimitResets,
   pool,
+  currentWindows,
   readingFromStatus,
+  windowsFromStatus,
   type SignInState,
   statusWithReading,
   statusWithSignIn,
@@ -253,9 +255,14 @@ export class AccountsMonitor {
           signInEndsAt: signIn?.endsAt ?? (standalone ? status?.signInEndsAt : undefined),
           session: reading.session,
           weekly: reading.weekly,
-          windows: entry?.snapshot?.windows ?? [],
+          // The standalone's readings (and this app's own before its first read) keep numbers, not rows. Either
+          // way an old reading shows nothing and a passed reset shows as unused.
+          windows: entry?.snapshot
+            ? currentWindows(entry.snapshot.windows, entry.snapshot.at, now)
+            : windowsFromStatus(status, now),
           resets: entry?.snapshot?.resets,
-          readAt: entry?.snapshot?.at ?? (standalone ? status?.at : undefined),
+          // A never-read account's status has `at: -Infinity`: no time, not an invalid one.
+          readAt: finite(entry?.snapshot?.at ?? status?.at),
           source: entry?.snapshot?.source ?? (standalone ? "standalone" : undefined),
           error: entry?.error,
           rateLimitedUntil:
@@ -275,6 +282,9 @@ export class AccountsMonitor {
     };
   }
 }
+
+const finite = (ms: number | undefined): number | undefined =>
+  ms !== undefined && Number.isFinite(ms) ? ms : undefined;
 
 function dropUndefined<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;

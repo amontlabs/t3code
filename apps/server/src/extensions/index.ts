@@ -54,10 +54,26 @@ export const wrapClaudeQueryRunner = <E, R>(
   );
 
 /**
+ * T3's usage limit sources (the hubs **Usage → Limits** reads) with lastdrop's Claude accounts, Z.ai and OpenRouter
+ * after T3's own (`lastdrop/limitSourcesLive.ts`); `server.ts` uses it in place of `UsageLimitSources.layer`. With
+ * nothing published it adds nothing.
+ */
+export const usageLimitSourcesLayer =
+  // Loaded lazily: T3's service reaches the settings module, which imports this file's lists.
+  Layer.unwrap(
+    Effect.promise(() =>
+      Promise.all([
+        import("../usage/UsageLimitSources.ts"),
+        import("./lastdrop/limitSourcesLive.ts"),
+      ]),
+    ).pipe(Effect.map(([t3, live]) => live.wrap(t3.layer))),
+  );
+
+/**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
  * agents' target lookup and fallback reactor; the move continuation; the Z.ai and OpenRouter instances and their usage.
  */
-export const layer = Layer.mergeAll(
+const services = Layer.mergeAll(
   LastdropAccounts.layer,
   // Imported when the layer builds: it reaches T3's settings service, which imports this module's lists.
   Layer.unwrap(
@@ -78,6 +94,13 @@ export const layer = Layer.mergeAll(
     ),
   ),
 );
+
+/** The services, and the publisher that feeds their readings to the usage limit sources wrapper. */
+export const layer = Layer.unwrap(
+  Effect.promise(() => import("./lastdrop/limitSourcesLive.ts")).pipe(
+    Effect.map((live) => live.publisher),
+  ),
+).pipe(Layer.provideMerge(services));
 
 /**
  * HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section, and
