@@ -1,12 +1,13 @@
 /**
  * The agents' server-side wiring, inside `Extensions.layer` (above T3's provider hydration, so no
  * new seam): binds the target lookup the driver reads when a session opens, and runs the fallback
- * reactor for runs that end at a limit partway.
+ * reactor for runs that end at a limit partway (holding them open for their waiters, `fallback.ts`).
  */
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as EffectOutbox from "../../../orchestration-v2/EffectOutbox.ts";
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
@@ -57,6 +58,11 @@ export const layer = Layer.effectDiscard(
     });
     yield* Effect.addFinalizer(() => Shared.unbindTargets);
     yield* Shared.attachStore(yield* resolveLastdropDataDir);
-    yield* runFallbackReactor(Shared.fallbacks).pipe(Effect.forkScoped);
+    // T3 keeps its outbox service inside the orchestration runtime; the reactor's own instance
+    // reads and writes the same table (its marker rows are what T3's waiters check).
+    yield* runFallbackReactor(Shared.fallbacks).pipe(
+      Effect.provide(EffectOutbox.layer),
+      Effect.forkScoped,
+    );
   }),
 ).pipe(Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry));

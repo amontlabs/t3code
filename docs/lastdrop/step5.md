@@ -21,18 +21,23 @@ The `lastdropAgents` driver (shown as "lastdrop agents") makes the user's agents
 - **Fallback at open**: a thread stays on the entry that made its native thread while that entry has room; otherwise the chain is tried in order. Each entry is checked and opened once. The first turn of a session that is not on the agent's usual entry gets a notice naming the entry that actually opened, and why each other entry did not (usage limit and its end, not set up, failed to open).
 - **Fallback partway through a run** (`fallback.ts`):
   1. An inner `usage_limit` terminal marks the entry out until the reset time it reported (an hour if it gave none).
-  2. If a later entry has room, the router adds a `system_notice` row ("review reached a usage limit on Codex · gpt-6.1-sol. lastdrop continues on Claude · opus, with this conversation handed over.").
-  3. The reactor releases the session and sends T3's own "Continue where you left off."
-  4. The new session opens on the next entry and refuses to resume the old entry's native thread.
-  5. T3's own resume-failed recovery then starts a new native thread there and delivers the portable handoff.
+  2. If a later entry has room, the router adds a `system_notice` row ("review reached a usage limit on Codex · gpt-6.1-sol. lastdrop continues on the next entry with room; the next run names it.").
+  3. The router ends the run as `cancelled`, not `failed`, after the reactor has written T3's own restart-continuation marker for it (`effect:restart-continuation:<run>` in the effect outbox, the marker a server restart writes, due in 60 s). T3 treats a cancelled run with that marker pending as still going: `t3_thread_wait` (so `t3 thread start --wait`), a delegate_task parent waiting on its child, and the task's completion and wake all wait.
+  4. Once T3 settles the run, the reactor releases the session and sends T3's own "Continue where you left off." with `restartContinuationOfRunId` naming the run, then cancels the marker. Every waiter follows that chain, so it sees one run that ends with the continuation's outcome. No error row is written for the limit; the notice says what happened.
+  5. The new session opens on the next entry and refuses to resume the old entry's native thread.
+  6. T3's own resume-failed recovery then starts a new native thread there and delivers the portable handoff.
   - With no next entry, the failure stays T3's own `usage_limit`, and T3's limit recovery waits for the reset.
+  - A Stop that reaches the run before the continuation makes T3 decline it; the run stays stopped.
+  - If the server stops between the two runs, T3 runs the marker itself after 60 s (its `continueRestartedRun`, gated by "continue threads after a server update"): the new session opens on the next entry, since the room mark is on disk.
+  - The reactor's outbox is its own instance of T3's `EffectOutbox` on the same database: T3 keeps its outbox service inside the orchestration runtime, out of `Extensions.layer`'s reach. Its writes are SQL rows T3 reads; T3's waiters are woken by the continuation's own `run.updated`.
 - **Permissions** (`permissions.ts`): T3's own rule (`RuntimePolicy.ts` `providerRuntimeMode`) is applied per entry, against the target instance snapshot's `supportedRuntimeModes`: a mode the target lacks becomes `approval-required`. The lastdrop snapshot publishes every mode, so T3 hands the thread's own mode to the router. Since step 7, `auto` maps to `auto-accept-edits` on Antigravity, and lastdrop answers the entries' approval requests under `auto` (`docs/lastdrop/step7.md`).
 - **Instance lookup** (`layer.ts`, `shared.ts`): `Extensions.layer` binds a late lookup through `ProviderAdapterRegistryV2`, so T3's sign-in gating applies. No new seam. The layer is imported lazily to break an import cycle.
 - **Icons**: the provider carries the drop logo (`packages/client-runtime/src/extensions.ts`). Model rows show their backend's icon (`ModelListRow.tsx` seam).
 
 ## Evidence
 
-- `fallback.test.ts`, through T3's real orchestrator with fake adapters: Codex does some work, then hits a usage limit. The test checks that a notice row appears, that run 2 completes on Claude in a new native thread at the run's effort, that the handoff is injected with the original request and the partial work, and that ids are lastdrop's on our side and native inside.
+- `fallback.test.ts`, through T3's real orchestrator with fake adapters: Codex does some work, then hits a usage limit. The test checks that run 1 ends `cancelled` with no error row and its marker cancelled, that run 2 continues it (`restartContinuationOfRunId`), that a notice row appears, that run 2 completes on Claude in a new native thread at the run's effort, that the handoff is injected with the original request and the partial work, and that ids are lastdrop's on our side and native inside.
+- `fallbackStatus.test.ts`: T3's `waitForThread` (what `t3_thread_wait` and `--wait` run) on run 1 returns run 2, `completed`, with Claude's answer; a delegate_task parent's task row never shows `failed`, `cancelled` or `interrupted`, and settles `completed` with the continuation's result. Both fail without the marker.
 - `router.test.ts`: all 34 recorded Claude fixtures and 25 Codex fixtures run through the router. Each fixture's own checks pass, plus identity checks. Fallback at open is covered too.
 - `targets.test.ts` (fake adapters):
   - Antigravity as a target.
@@ -49,6 +54,9 @@ The `lastdropAgents` driver (shown as "lastdrop agents") makes the user's agents
   4. Claude · opus answered `lastdrop live ok` from the handoff.
   - The catalog was read without being changed. Codex and Claude used their real sign-ins and wrote only their own session logs.
 
+- **Live, one run at a fallback (2026-11-15)**: the fork server from the worktree, isolated `T3CODE_HOME`, `LASTDROP_CLAUDE_ROUTING=0`, agent `computer-use` (Codex · gpt-6.1-terra, at its real limit until 2026-11-18, then Claude · haiku):
+  1. `t3 thread start --provider lastdropAgents --model computer-use --wait --json` printed `status: completed`, `reply: "fallback status ok"`, run 2's id, exit 0. Run 1 `cancelled`, run 2 `completed` with `restartContinuationOfRunId` run 1, both notices, no error row, the marker `cancelled`.
+  2. A Haiku parent thread called `delegate_task` on `lastdropAgents`/`computer-use` and waited: it answered `CHILD completed child ok` in its single run; the child's run 1 was `cancelled` at the Codex limit and run 2 `completed` on Haiku.
 - **Live, review fixes**: an `auto` thread on `build` (Antigravity first) in a fresh isolated home got the notice "build runs on Claude · sonnet: Antigravity · claude-sonnet-5-5 is not set up." and ran on Claude. T3's Antigravity driver needs its own ACP runtime, installed from T3's provider settings (`agy` alone is not enough), and none was installed. So the approval prompt under `auto` on Antigravity is checked by the tests only, not live.
 
 ## Gaps

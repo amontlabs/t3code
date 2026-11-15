@@ -3,7 +3,7 @@
  * usage limit is out until the limit's reset (or an hour when the provider gave none). Shared by
  * every session of the lastdrop driver, since a limit is the account's, not the thread's.
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import type { AgentStep } from "./catalog.ts";
@@ -56,26 +56,47 @@ export const makeRoom = (
 /** A thread whose run ended at a limit and continues on the next entry, once T3 settles the run. */
 export interface PendingFallback {
   readonly threadId: ThreadId;
+  /** The run that reached the limit; its continuation follows it (`restartContinuationOfRunId`). */
+  readonly runId: RunId;
   readonly agent: string;
   /** The entry the run ended on. The next run's notice names the one it continues on. */
   readonly from: string;
 }
 
-/** Hand-off from the router (which sees the limit) to the reactor (which re-sends the run). */
+/**
+ * Hand-off from the router (which sees the limit) to the reactor (which re-sends the run). The
+ * reactor binds `hold` while it runs: it keeps the run open for whatever waits on it (T3's
+ * restart-continuation marker, `fallback.ts`) until the continuation exists.
+ */
 export interface FallbackSignals {
-  readonly offer: (pending: PendingFallback) => Effect.Effect<void>;
-  readonly take: (threadId: ThreadId) => Effect.Effect<PendingFallback | undefined>;
+  /** False when nothing holds and continues runs (no reactor): the limit then stays T3's own. */
+  readonly offer: (pending: PendingFallback) => Effect.Effect<boolean>;
+  /** The pending fallback for this run, once; undefined for any other run. */
+  readonly take: (threadId: ThreadId, runId: RunId) => Effect.Effect<PendingFallback | undefined>;
+  readonly bindHold: (
+    hold: ((pending: PendingFallback) => Effect.Effect<boolean>) | undefined,
+  ) => Effect.Effect<void>;
 }
 
 export const makeFallbackSignals = (): FallbackSignals => {
   const pending = new Map<ThreadId, PendingFallback>();
+  let hold: ((pending: PendingFallback) => Effect.Effect<boolean>) | undefined;
   return {
-    offer: (entry) => Effect.sync(() => void pending.set(entry.threadId, entry)),
-    take: (threadId) =>
+    offer: Effect.fn("LastdropFallback.offer")(function* (entry) {
+      if (hold === undefined || !(yield* hold(entry))) return false;
+      pending.set(entry.threadId, entry);
+      return true;
+    }),
+    take: (threadId, runId) =>
       Effect.sync(() => {
         const entry = pending.get(threadId);
+        if (entry?.runId !== runId) return undefined;
         pending.delete(threadId);
         return entry;
+      }),
+    bindHold: (next) =>
+      Effect.sync(() => {
+        hold = next;
       }),
   };
 };

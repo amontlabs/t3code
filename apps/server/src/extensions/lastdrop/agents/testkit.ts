@@ -16,6 +16,7 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -61,6 +62,8 @@ export const makeFakeAdapter = (input: {
   readonly failOpen?: boolean;
   /** A failed run leaves a command running, as a limit mid-command does. */
   readonly commandAtLimit?: boolean;
+  /** Turns end only once this is done: a parent thread whose run stays active. */
+  readonly holdTurns?: Deferred.Deferred<void>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => ({
   instanceId: input.instanceId,
   driver: input.driver,
@@ -244,7 +247,28 @@ export const makeFakeAdapter = (input: {
             threadDisposition: "reusable",
           },
         ];
-        for (const event of providerEvents) yield* PubSub.publish(events, event);
+        const publish = Effect.forEach(providerEvents, (event) => PubSub.publish(events, event), {
+          discard: true,
+        });
+        if (input.holdTurns === undefined) yield* publish;
+        else {
+          // The turn starts now and ends at the release.
+          const started = providerEvents[0]!;
+          if (started.type === "provider_turn.updated")
+            yield* PubSub.publish(events, {
+              ...started,
+              providerTurn: { ...started.providerTurn, status: "running", completedAt: null },
+            });
+          yield* Effect.forkDetach(
+            Deferred.await(input.holdTurns).pipe(
+              Effect.andThen(
+                Effect.forEach(providerEvents.slice(1), (event) => PubSub.publish(events, event), {
+                  discard: true,
+                }),
+              ),
+            ),
+          );
+        }
       }),
       steerTurn: () => Effect.void,
       interruptTurn: () => Effect.void,
