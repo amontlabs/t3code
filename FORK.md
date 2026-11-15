@@ -127,6 +127,13 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: T3's literal stays the argument, so T3's tests (identity off) still see `"T3 Code"`.
 - **Conflict**: take upstream's file; wrap whatever literal names the app again.
 
+### `apps/desktop/src/app/DesktopCliShim.ts` (budget 2)
+
+- **Lines**: import `cliLauncherDir` (1); in `launcherPath`, `cliLauncherDir(environment.path, environment.baseDir)` replaces `environment.baseDir` (1).
+- **Why**: both apps write the `t3` launcher on every backend start, so whichever ran last owned `~/.t3/bin/t3`, and a mismatched CLI can migrate the shared database under a running server. The fork's launcher is `<home>/lastdrop/bin/t3`. The shim content, `T3CODE_CLI_PATH`, and Settings install/uninstall in `DesktopCliCommand.ts` all follow `launcherPath`; a PATH link to the other app's launcher is handled by T3's "our marker, another launcher" logic (Install repoints it).
+- **Must survive**: T3's `baseDir` stays the argument, so T3's tests (identity off) still see `<home>/bin/t3`.
+- **Conflict**: take upstream's file; re-add the import and wrap the directory again.
+
 ### `apps/desktop/src/app/DesktopUserData.ts` (budget 4)
 
 - **Lines**: import `userDataNames` (6); `const names = input.isDevelopment` renamed `upstreamNames` (43); `const names = userDataNames(input.isDevelopment, upstreamNames);` after it (46).
@@ -162,7 +169,7 @@ The fork is its own app that opens the official app's data: the same T3 home (`~
 | T3 home (`T3CODE_HOME`)    | `~/.t3`                                   | same                                                 |
 | lastdrop's own files       |                                           | `~/.t3/lastdrop/` (dev runs: `~/.t3/dev/lastdrop/`)  |
 | Electron profile           | `~/Library/Application Support/t3code-v2` | `~/Library/Application Support/t3code-lastdrop`      |
-| `t3` command shim          | `~/.t3/bin/t3`                            | same file, pointing at whichever app ran last        |
+| `t3` command shim          | `~/.t3/bin/t3`                            | `~/.t3/lastdrop/bin/t3`; never writes `~/.t3/bin/t3` |
 | Safe-storage keychain item | `t3code Safe Storage`                     | same                                                 |
 | Updater cache              | `~/Library/Caches/t3code-updater`         | same                                                 |
 | `t3code://` links          | registered                                | registered                                           |
