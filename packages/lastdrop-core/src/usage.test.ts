@@ -12,6 +12,7 @@ import {
   poolRoom,
   readingFromStatus,
   recordBlock,
+  windowsFromStatus,
 } from "./usage.ts";
 
 const now = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -142,5 +143,33 @@ describe("reading a status for routing", () => {
     expect([full.session, full.weekly]).toEqual([100, 100]);
     const later = readingFromStatus(status, now, now - minutes(10));
     expect([later.session, later.weekly]).toEqual([10, 10]);
+  });
+});
+
+describe("windows from a usage.json entry", () => {
+  it("has no session row for Ultra, and a weekly row per model", () => {
+    expect(
+      windowsFromStatus({
+        at: now,
+        session: 0,
+        weekly: 98,
+        models: { Fable: 53 },
+        plan: "Ultra",
+        resetsAt: { Weekly: now + minutes(60), Fable: now + minutes(60) },
+      }),
+    ).toEqual([
+      { label: "Weekly", usedPercent: 98, resetsAt: now + minutes(60) },
+      { label: "Fable Weekly", usedPercent: 53, resetsAt: now + minutes(60) },
+    ]);
+  });
+
+  it("keeps the session row when it has a reset or use", () => {
+    expect(
+      windowsFromStatus({ at: now, session: 49, weekly: 94, resetsAt: { Session: now } }).map(
+        (window) => window.label,
+      ),
+    ).toEqual(["Session", "Weekly"]);
+    expect(windowsFromStatus({ at: now, session: 12 })[0]?.label).toBe("Session");
+    expect(windowsFromStatus(undefined)).toEqual([]);
   });
 });

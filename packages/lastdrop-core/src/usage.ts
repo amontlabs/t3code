@@ -358,3 +358,36 @@ export const statusWithSignIn = (
     signInDetail: signIn.detail,
     signInEndsAt: signIn.endsAt,
   });
+
+/**
+ * An account's windows from its `usage.json` entry, for a reading the standalone app made (it keeps numbers and
+ * resets, not rows). Session only when the entry has a session reset or use: Ultra has no 5-hour window and
+ * reads `session: 0` with no reset. Then Weekly, then one weekly row per model ("Fable Weekly").
+ */
+export function windowsFromStatus(status: AccountStatus | undefined): UsageWindow[] {
+  if (status === undefined) return [];
+  const row = (
+    label: string,
+    used: number | undefined,
+    reset: number | undefined,
+  ): UsageWindow[] =>
+    used === undefined
+      ? []
+      : [
+          {
+            label,
+            usedPercent: Math.min(Math.max(used, 0), 100),
+            ...(reset !== undefined ? { resetsAt: reset } : {}),
+          },
+        ];
+  const sessionReset = status.resetsAt?.["Session"];
+  return [
+    ...(sessionReset !== undefined || (status.session ?? 0) > 0
+      ? row("Session", status.session, sessionReset)
+      : []),
+    ...row("Weekly", status.weekly, status.resetsAt?.["Weekly"]),
+    ...Object.entries(status.models ?? {}).flatMap(([name, used]) =>
+      row(`${name} Weekly`, used, status.resetsAt?.[name]),
+    ),
+  ];
+}
