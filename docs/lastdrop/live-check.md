@@ -71,3 +71,34 @@ Fixed on this branch: none. Each of the issues below needs more than a small cha
 - Scratch folder (builds, apps, the scratch home, logs, screenshots). Keep `appAT/` until `~/.t3/bin/t3` is restored (bug 2).
 - `~/Library/Application Support/t3code-lastdrop` (the fork's Electron profile), `~/Library/Caches/t3code-updater/` (made by this check, holds B's zip), `~/Library/Caches/com.amontlabs.t3code-lastdrop.ShipIt/`.
 - Restored or removed: the keychain search list (login only, as before), the scratch keychain (deleted), the LaunchServices registrations of the scratch apps (removed), the feed server (stopped). No fork process is running.
+
+## Second run (copy of the owner's real `~/.t3`)
+
+Date: 2026-11-15. Branch merged with `lastdrop` (`e17b5d8e4c`). Build `0.1.8-ld.9`, unsigned (ad-hoc), `--target zip`, started with `T3CODE_HOME=<scratch>/t3home` from a clean `env -i` + `open -n`. The official T3 Code was never touched; `~/.t3` was only read.
+
+### Copy
+- `statev2.sqlite` via `sqlite3 -readonly … ".backup"`. Other `userdata` files copied with `cp -cR`, except `server-owner.sqlite*`, `server-runtime.json`, `logs/`. `~/.t3/{tools,worktrees,caches,bin}` not copied.
+- In the copy: `continueThreadsAfterServerUpdate: false` (global and every project override); outbox had 5715 rows, all `succeeded`, none pending (nothing to delete).
+- After start: no process under the fork's pids has a `claude` child; the Claude processes listed by `ps` started before the fork. `lsof` on all fork processes: 0 files under `~/.t3`.
+
+### Build note (bug)
+The build fails at `scripts/lib/server-compile-cache.ts:159` ("Ambiguous bundled server entry"): the server bundle now emits two `server-*.mjs` chunks (`server-<hash>` for the CLI plus another that `UsageLimitSources-*.mjs` imports; both come from files named `server`, `src/server.ts` and `src/cli/server.ts`). This would fail the release workflow too. Worked around locally, uncommitted, by picking the chunk the CLI imports (`compile-cache-workaround.patch` in scratch).
+
+### Results
+| # | Check | Result | Evidence |
+| - | ----- | ------ | -------- |
+| 1 | Opens on copied data, nothing resumes | Pass (CLI + web client, not the window) | `t3 thread list` on the copy lists ~100 existing threads and the projects; no Claude child process, 0 `~/.t3` files open. |
+| 2 | Settings | Pass (web client) | Providers: Codex, Claude, Z.ai (lastdrop), Antigravity (off), lastdrop, "lastdrop agents" on (it was already enabled in the owner's settings, so the fresh-home bug is not exercised). Threads on it ran with no toggling. Claude accounts section screenshot not taken (see below). |
+| 3 | Usage → Limits and hover | Pass | `shots/_usage.png`: Codex, Claude with one segment per account (SG, 0G), then Zai; `shots/sidebar-usage-hover.png`: per-account lists for Codex, Claude (both accounts), Z.ai, OpenRouter. |
+| 4 | `t3` command | Pass | `~/.t3/bin/t3` still 528 bytes, mtime unchanged. Launcher at `t3home/lastdrop/bin/t3`; `--version` → `t3 v0.1.8-ld.9`; `thread list` works. |
+| 5 | Haiku Claude thread | Pass | `main ok`; log `thread 2ddd887b: new on main (new thread)`. |
+| 6 | `scout` + `delegate_task` | Pass | `scout ok`; haiku parent delegated to `{lastdropAgents, scout}` and reported "delegated ok". |
+| 7 | Fallback | Pass | `computer-use` (Codex first; the copy's `agent-room.json` holds the Codex limit mark): `--wait --json` → `status: completed`, `error: null`, reply `fallback ok`; run attempts: 1 cancelled, 1 completed; the thread list shows Done. Bug 3 of the first run is not reproduced. |
+| 8 | Command judge on Antigravity | Not run | Antigravity is switched off in T3's settings (copy of the owner's). Enabling it needs the settings UI; my attempt to drive the web client again was refused by the auto-mode classifier, and LCU for "T3 Code lastdrop" was not approved. The `live` agent ran its Claude · sonnet entry instead (`ls` → `a.txt`). |
+| 9 | Quit mid-subagent | Not run | Needs a menu quit through the window (LCU not approved). I did not use SIGTERM mid-subagent as in run 1, since the instruction was menu only. |
+
+### Blocked
+LCU: "Computer Use was not approved to use T3 Code lastdrop" (bundle id `com.amontlabs.t3code-lastdrop`, two attempts, the panel was not answered). So no window screenshots through LCU; screenshots are from the same web client in headless Chromium (taken before the classifier refused further pairing).
+
+### Left
+Scratch folder `live-check2/` (copy of the data, app, builds, shots, scripts). The fork was stopped with SIGTERM to its main process after the checks (the app I started). `~/.t3/bin/t3` unchanged.
