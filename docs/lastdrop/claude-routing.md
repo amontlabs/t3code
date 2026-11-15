@@ -78,9 +78,13 @@ The wrapper watches the SDK stream; it never polls transcripts and never signals
 - With no other account to move to, a limit is only surfaced (a notice) and the query stays open, as plain T3
   does: background work keeps running.
 - A `result` that is a usage limit for the whole account (429, "limit reached", a rejected `rate_limit_event`;
-  not a single model's limit): the account is marked full, a notice names where the next message goes, the
-  result's first `errors` entry becomes that notice (T3 shows it as the turn's failure), and the query ends
-  (T3's own `close`). The next message opens a new query, which moves.
+  not a single model's limit): the account is marked full, a notice names the account the thread continues on,
+  the result's first `errors` entry becomes that notice (T3 shows it as the turn's failure), and the query ends
+  (T3's own `close`). Once T3 marks the run failed, lastdrop releases its provider session and sends T3's
+  restart follow-up (its note over the subagents and shells the end cut, then its continue prompt); that
+  message's query opens on the new account as a fork. See docs/lastdrop/subagent-resume.md.
+- Every fork the wrapper makes (a move, T3's own `forkSession`) copies `subagents/` from the conversation it
+  forks and the older ones of its lineage, so SendMessage to a subagent from before still finds it.
 - A `result` at a passing error (`TransientError`: 5xx, 529, Cloudflare page, network, auth while the sign-in
   works): held back from T3, and after 10 s, 30 s, 90 s and 3 min (jittered) the same query is offered a
   "continue" message; T3 sees one longer turn. A message or a stop from T3 during a wait lets the held result
@@ -138,4 +142,5 @@ copied, the throwaway's `Library/Keychains` linked to the real one, the standalo
   `projects` is now always linked, and a real one is folded into the shared folder.
 - The real `claude-2` folder and both keychain items' modification dates were unchanged afterwards.
 
-Not checked live: a real usage limit or passing error mid-run; request headers (no proxy).
+Not checked live: a passing error mid-run. A usage limit mid-run was checked through a proxy faking Anthropic's
+429 (docs/lastdrop/subagent-resume.md).

@@ -223,7 +223,7 @@ describe("the continuation after a usage-limit move", () => {
     );
   });
 
-  it("is dispatched like T3's restart continuation: server-made, started at once, on the run's model", () => {
+  it("is dispatched like T3's restart continuation: server-made, started at once (a queued one waits at the limit), on the run's model", () => {
     const work = track([
       started({ task_id: "a1", task_type: "local_agent", description: "Writer" }),
     ]);
@@ -237,7 +237,7 @@ describe("the continuation after a usage-limit move", () => {
     assert.equal(command.type, "message.dispatch");
     assert.equal(command.threadId, "thread-1");
     assert.equal(command.text, continuationText(work));
-    assert.equal(command.notification.detail, command.text);
+    assert.notProperty(command, "notification");
     assert.deepEqual(command.modelSelection, modelSelection);
     assert.deepEqual(command.dispatchMode, { type: "start_immediately" });
     assert.equal(command.createdBy, "agent");
