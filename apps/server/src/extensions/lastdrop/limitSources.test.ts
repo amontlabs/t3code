@@ -12,7 +12,9 @@ import {
   currentLastdropSources,
   LASTDROP_SOURCE_ID,
   lastdropLimitSource,
+  onLastdropSources,
   publishLastdropSources,
+  resetLastdropSources,
   toUsageWindow,
 } from "./limitSources.ts";
 import { wrap } from "./limitSourcesLive.ts";
@@ -109,6 +111,69 @@ describe("lastdropLimitSource", () => {
     assert.strictEqual(signedOut?.usageLimits.unavailable?.message, "Needs sign-in.");
   });
 
+  it("a never-read account (no or non-finite read time) never blocks the others", () => {
+    const source = lastdropLimitSource({
+      accounts: accounts([
+        account({ key: "never", isMain: false, readAt: -Infinity, windows: [] }),
+        account({
+          key: "odd",
+          isMain: false,
+          readAt: Number.NaN,
+          windows: [{ label: "Weekly", usedPercent: 3, resetsAt: Number.POSITIVE_INFINITY }],
+          resets: { count: 1, expiries: [Number.NEGATIVE_INFINITY] },
+        }),
+        account({ windows: [{ label: "Weekly", usedPercent: 7 }] }),
+      ]),
+      endpoints: undefined,
+      now: NOW,
+    });
+    assert.ok(source);
+    const [never, odd, main] = source.accounts;
+    assert.strictEqual(never?.usageLimits.checkedAt, "2026-11-15T12:00:00.000Z");
+    assert.strictEqual(never?.usageLimits.unavailable?.message, "No reading yet.");
+    assert.isUndefined(odd?.usageLimits.windows[0]?.resetsAt);
+    assert.isUndefined(odd?.usageLimits.resetCredits?.nextExpiresAt);
+    assert.strictEqual(main?.usageLimits.windows[0]?.usedPercent, 7);
+  });
+
+  it("sends no reset count for an account a T3 provider reports, so its Use reset stays", () => {
+    const resets = { count: 2, expiries: [NOW + HOUR] };
+    const source = lastdropLimitSource({
+      accounts: accounts([
+        account({
+          email: "Own@Example.com",
+          windows: [{ label: "Weekly", usedPercent: 1 }],
+          resets,
+        }),
+        account({
+          key: "other",
+          isMain: false,
+          email: "other@example.com",
+          windows: [{ label: "Weekly", usedPercent: 1 }],
+          resets,
+        }),
+      ]),
+      endpoints: undefined,
+      now: NOW,
+      nativeEmails: new Set(["own@example.com"]),
+    });
+    assert.isUndefined(source?.accounts[0]?.usageLimits.resetCredits);
+    assert.strictEqual(source?.accounts[1]?.usageLimits.resetCredits?.availableCount, 2);
+  });
+
+  it("an account whose read failed shows its error, not its last numbers", () => {
+    const source = lastdropLimitSource({
+      accounts: accounts([
+        account({ windows: [{ label: "Weekly", usedPercent: 9 }], error: "Anthropic said 500." }),
+      ]),
+      endpoints: undefined,
+      now: NOW,
+    });
+    const limits = source?.accounts[0]?.usageLimits;
+    assert.deepStrictEqual(limits?.windows, []);
+    assert.strictEqual(limits?.unavailable?.message, "Anthropic said 500.");
+  });
+
   it("adds configured Z.ai and OpenRouter with their own drivers", () => {
     const endpoints: EndpointsView = {
       updatedAt: NOW,
@@ -168,6 +233,34 @@ const hub: UsageLimitSourceSnapshot = {
   checkedAt: "2026-11-15T12:00:00.000Z",
   accounts: [],
 };
+
+describe("the feed", () => {
+  it("publishes an unchanged reading once, even with accounts that have no reading", () => {
+    resetLastdropSources();
+    const at = (now: number) =>
+      lastdropLimitSource({
+        accounts: accounts([
+          account({ key: "never", isMain: false, readAt: undefined, windows: [] }),
+          account({ windows: [{ label: "Weekly", usedPercent: 1 }] }),
+        ]),
+        endpoints: undefined,
+        now,
+      })!;
+    assert.isTrue(publishLastdropSources([at(NOW)]));
+    assert.isFalse(publishLastdropSources([at(NOW + 15_000)]));
+    resetLastdropSources();
+  });
+
+  it("is emptied by a reset (the publisher layer's start and end), and listeners hear it", () => {
+    const heard: number[] = [];
+    const stop = onLastdropSources((snapshots) => heard.push(snapshots.length));
+    publishLastdropSources([{ ...hub, id: LASTDROP_SOURCE_ID }]);
+    resetLastdropSources();
+    stop();
+    assert.deepStrictEqual(currentLastdropSources(), []);
+    assert.deepStrictEqual(heard, [1, 0]);
+  });
+});
 
 const fakeSources = Layer.succeed(
   UsageLimitSources,

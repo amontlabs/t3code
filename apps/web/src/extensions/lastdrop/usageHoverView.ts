@@ -100,3 +100,23 @@ export function usageHoverGroups(
     ),
   }));
 }
+
+/**
+ * The card as one sentence for screen readers (the Usage button's description): each provider, each account and its
+ * room per window, or why it has no reading.
+ */
+export function usageHoverSummary(groups: ReadonlyArray<HoverGroup>): string {
+  if (groups.length === 0) return "No account reports limits yet.";
+  return groups
+    .map((group) => {
+      const accounts = group.accounts.map((account) => {
+        const detail =
+          account.notice ??
+          account.windows.map((window) => `${window.label} ${window.leftPercent}% left`).join(", ");
+        return detail ? `${account.name}: ${detail}` : account.name;
+      });
+      const text = `${group.label}: ${accounts.join("; ")}`;
+      return text.endsWith(".") ? text : `${text}.`;
+    })
+    .join(" ");
+}

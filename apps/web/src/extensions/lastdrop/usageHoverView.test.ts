@@ -7,7 +7,7 @@ import {
 import type { LimitPresentations } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
 
-import { usageHoverGroups } from "./usageHoverView";
+import { usageHoverGroups, usageHoverSummary } from "./usageHoverView";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
 const claude = ProviderDriverKind.make("claudeAgent");
@@ -93,5 +93,10 @@ describe("the usage hover", () => {
       { id: "seven_day", label: "Weekly", leftPercent: 75, resets: "resets in 2h 30m" },
     ]);
     expect(first?.accounts[2]?.notice).toBe("Needs sign-in.");
+    expect(usageHoverSummary(groups)).toBe(
+      "claudeAgent: a@example.com: Weekly 50% left; b@example.com: Session 10% left, Weekly 75% left; " +
+        "claude-3: Needs sign-in. Z.ai: Z.ai: Session 96% left.",
+    );
+    expect(usageHoverSummary([])).toBe("No account reports limits yet.");
   });
 });

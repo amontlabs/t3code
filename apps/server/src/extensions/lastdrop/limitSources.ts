@@ -38,7 +38,10 @@ const ENDPOINT_DRIVERS = {
 const SESSION_MINS = 5 * 60;
 const WEEK_MINS = 7 * 24 * 60;
 
-const iso = (ms: number): string => DateTime.formatIso(DateTime.makeUnsafe(ms));
+/** An ISO time, or undefined for none: a never-read account's status has `at: -Infinity`. */
+const iso = (ms: number | undefined): string | undefined =>
+  ms !== undefined && Number.isFinite(ms) ? DateTime.formatIso(DateTime.makeUnsafe(ms)) : undefined;
+const isoNow = (now: number): string => DateTime.formatIso(DateTime.makeUnsafe(now));
 
 const slug = (text: string): string =>
   text
@@ -56,7 +59,8 @@ export function toUsageWindow(
 ): ServerProviderUsageWindow | undefined {
   if (window.usedPercent === undefined || !Number.isFinite(window.usedPercent)) return undefined;
   const usedPercent = Math.min(Math.max(window.usedPercent, 0), 100);
-  const resetsAt = window.resetsAt !== undefined ? { resetsAt: iso(window.resetsAt) } : {};
+  const reset = iso(window.resetsAt);
+  const resetsAt = reset !== undefined ? { resetsAt: reset } : {};
   if (window.label === "Session") {
     return {
       id: "five_hour",
@@ -93,7 +97,11 @@ export function toUsageWindow(
   return { id, kind: "other", label: window.label, usedPercent, ...resetsAt };
 }
 
-/** Banked resets (Anthropic's grants) as a count only: lastdrop spends none from T3, so no credit id. */
+/**
+ * Banked resets (Anthropic's grants) as a count only: lastdrop spends none from T3, so no credit id. Not sent for
+ * an account a T3 provider also reports (`nativeEmails`): T3 takes the fresher count's source as the one to redeem
+ * through, and ours has no credit id, so its **Use reset** would disappear.
+ */
 function resetCredits(
   account: LimitResets | undefined,
   windows: ReadonlyArray<UsageWindow>,
@@ -103,8 +111,13 @@ function resetCredits(
   );
   const availableCount = all.reduce((sum, resets) => sum + resets.count, 0);
   if (availableCount === 0) return undefined;
-  const next = all.flatMap((resets) => resets.expiries).toSorted((a, b) => a - b)[0];
-  return { availableCount, ...(next !== undefined ? { nextExpiresAt: iso(next) } : {}) };
+  const next = iso(
+    all
+      .flatMap((resets) => resets.expiries)
+      .filter(Number.isFinite)
+      .toSorted((a, b) => a - b)[0],
+  );
+  return { availableCount, ...(next !== undefined ? { nextExpiresAt: next } : {}) };
 }
 
 function limits(input: {
@@ -114,7 +127,7 @@ function limits(input: {
   readonly problem: string | undefined;
   readonly resets?: ServerProviderUsageLimits["resetCredits"];
 }): ServerProviderUsageLimits {
-  const checkedAt = iso(input.readAt ?? input.now);
+  const checkedAt = iso(input.readAt) ?? isoNow(input.now);
   const windows = input.windows.flatMap((window) => toUsageWindow(window) ?? []);
   if (input.problem !== undefined || windows.length === 0) {
     return {
@@ -128,30 +141,53 @@ function limits(input: {
 
 const SIGN_IN_PROBLEMS = { needsSignIn: "Needs sign-in.", signedOut: "Signed out." } as const;
 
+/** One account that could not be converted; the others still publish. */
+const unreadable = (now: number): ServerProviderUsageLimits => ({
+  checkedAt: isoNow(now),
+  windows: [],
+  unavailable: { reason: "probeFailed", message: "lastdrop could not show this account's usage." },
+});
+
+const safely = (now: number, make: () => ServerProviderUsageLimits): ServerProviderUsageLimits => {
+  try {
+    return make();
+  } catch {
+    return unreadable(now);
+  }
+};
+
+const emailKey = (email: string): string => email.trim().toLowerCase();
+
 /** Each Claude account lastdrop knows, then each configured Z.ai/OpenRouter endpoint. */
 export function lastdropLimitSource(input: {
   readonly accounts: AccountsView | undefined;
   readonly endpoints: EndpointsView | undefined;
   readonly now: number;
+  /** E-mails T3's own providers report (any case): their accounts get no reset count from us. */
+  readonly nativeEmails?: ReadonlySet<string>;
 }): UsageLimitSourceSnapshot | undefined {
   const { now } = input;
+  const native = new Set([...(input.nativeEmails ?? [])].map(emailKey));
   const claude = (input.accounts?.accounts ?? []).map((account): UsageLimitSourceAccount => ({
     id: account.key,
     driver: CLAUDE_DRIVER,
     ...(account.email ? { email: account.email } : {}),
     ...(account.plan ? { plan: account.plan } : {}),
-    usageLimits: limits({
-      readAt: account.readAt,
-      now,
-      windows: account.windows,
-      problem:
-        account.signIn === "ok"
-          ? account.windows.length === 0
+    usageLimits: safely(now, () =>
+      limits({
+        readAt: account.readAt,
+        now,
+        windows: account.windows,
+        // A failing read shows its error, not the last good numbers.
+        problem:
+          account.signIn === "ok"
             ? account.error
-            : undefined
-          : (account.signInDetail ?? SIGN_IN_PROBLEMS[account.signIn]),
-      resets: resetCredits(account.resets, account.windows),
-    }),
+            : (account.signInDetail ?? SIGN_IN_PROBLEMS[account.signIn]),
+        ...(account.email && native.has(emailKey(account.email))
+          ? {}
+          : { resets: resetCredits(account.resets, account.windows) }),
+      }),
+    ),
   }));
   const endpoints = (input.endpoints?.endpoints ?? [])
     .filter((endpoint) => endpoint.configured)
@@ -159,12 +195,14 @@ export function lastdropLimitSource(input: {
       id: endpoint.title,
       driver: ENDPOINT_DRIVERS[endpoint.provider],
       ...(endpoint.usage?.plan ? { plan: endpoint.usage.plan } : {}),
-      usageLimits: limits({
-        readAt: endpoint.readAt,
-        now,
-        windows: endpoint.usage?.windows ?? [],
-        problem: endpoint.usage ? undefined : (endpoint.error ?? endpoint.problem),
-      }),
+      usageLimits: safely(now, () =>
+        limits({
+          readAt: endpoint.readAt,
+          now,
+          windows: endpoint.usage?.windows ?? [],
+          problem: endpoint.usage ? undefined : (endpoint.error ?? endpoint.problem),
+        }),
+      ),
     }));
   const accounts = [...claude, ...endpoints];
   if (accounts.length === 0) return undefined;
@@ -172,7 +210,7 @@ export function lastdropLimitSource(input: {
     id: LASTDROP_SOURCE_ID,
     kind: "cliproxy",
     label: SOURCE_LABEL,
-    checkedAt: iso(now),
+    checkedAt: isoNow(now),
     accounts,
   };
 }
@@ -180,26 +218,61 @@ export function lastdropLimitSource(input: {
 // MARK: Feed
 
 type Listener = (snapshots: ReadonlyArray<UsageLimitSourceSnapshot>) => void;
-let latest: ReadonlyArray<UsageLimitSourceSnapshot> = [];
-let latestKey = "[]";
-const listeners = new Set<Listener>();
+
+/**
+ * What decides whether a reading changed: not the source's check time, nor an unavailable account's (it has no
+ * reading, so its time is the publish time and would change every round).
+ */
+const changeKey = (snapshots: ReadonlyArray<UsageLimitSourceSnapshot>): string =>
+  JSON.stringify(
+    snapshots.map(({ checkedAt: _, accounts, ...rest }) => ({
+      ...rest,
+      accounts: accounts.map((account) => {
+        if (!account.usageLimits.unavailable) return account;
+        const { checkedAt: __, ...usageLimits } = account.usageLimits;
+        return { ...account, usageLimits };
+      }),
+    })),
+  );
+
+/**
+ * The latest published reading, shared by the publisher and the `UsageLimitSources` wrapper (they sit in different
+ * layers of the server's stack). The publisher layer owns it: it starts empty when that layer builds and is cleared
+ * when it closes, so a rebuilt layer never serves the previous one's reading.
+ */
+class Feed {
+  private latest: ReadonlyArray<UsageLimitSourceSnapshot> = [];
+  private latestKey = changeKey([]);
+  private readonly listeners = new Set<Listener>();
+
+  current = (): ReadonlyArray<UsageLimitSourceSnapshot> => this.latest;
+
+  publish = (snapshots: ReadonlyArray<UsageLimitSourceSnapshot>): boolean => {
+    const key = changeKey(snapshots);
+    if (key === this.latestKey) return false;
+    this.latest = snapshots;
+    this.latestKey = key;
+    for (const listener of this.listeners) listener(snapshots);
+    return true;
+  };
+
+  subscribe = (listener: Listener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+}
+
+const feed = new Feed();
 
 /** The snapshots the wrapper adds after T3's own; empty until the publisher runs. */
-export const currentLastdropSources = (): ReadonlyArray<UsageLimitSourceSnapshot> => latest;
+export const currentLastdropSources = feed.current;
 
-/** Publishes a new reading; a reading equal to the last one (ignoring `checkedAt` of the source) is dropped. */
-export function publishLastdropSources(
-  snapshots: ReadonlyArray<UsageLimitSourceSnapshot>,
-): boolean {
-  const key = JSON.stringify(snapshots.map(({ checkedAt: _, ...rest }) => rest));
-  if (key === latestKey) return false;
-  latest = snapshots;
-  latestKey = key;
-  for (const listener of listeners) listener(snapshots);
-  return true;
-}
+/** Publishes a new reading; one with the same content as the last (see `changeKey`) is dropped. */
+export const publishLastdropSources = feed.publish;
 
-export function onLastdropSources(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+export const onLastdropSources = feed.subscribe;
+
+/** Empties the feed (listeners hear `[]`): the publisher layer's start and end. */
+export const resetLastdropSources = (): void => {
+  feed.publish([]);
+};

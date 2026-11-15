@@ -13,7 +13,6 @@ import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import type { UsageLimitSources } from "../usage/UsageLimitSources.ts";
 
 /** Services the extension drivers need to create instances. */
 export type ExtensionDriversEnv = never;
@@ -55,17 +54,19 @@ export const wrapClaudeQueryRunner = <E, R>(
   );
 
 /**
- * Wraps T3's usage limit sources (the hubs **Usage → Limits** reads): lastdrop's Claude accounts, Z.ai and
- * OpenRouter come after T3's own sources (`lastdrop/limitSourcesLive.ts`). With nothing published it adds nothing.
+ * T3's usage limit sources (the hubs **Usage → Limits** reads) with lastdrop's Claude accounts, Z.ai and OpenRouter
+ * after T3's own (`lastdrop/limitSourcesLive.ts`); `server.ts` uses it in place of `UsageLimitSources.layer`. With
+ * nothing published it adds nothing.
  */
-export const wrapUsageLimitSources = <E, R>(
-  sources: Layer.Layer<UsageLimitSources, E, R>,
-): Layer.Layer<UsageLimitSources, E, R> =>
+export const usageLimitSourcesLayer =
   // Loaded lazily: T3's service reaches the settings module, which imports this file's lists.
   Layer.unwrap(
-    Effect.promise(() => import("./lastdrop/limitSourcesLive.ts")).pipe(
-      Effect.map((live) => live.wrap(sources)),
-    ),
+    Effect.promise(() =>
+      Promise.all([
+        import("../usage/UsageLimitSources.ts"),
+        import("./lastdrop/limitSourcesLive.ts"),
+      ]),
+    ).pipe(Effect.map(([t3, live]) => live.wrap(t3.layer))),
   );
 
 /**

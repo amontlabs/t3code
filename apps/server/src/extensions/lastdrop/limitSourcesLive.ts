@@ -11,6 +11,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
+import { ProviderRegistry } from "../../provider/ProviderRegistry.ts";
 import { UsageLimitSources } from "../../usage/UsageLimitSources.ts";
 import { LastdropAccounts } from "./accounts.ts";
 import { LastdropEndpoints } from "./endpointsView.ts";
@@ -20,6 +21,7 @@ import {
   lastdropLimitSource,
   onLastdropSources,
   publishLastdropSources,
+  resetLastdropSources,
 } from "./limitSources.ts";
 
 /** How often the publisher looks at the accounts and endpoints views (both are in memory or cheap reads). */
@@ -73,16 +75,29 @@ export const wrap = <E, R>(
     }),
   ).pipe(Layer.provide(inner));
 
-/** Publishes lastdrop's source from the accounts and endpoints views. Off macOS and under vitest both are empty. */
+/**
+ * Publishes lastdrop's source from the accounts and endpoints views. Off macOS and under vitest both are empty.
+ * The feed's reading lives as long as this layer: emptied when it builds and when it closes.
+ */
 export const publisher = Layer.effectDiscard(
   Effect.gen(function* () {
     const accounts = yield* LastdropAccounts;
     const endpoints = yield* LastdropEndpoints;
+    const providers = yield* ProviderRegistry;
+    yield* Effect.acquireRelease(Effect.sync(resetLastdropSources), () =>
+      Effect.sync(resetLastdropSources),
+    );
     const publish = Effect.gen(function* () {
+      const nativeEmails = new Set(
+        (yield* providers.getProviders).flatMap((provider) =>
+          provider.enabled && provider.auth.email ? [provider.auth.email] : [],
+        ),
+      );
       const source = lastdropLimitSource({
         accounts: yield* accounts.view,
         endpoints: yield* endpoints.view,
         now: yield* Clock.currentTimeMillis,
+        nativeEmails,
       });
       publishLastdropSources(source ? [source] : []);
     }).pipe(Effect.catchCause((cause) => Effect.logWarning("lastdrop limit source failed", cause)));

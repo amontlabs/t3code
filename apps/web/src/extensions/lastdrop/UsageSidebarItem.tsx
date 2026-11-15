@@ -4,7 +4,7 @@
  * card replaces the plain "Usage" tooltip. Clicking still opens **Usage**.
  */
 import { useAtomValue } from "@effect/atom-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 
 import { ProviderInstanceIcon } from "~/components/chat/ProviderInstanceIcon";
 import { providerClients } from "~/components/settings/providerDriverMeta";
@@ -13,7 +13,7 @@ import { SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
 import { cn } from "~/lib/utils";
 import { environmentPresentations } from "~/state/presentation";
 
-import { type HoverAccount, usageHoverGroups } from "./usageHoverView";
+import { type HoverAccount, usageHoverGroups, usageHoverSummary } from "./usageHoverView";
 
 function AccountRow({ account }: { readonly account: HoverAccount }) {
   return (
@@ -30,7 +30,15 @@ function AccountRow({ account }: { readonly account: HoverAccount }) {
         account.windows.map((window) => (
           <div key={window.id} className="flex items-center gap-2 text-xs">
             <span className="w-28 shrink-0 truncate text-muted-foreground">{window.label}</span>
-            <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+            <span
+              role="meter"
+              aria-label={`${window.label} left`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={window.leftPercent}
+              aria-valuetext={`${window.leftPercent}% left`}
+              className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
+            >
               <span
                 className={cn(
                   "block h-full rounded-full",
@@ -56,13 +64,13 @@ function AccountRow({ account }: { readonly account: HoverAccount }) {
   );
 }
 
-function UsageLimitsCard({ now }: { readonly now: number }) {
+function useUsageHoverGroups(now: number) {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const groups = usageHoverGroups(
-    presentations,
-    now,
-    (driver) => providerClients.get(driver)?.label,
-  );
+  return usageHoverGroups(presentations, now, (driver) => providerClients.get(driver)?.label);
+}
+
+function UsageLimitsCard({ now }: { readonly now: number }) {
+  const groups = useUsageHoverGroups(now);
   return (
     <div className="flex max-h-[70vh] w-[26rem] flex-col gap-2 overflow-y-auto p-3 text-sm">
       <div className="font-medium">Usage limits</div>
@@ -103,13 +111,24 @@ export function UsageSidebarItem({
   onClick: () => void;
 }) {
   const [openedAt, setOpenedAt] = useState(() => Date.now());
+  // Keyboard focus opens the card too; screen readers get it as the button's description, the name stays "Usage".
+  const summaryId = useId();
+  const summary = usageHoverSummary(useUsageHoverGroups(openedAt));
   return (
     <SidebarMenuItem className="shrink-0">
+      <span id={summaryId} className="sr-only">
+        {summary}
+      </span>
       <PreviewCard onOpenChange={(open) => open && setOpenedAt(Date.now())}>
         <PreviewCardTrigger
           delay={200}
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-label={label}
+              aria-describedby={summaryId}
+              onClick={onClick}
+              size="icon"
+            >
               {icon}
             </SidebarMenuButton>
           }
