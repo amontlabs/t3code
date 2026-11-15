@@ -13,7 +13,7 @@ import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
-import type { UsageLimitSources } from "../usage/UsageLimitSources.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 
 /** Services the extension drivers need to create instances. */
@@ -56,13 +56,11 @@ export const wrapClaudeQueryRunner = <E, R>(
   );
 
 /**
- * T3's usage limit sources with lastdrop's accounts, Z.ai and OpenRouter after T3's own; `server.ts` passes T3's
- * layer in. Keep both imports static: a dynamic one splits a second `server-*.mjs` chunk and breaks the desktop
- * build (`scripts/lastdrop/check-server-bundle.ts`).
+ * T3's usage limit sources with lastdrop's accounts, Z.ai and OpenRouter after T3's own; `server.ts` uses it in
+ * place of T3's layer. Keep both imports static: a dynamic one splits a second `server-*.mjs` chunk and breaks the
+ * desktop build (`scripts/lastdrop/check-server-bundle.ts`).
  */
-export const wrapUsageLimitSources = <E, R>(
-  inner: Layer.Layer<UsageLimitSources, E, R>,
-): Layer.Layer<UsageLimitSources, E, R> => LimitSourcesLive.wrap(inner);
+export const usageLimitSourcesLayer = LimitSourcesLive.wrap(UsageLimitSources.layer);
 
 /**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
@@ -91,11 +89,7 @@ const services = Layer.mergeAll(
 );
 
 /** The services, and the publisher that feeds their readings to the usage limit sources wrapper. */
-export const layer = Layer.unwrap(
-  Effect.promise(() => import("./lastdrop/limitSourcesLive.ts")).pipe(
-    Effect.map((live) => live.publisher),
-  ),
-).pipe(Layer.provideMerge(services));
+export const layer = LimitSourcesLive.publisher.pipe(Layer.provideMerge(services));
 
 /**
  * HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section, and
