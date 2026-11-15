@@ -42,6 +42,7 @@ import {
 import { ALL_RUNTIME_MODES, lastdropAnswers } from "./permissions.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeRouterAdapter } from "./router.ts";
+import { observeAntigravitySessionEvent } from "../../acpToolCalls.ts";
 
 const LASTDROP = ProviderInstanceId.make("lastdropAgents");
 const ANTIGRAVITY = ProviderInstanceId.make("antigravity");
@@ -92,6 +93,8 @@ interface Request {
   readonly noTool?: boolean;
 }
 
+let callCounter = 0;
+
 interface Answer {
   readonly requestId: string;
   readonly decision?: string;
@@ -110,6 +113,8 @@ const makeAskingAdapter = (input: {
   readonly refuseAnswers?: boolean;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => {
   const driver = ProviderDriverKind.make(input.driver);
+  /** Unique per adapter: agy's calls are kept server-wide by instance and call id. */
+  const callId = `call-${(callCounter += 1)}`;
   return {
     instanceId: input.instanceId,
     driver,
@@ -179,6 +184,28 @@ const makeAskingAdapter = (input: {
             startedAt: at,
             updatedAt: at,
           };
+          // What the driver's seam sees of agy's own call (Antigravity only).
+          if (input.instanceId === ANTIGRAVITY && input.request.noTool !== true)
+            observeAntigravitySessionEvent(ANTIGRAVITY, {
+              _tag: "ToolCallUpdated",
+              toolCall: {
+                toolCallId: callId,
+                status: "inProgress",
+                data:
+                  input.request.kind === "file-change"
+                    ? {
+                        title: "replace_file_content",
+                        kind: "edit",
+                        rawInput: { TargetFile: input.request.prompt },
+                      }
+                    : {
+                        title: "run_command",
+                        kind: "execute",
+                        rawInput: { CommandLine: input.request.prompt, Cwd: "/w" },
+                      },
+              },
+              rawPayload: {},
+            });
           yield* Queue.offerAll(events, [
             {
               type: "provider_turn.updated",
@@ -222,7 +249,7 @@ const makeAskingAdapter = (input: {
                             id: TurnItemId.make("item:tool"),
                             nativeItemRef: {
                               driver,
-                              nativeId: "call-1",
+                              nativeId: callId,
                               strength: "strong" as const,
                             },
                             title: "replace_file_content",
@@ -237,7 +264,7 @@ const makeAskingAdapter = (input: {
                             id: TurnItemId.make("item:tool"),
                             nativeItemRef: {
                               driver,
-                              nativeId: "call-1",
+                              nativeId: callId,
                               strength: "strong" as const,
                             },
                             title: "run_command",
@@ -275,7 +302,7 @@ const makeAskingAdapter = (input: {
               turnItem: {
                 ...base,
                 id: TurnItemId.make(`item:approval:${turnInput.runOrdinal}`),
-                nativeItemRef: { driver, nativeId: "call-1", strength: "weak" },
+                nativeItemRef: { driver, nativeId: callId, strength: "weak" },
                 ordinal: 3,
                 status: "waiting",
                 completedAt: null,
@@ -599,7 +626,9 @@ describe("lastdrop answers approval requests", () => {
         expectAnswer: true,
       });
       assert.deepEqual(edit.answers, [{ requestId: "request:1", decision: "decline" }]);
-      assert.deepEqual(edit.notices, ['Declined: edit: {"file":"src/a.ts"} (read-only agent)']);
+      assert.deepEqual(edit.notices, [
+        'Declined: replace_file_content: {"TargetFile":"src/a.ts"} (read-only agent)',
+      ]);
       assert.deepEqual(edit.prompts, []);
     }),
   );

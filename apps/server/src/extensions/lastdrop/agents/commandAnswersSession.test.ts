@@ -24,39 +24,55 @@ import * as Queue from "effect/Queue";
 
 import { allAgents, parseCatalog } from "./catalog.ts";
 import { makeSessionAnswers } from "./commandAnswers.ts";
+import { observeAntigravitySessionEvent } from "../../acpToolCalls.ts";
 
-const driver = ProviderDriverKind.make("antigravity");
+const driver = ProviderDriverKind.make("claudeAgent");
 const agent = allAgents(
   parseCatalog({
     agents: [
       {
         name: "live",
         description: "Live checks.",
-        provider: "antigravity",
+        provider: "zai",
         model: "m",
         enabled: true,
       },
     ],
   }),
 ).find((each) => each.name === "live")!;
-const step = agent.chain[0]!;
+const agentOn = (provider: "zai" | "codex" | "antigravity") =>
+  allAgents(
+    parseCatalog({
+      agents: [{ name: "live", description: "Live checks.", provider, model: "m", enabled: true }],
+    }),
+  ).find((each) => each.name === "live")!;
 const providerThreadId = ProviderThreadId.make("provider-thread:1");
 
 const setup = Effect.fn("setup")(function* (options: {
   readonly rules?: () => PermissionRules;
   readonly judge?: (prompt: string, signal: AbortSignal) => Promise<Verdict>;
   readonly interactionMode?: "default" | "plan";
+  readonly provider?: "zai" | "codex" | "antigravity";
+  readonly judgeModel?: () => string;
+  readonly rulesAt?: Array<string | null>;
 }) {
   const answers =
     yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput>();
   const prompts: Array<string> = [];
   const logs: Array<string> = [];
   let rules: PermissionRules = { allow: [], deny: [], ask: [] };
+  const chosen = options.provider === undefined ? agent : agentOn(options.provider);
   const session = makeSessionAnswers({
-    agent,
-    step,
+    agent: chosen,
+    step: chosen.chain[0]!,
     services: {
-      rules: options.rules ?? (() => rules),
+      ...(options.judgeModel === undefined ? {} : { judgeModel: options.judgeModel }),
+      rules:
+        options.rules ??
+        ((cwd) => {
+          options.rulesAt?.push(cwd);
+          return rules;
+        }),
       judge: async (prompt, signal) => {
         prompts.push(prompt);
         return options.judge === undefined
@@ -89,23 +105,25 @@ const setup = Effect.fn("setup")(function* (options: {
     updatedAt: at,
   });
   let n = 0;
-  /** A tool item for native call `call`, then the waiting approval for it; the decision. */
-  const ask = Effect.fn("ask")(function* (
-    tool: Record<string, unknown> | undefined,
+  /** A tool item for native call `call`. */
+  const feed = Effect.fn("feed")(function* (tool: Record<string, unknown>, call: string) {
+    n += 1;
+    yield* session.onEvent({
+      type: "turn_item.updated",
+      driver,
+      turnItem: {
+        ...base(`item:tool:${n}`, n * 10),
+        nativeItemRef: { driver, nativeId: call, strength: "strong" },
+        ...tool,
+      } as OrchestrationV2TurnItem,
+    });
+  });
+  /** The waiting approval for native call `call`; the decision. */
+  const askFor = Effect.fn("askFor")(function* (
+    call: string,
     request: { readonly kind?: ProviderRequestKind; readonly summary?: string } = {},
   ) {
     n += 1;
-    const call = `call-${n}`;
-    if (tool !== undefined)
-      yield* session.onEvent({
-        type: "turn_item.updated",
-        driver,
-        turnItem: {
-          ...base(`item:tool:${n}`, n * 10),
-          nativeItemRef: { driver, nativeId: call, strength: "strong" },
-          ...tool,
-        } as OrchestrationV2TurnItem,
-      });
     yield* session.onEvent({
       type: "turn_item.updated",
       driver,
@@ -135,6 +153,18 @@ const setup = Effect.fn("setup")(function* (options: {
     )[0];
     return { decision: answer.decision, notice: notice ?? "", prompt: prompts.at(-1) };
   });
+  let calls = 0;
+  /** A tool item (or none), then the approval for it. */
+  const ask = Effect.fn("ask")(function* (
+    tool: Record<string, unknown> | undefined,
+    request: { readonly kind?: ProviderRequestKind; readonly summary?: string } = {},
+  ) {
+    calls += 1;
+    const call = `ask-${calls}`;
+    if (tool !== undefined) yield* feed(tool, call);
+    return yield* askFor(call, request);
+  });
+  const askRaw = (call: string) => askFor(call, { summary: "Ran command" });
   const command = (input: string, title = "run_command") => ({
     type: "command_execution",
     title,
@@ -143,6 +173,9 @@ const setup = Effect.fn("setup")(function* (options: {
   return {
     session,
     ask,
+    askFor,
+    askRaw,
+    feed,
     command,
     prompts,
     logs,
@@ -188,13 +221,8 @@ describe("the action is the tool's own, never the approval's summary (review ite
       const unknown = yield* t.ask(undefined, { summary: "Run `ls`" });
       assert.equal(unknown.decision, "decline");
       assert.include(unknown.notice, "could not read which action");
-      // The item's text is only the title, a fallback, the title's backticked part, or was cut.
-      for (const tool of [
-        t.command("run_command"),
-        t.command("Command", "Command"),
-        t.command("ls", "Run `ls`"),
-        t.command("[Earlier output truncated]\n\nls -la"),
-      ]) {
+      // The item's text is only a fallback (agy's titles and cut text: commandAnswersAcp.test.ts).
+      for (const tool of [t.command("run_command"), t.command("Command", "Command")]) {
         const result = yield* t.ask(tool);
         assert.equal(result.decision, "decline", JSON.stringify(tool));
       }
@@ -279,13 +307,13 @@ describe("rules on every request, only judge verdicts kept (review item 5)", () 
       // The judge times out once: refused, and asked again next time.
       assert.equal((yield* t.ask(t.command("npm publish"))).decision, "decline");
       assert.equal((yield* t.ask(t.command("npm publish"))).decision, "accept");
-      // A verdict is kept: the same action isn't judged again.
+      // Each call joins the conversation the judge reads, so the same action is judged again.
       assert.equal((yield* t.ask(t.command("npm publish"))).decision, "accept");
-      assert.equal(calls, 2);
+      assert.equal(calls, 3);
       // A deny rule still refuses a command the judge allowed before.
       t.setRules({ allow: [], deny: ["npm *"], ask: [] });
       assert.equal((yield* t.ask(t.command("npm publish"))).decision, "decline");
-      assert.equal(calls, 2);
+      assert.equal(calls, 3);
     }),
   );
 });
@@ -373,6 +401,90 @@ describe("bounded requests, closed sessions (review item 6)", () => {
       yield* t.session.close;
       yield* Effect.promise(() => aborted);
       assert.deepEqual(t.logs, [], "no answer after the session closed");
+    }),
+  );
+});
+
+describe("verdicts for the conversation and judge that gave them (review 2, item 4)", () => {
+  it.effect("asks again after a new message, or with another judge model", () =>
+    Effect.gen(function* () {
+      let model = "gemini-3.8-flash · low";
+      const t = yield* setup({ judgeModel: () => model });
+      t.session.onMessage(providerThreadId, "Push my branch: run git push.");
+      assert.equal((yield* t.ask(t.command("git push"))).decision, "accept");
+      t.session.onMessage(providerThreadId, "Don't push anything from now on.");
+      yield* t.ask(t.command("git push"));
+      assert.equal(t.prompts.length, 2, "the user's new message reaches the judge");
+      assert.include(t.prompts[1]!, "Don't push anything");
+      model = "gemini-4-argon";
+      yield* t.ask(t.command("git push"));
+      assert.equal(t.prompts.length, 3, "another judge model judges again");
+    }),
+  );
+});
+
+describe("Antigravity's own Cwd (review 2, item 5)", () => {
+  it.effect("reads the rules and tells the judge where the command runs", () =>
+    Effect.gen(function* () {
+      const rulesAt: Array<string | null> = [];
+      const t = yield* setup({ provider: "antigravity", rulesAt });
+      const id = "session-test-cwd-call";
+      observeAntigravitySessionEvent("antigravity", {
+        _tag: "ToolCallUpdated",
+        toolCall: {
+          toolCallId: id,
+          status: "inProgress",
+          data: {
+            title: "run_command",
+            kind: "execute",
+            rawInput: { CommandLine: "make deploy", Cwd: "/other/project" },
+          },
+        },
+        rawPayload: {},
+      });
+      const result = yield* t.askRaw(id);
+      assert.equal(result.decision, "accept");
+      assert.deepEqual(
+        rulesAt,
+        ["/w", "/other/project"],
+        "the thread's rules, and the deny and ask rules where it runs",
+      );
+      assert.include(result.prompt!.split("<planned_action>")[1]!, `"cwd":"/other/project"`);
+    }),
+  );
+});
+
+describe("bounded session memory (review 2, item 6)", () => {
+  it.effect("forgets the oldest calls, and keeps no tool output", () =>
+    Effect.gen(function* () {
+      const t = yield* setup({});
+      yield* t.feed(t.command("make first"), "call-old");
+      for (let i = 0; i < 250; i += 1)
+        yield* t.feed({ ...t.command(`echo ${i}`), output: "SECRET OUTPUT" }, `call-fill-${i}`);
+      const old = yield* t.askFor("call-old");
+      assert.equal(old.decision, "decline", "the oldest call was dropped: unknown, refused");
+      const recent = yield* t.askFor("call-fill-249");
+      assert.equal(recent.decision, "accept");
+      assert.notInclude(recent.prompt ?? "", "SECRET OUTPUT");
+    }),
+  );
+});
+
+describe("Codex's shell launch", () => {
+  it.effect("reads the script inside `<shell> -lc`, as T3's recorded Codex items carry it", () =>
+    Effect.gen(function* () {
+      const t = yield* setup({ provider: "codex" });
+      const read = yield* t.ask(t.command(`/bin/zsh -lc "git status"`), {
+        summary: "Run git status",
+      });
+      assert.equal(read.decision, "accept");
+      assert.include(read.notice, "Allowed as read-only (git status)");
+      const write = yield* t.ask(t.command(`/bin/bash -lc "rm -rf build"`));
+      assert.equal(
+        write.decision,
+        "decline",
+        "Codex's left-over requests are declined unless read-only or allowed",
+      );
     }),
   );
 });

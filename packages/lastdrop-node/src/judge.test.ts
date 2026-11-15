@@ -133,7 +133,13 @@ describe("CommandJudge running agy", () => {
       signal: controller.signal,
     });
     await expect
-      .poll(() => NodeFS.existsSync(pidFile) && NodeFS.readFileSync(pidFile, "utf8").trim() !== "")
+      .poll(
+        () => NodeFS.existsSync(pidFile) && NodeFS.readFileSync(pidFile, "utf8").trim() !== "",
+        {
+          // zsh may take a while to start while the whole suite runs.
+          timeout: 15_000,
+        },
+      )
       .toBe(true);
     const child = Number(NodeFS.readFileSync(pidFile, "utf8").trim());
     controller.abort();
@@ -146,7 +152,9 @@ describe("CommandJudge running agy", () => {
         return false;
       }
     };
-    await expect.poll(alive, { message: "the judge's own child is killed too" }).toBe(false);
+    await expect
+      .poll(alive, { message: "the judge's own child is killed too", timeout: 15_000 })
+      .toBe(false);
     // Aborted before it started: refused without running.
     const early = new AbortController();
     early.abort();

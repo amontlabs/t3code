@@ -18,7 +18,9 @@ import {
   readCatalogJudge,
   recordCall,
   runCommandJudge,
+  judgeSummary,
   sortedJson,
+  unwrapShellLaunch,
   type Decision,
   type JudgeAction,
   type JudgeContext,
@@ -42,6 +44,7 @@ import type {
 } from "@t3tools/provider-core/server/ProviderAdapter";
 
 import { isCutAntigravityToolText } from "../../../provider/acp/AntigravityProtocol.ts";
+import { rawToolCall, type RawToolCall } from "../../acpToolCalls.ts";
 import { stepLabel, type AgentDefinition, type AgentStep } from "./catalog.ts";
 import { standaloneCatalogFiles } from "./catalogSource.ts";
 import { lastdropAnswers } from "./permissions.ts";
@@ -53,6 +56,8 @@ export interface CommandAnswerServices {
   /** Runs the judge on a prompt; `signal` aborts when the session closes. Never throws. */
   readonly judge: (prompt: string, signal: AbortSignal) => Promise<Verdict>;
   readonly log: (line: string) => void;
+  /** The judge model now, so a verdict is kept only for the model that gave it. */
+  readonly judgeModel?: () => string;
 }
 
 let logPath: string | undefined;
@@ -82,6 +87,7 @@ export const defaultCommandAnswerServices: CommandAnswerServices = {
       }),
     ),
   log: appendLog,
+  judgeModel: () => judgeSummary(readCatalogJudge(standaloneCatalogFiles().catalog)),
 };
 
 /** Swift keeps the latest 10 requests (`AntigravityBackend.run`). */
@@ -93,20 +99,119 @@ type ApprovalItem = Extract<OrchestrationV2TurnItem, { type: "approval_request" 
 /** Provider fallbacks for a command whose text the request didn't carry. */
 const GENERIC_COMMAND_TEXT = new Set(["command", "monitor", "terminal", "run_command", "bash"]);
 
+/** How long an approval waits for agy's own update of its call (it comes just before). */
+const RAW_CALL_WAIT = "5 seconds";
+
+/** Bounds for a session's memory: calls, requests and verdicts it keeps. */
+const MAX_TOOLS = 200;
+const MAX_IDS = 500;
+const MAX_VERDICTS = 200;
+
+/** What a request is about: the action to decide, or why it is refused without reading further. */
+type Planned =
+  | { readonly action: JudgeAction; readonly cwd: string | null }
+  | { readonly refusal: string };
+
+/** A tool item as kept for its approval: inputs only, never outputs. */
+interface ToolSeen {
+  readonly type: OrchestrationV2TurnItem["type"];
+  readonly command?: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const unread = (item: ApprovalItem, what = "which command"): Planned => {
+  const label = actionLabel(item.prompt?.trim() || item.requestKind);
+  return { refusal: `${label} (lastdrop could not read ${what} this request is for)` };
+};
+
+const mismatch = (command: string, prompt: string): Planned => ({
+  refusal: `${actionLabel(command)} (the request names another command than the call runs: ${actionLabel(prompt)})`,
+});
+
+const shell = (command: string, cwd: string | null): Planned => ({
+  action: {
+    tool: "run_command",
+    kind: "execute",
+    label: actionLabel(command),
+    command,
+    input: { command, ...(cwd === null ? {} : { cwd }) },
+  },
+  cwd,
+});
+
+const otherTool = (
+  name: string,
+  kind: string,
+  input: Record<string, unknown>,
+  cwd: string | null,
+): Planned => {
+  const detail = sortedJson(input);
+  return {
+    action: {
+      tool: name,
+      kind,
+      label: actionLabel(detail === "{}" ? name : `${name}: ${detail}`),
+      input: { ...input, ...(cwd === null ? {} : { cwd }) },
+    },
+    cwd,
+  };
+};
+
+/** T3's summaries of a command call, which name no command. */
+const COMMAND_SUMMARIES = new Set(["ran command", "run command", "running command"]);
+
 /**
- * The shell command a `command_execution` item runs, as the provider read it from the tool's own
- * input (Antigravity `CommandLine`, Claude `Bash.command`, Codex `exec`). Undefined when the text
- * may be the title or a fallback, or was cut: then nobody knows what would run.
+ * Whether the approval's text names a command other than the call's: any backticked part that
+ * isn't the command, or any text that is neither the command, the call's title nor a summary.
  */
-const realCommand = (
-  item: Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
-): string | undefined => {
-  const command = item.input.trim();
-  const title = (item.title ?? "").trim();
-  if (command === "" || GENERIC_COMMAND_TEXT.has(command.toLowerCase())) return undefined;
-  if (command === title || title.includes(`\`${command}\``)) return undefined;
-  if (isCutAntigravityToolText(item.input)) return undefined;
-  return item.input;
+const namesAnotherCommand = (
+  prompt: string | undefined,
+  command: string,
+  title?: string,
+): boolean => {
+  const text = prompt?.trim() ?? "";
+  if (text === "" || text === command.trim() || text === title) return false;
+  const quoted = [...text.matchAll(/`([^`]*)`/g)].map((match) => match[1]!.trim());
+  if (quoted.length > 0) return quoted.some((part) => part !== command.trim());
+  const lower = text.toLowerCase();
+  return !COMMAND_SUMMARIES.has(lower) && !GENERIC_COMMAND_TEXT.has(lower);
+};
+
+/**
+ * An Antigravity request, from agy's own data for the call (`acpToolCalls.ts`): only its
+ * `run_command` tool with a `CommandLine` that decodes is a shell command, in its own `Cwd`; another
+ * command-running tool is refused, any other tool is judged with its name and input. A request that
+ * names another command than the call is refused.
+ */
+const antigravityPlan = (
+  item: ApprovalItem,
+  raw: RawToolCall | undefined,
+  threadCwd: string | null,
+): Planned => {
+  if (raw === undefined) return unread(item);
+  const input = raw.rawInput;
+  if (input !== undefined && !isRecord(input)) return unread(item);
+  const { toolSummary: _ownWords, ...fields } = input ?? {};
+  if (raw.title === "run_command" && raw.kind === "execute") {
+    const line = fields.CommandLine;
+    const cwd = fields.Cwd;
+    if (
+      typeof line !== "string" ||
+      line.trim() === "" ||
+      (cwd !== undefined && typeof cwd !== "string")
+    )
+      return unread(item);
+    if (isCutAntigravityToolText(line)) return unread(item);
+    if (namesAnotherCommand(item.prompt, line, raw.title))
+      return mismatch(line, item.prompt!.trim());
+    return shell(line, typeof cwd === "string" && cwd.trim() !== "" ? cwd : threadCwd);
+  }
+  if (raw.kind === "execute") return unread(item);
+  return otherTool(raw.title ?? raw.name ?? "tool", raw.kind ?? "other", fields, threadCwd);
 };
 
 /** What the judge reads of another tool: its own fields, never its output. */
@@ -137,31 +242,32 @@ const toolName = (item: OrchestrationV2TurnItem): string =>
       ? "edit"
       : item.type;
 
+/** The tool item as kept: inputs only. */
+const seen = (item: OrchestrationV2TurnItem): ToolSeen => ({
+  type: item.type,
+  name: toolName(item),
+  input: toolInput(item),
+  ...(item.type === "command_execution" ? { command: item.input } : {}),
+});
+
 /**
- * The action an approval asks about, from the tool item the provider made for the same native call
- * (the approval itself carries only a summary). Only a real shell command goes through the shell
- * rules and the read-only list; any other tool goes to the judge with its name and input, as in the
- * standalone app. Undefined when the call is unknown or its command can't be read: refused.
+ * A Claude or Codex request, from the tool item for the same call: only `command_execution`
+ * (Claude's Bash, Codex's command, unwrapped from its `<shell> -lc` launch) is a shell command.
  */
-const approvalAction = (
+const itemPlan = (
   item: ApprovalItem,
-  tool: OrchestrationV2TurnItem | undefined,
+  tool: ToolSeen | undefined,
+  codex: boolean,
   cwd: string | null,
-): JudgeAction | undefined => {
-  if (tool === undefined) return undefined;
-  const where = cwd === null ? {} : { cwd };
+): Planned => {
+  if (tool === undefined) return unread(item, "which action");
   if (tool.type === "command_execution") {
-    const command = realCommand(tool);
-    if (command === undefined) return undefined;
-    return {
-      tool: "run_command",
-      kind: "execute",
-      label: actionLabel(command),
-      command,
-      input: { command, ...where },
-    };
+    const raw = tool.command?.trim() ?? "";
+    if (raw === "" || GENERIC_COMMAND_TEXT.has(raw.toLowerCase())) return unread(item);
+    // Claude's approval carries Bash's own command: it must be the item's. Codex's carries its reason.
+    if (!codex && namesAnotherCommand(item.prompt, raw)) return mismatch(raw, item.prompt!.trim());
+    return shell(codex ? (unwrapShellLaunch(raw) ?? raw) : raw, cwd);
   }
-  const name = toolName(tool);
   const kind =
     tool.type === "file_change" || item.requestKind === "file-change"
       ? "edit"
@@ -170,19 +276,13 @@ const approvalAction = (
         : tool.type === "web_search"
           ? "fetch"
           : "other";
-  const input = toolInput(tool);
-  const detail = sortedJson(input);
-  return {
-    tool: name,
-    kind,
-    label: actionLabel(detail === "{}" ? name : `${name}: ${detail}`),
-    input: { ...input, ...where },
-  };
+  return otherTool(tool.name, kind, tool.input, cwd);
 };
 
-/** An action the judge decided, by its full content and mode. */
-const verdictKey = (action: JudgeAction, policy: JudgePolicy): string =>
-  sortedJson({ tool: action.tool, kind: action.kind, input: action.input, policy });
+/** Keeps a map or set to its newest `max` entries. */
+const bound = <K>(collection: Map<K, unknown> | Set<K>, max: number) => {
+  while (collection.size > max) collection.delete(collection.keys().next().value!);
+};
 
 /** Provider threads by id; an item with none shares one key. */
 const threadKey = (id: string | null | undefined): string => id ?? "";
@@ -208,8 +308,8 @@ export const makeSessionAnswers = (input: {
   const recorded = new Set<string>();
   const handled = new Set<string>();
   const feedback = new Set<string>();
-  /** The latest tool item for each native call, which an approval for that call is about. */
-  const tools = new Map<string, OrchestrationV2TurnItem>();
+  /** Each native call's latest tool item, inputs only, which an approval for that call is about. */
+  const tools = new Map<string, ToolSeen>();
   /** Judge verdicts only: rules are read again for every request, and failures are never kept. */
   const verdicts = new Map<string, Verdict>();
   const closing = new AbortController();
@@ -241,12 +341,17 @@ export const makeSessionAnswers = (input: {
   /** Earlier tool calls, inputs only; and each call's latest item, by its native id. */
   const recordItem = (item: OrchestrationV2TurnItem) => {
     const nativeId = item.nativeItemRef?.nativeId;
-    if (nativeId != null && item.type !== "approval_request") tools.set(nativeId, item);
+    if (nativeId != null && item.type !== "approval_request" && item.type !== "system_notice") {
+      tools.delete(nativeId);
+      tools.set(nativeId, seen(item));
+      bound(tools, MAX_TOOLS);
+    }
     if (recorded.has(item.id)) return;
     let call: { tool: string; input: Record<string, unknown> } | undefined;
     if (item.type === "command_execution") {
-      const command = realCommand(item);
-      if (command !== undefined) call = { tool: "run_command", input: { command } };
+      const command = item.input.trim();
+      if (command !== "" && !GENERIC_COMMAND_TEXT.has(command.toLowerCase()))
+        call = { tool: "run_command", input: { command } };
     } else if (
       item.type === "file_change" ||
       item.type === "file_search" ||
@@ -256,6 +361,7 @@ export const makeSessionAnswers = (input: {
       call = { tool: toolName(item), input: toolInput(item) };
     if (call === undefined) return;
     recorded.add(item.id);
+    bound(recorded, MAX_IDS);
     const key = threadKey(item.providerThreadId);
     contexts.set(key, recordCall(contextFor(key), call.tool, call.input));
   };
@@ -290,48 +396,64 @@ export const makeSessionAnswers = (input: {
     } as ProviderAdapterV2Event;
   });
 
-  /** The judge, once per identical action and mode; a failure is never kept. */
-  const judgeOnce =
-    (key: string) =>
-    async (prompt: string): Promise<Verdict> => {
-      const kept = verdicts.get(key);
-      if (kept !== undefined) return kept;
-      const verdict = await services
-        .judge(prompt, closing.signal)
-        .catch((error: unknown): Verdict => ({
-          allow: false,
-          failure: error instanceof Error ? error.message : String(error),
-        }));
-      if (verdict.failure === undefined) verdicts.set(key, verdict);
-      return verdict;
+  /**
+   * The judge, once per identical prompt and judge model: the same action, mode and conversation
+   * (a new message or call asks again). A failure is never kept.
+   */
+  const judgeOnce = async (prompt: string): Promise<Verdict> => {
+    const key = sortedJson({ prompt, judge: services.judgeModel?.() ?? "" });
+    const kept = verdicts.get(key);
+    if (kept !== undefined) return kept;
+    const verdict = await services
+      .judge(prompt, closing.signal)
+      .catch((error: unknown): Verdict => ({
+        allow: false,
+        failure: error instanceof Error ? error.message : String(error),
+      }));
+    if (verdict.failure === undefined) {
+      verdicts.set(key, verdict);
+      bound(verdicts, MAX_VERDICTS);
+    }
+    return verdict;
+  };
+
+  /** The user's rules where the agent works, plus the deny and ask rules where the command runs. */
+  const rulesFor = (threadCwd: string | null, cwd: string | null): PermissionRules => {
+    const thread = services.rules(threadCwd);
+    if (cwd === null || cwd === threadCwd) return thread;
+    const there = services.rules(cwd);
+    return {
+      allow: thread.allow,
+      deny: [...new Set([...thread.deny, ...there.deny])],
+      ask: [...new Set([...thread.ask, ...there.ask])],
     };
+  };
 
   const decide = Effect.fn("LastdropCommandAnswers.decide")(function* (
     item: ApprovalItem,
-    action: JudgeAction | undefined,
+    planned: Planned,
     policy: JudgePolicy,
     judged: boolean,
   ) {
-    if (action === undefined) {
-      const what = actionLabel(item.prompt?.trim() || item.requestKind);
+    if ("refusal" in planned) {
       return {
         allow: false,
-        declined: `${what} (lastdrop could not read which action this request is for)`,
-        step: `Declined (the action could not be read): ${what}`,
+        declined: planned.refusal,
+        step: `Declined (the request could not be read): ${planned.refusal}`,
       } satisfies Decision;
     }
+    const { action } = planned;
     let reachedJudge = false;
-    const cwd = policies.get(threadKey(item.providerThreadId))?.cwd ?? input.openPolicy.cwd;
-    const judge = judgeOnce(verdictKey(action, policy));
+    const threadCwd = policies.get(threadKey(item.providerThreadId))?.cwd ?? input.openPolicy.cwd;
     const decision = yield* Effect.promise(() =>
       decideAction({
         action,
         policy,
-        rules: services.rules(cwd),
+        rules: rulesFor(threadCwd, planned.cwd),
         context: contextFor(threadKey(item.providerThreadId)),
         judge: async (prompt) => {
           reachedJudge = true;
-          return judged ? judge(prompt) : { allow: false, failure: "not judged" };
+          return judged ? judgeOnce(prompt) : { allow: false, failure: "not judged" };
         },
       }),
     );
@@ -344,15 +466,34 @@ export const makeSessionAnswers = (input: {
     return decision;
   });
 
+  /** What the request is about: agy's own data for Antigravity, the tool item for the others. */
+  const plan = Effect.fn("LastdropCommandAnswers.plan")(function* (
+    item: ApprovalItem,
+    threadCwd: string | null,
+  ) {
+    const nativeId = item.nativeItemRef?.nativeId;
+    if (step.provider === "antigravity") {
+      if (nativeId == null) return unread(item);
+      const raw = yield* rawToolCall(step.instanceId, nativeId, RAW_CALL_WAIT);
+      return antigravityPlan(item, raw, threadCwd);
+    }
+    return itemPlan(
+      item,
+      nativeId == null ? undefined : tools.get(nativeId),
+      step.provider === "codex",
+      threadCwd,
+    );
+  });
+
   /** Decides, answers, logs; an answer the adapter refuses (the person answered first) shows nothing. */
   const answer = Effect.fn("LastdropCommandAnswers.answer")(function* (
     event: TurnItemEvent,
     item: ApprovalItem,
-    action: JudgeAction | undefined,
+    threadCwd: string | null,
     policy: JudgePolicy,
     judged: boolean,
   ) {
-    const decision = yield* decide(item, action, policy, judged);
+    const decision = yield* decide(item, yield* plan(item, threadCwd), policy, judged);
     if (closing.signal.aborted) return;
     const reply: ProviderApprovalDecision = decision.allow ? "accept" : "decline";
     const answered = yield* input
@@ -387,8 +528,10 @@ export const makeSessionAnswers = (input: {
       event.type === "runtime_request.updated" &&
       event.runtimeRequest.responseCapability.type === "live"
     ) {
-      if (event.runtimeRequest.responseCapability.supportsFeedback === true)
+      if (event.runtimeRequest.responseCapability.supportsFeedback === true) {
         feedback.add(event.runtimeRequest.id);
+        bound(feedback, MAX_IDS);
+      }
     }
     if (event.type === "turn_item.updated") {
       const item = event.turnItem;
@@ -404,14 +547,9 @@ export const makeSessionAnswers = (input: {
         const answering = lastdropAnswers(step, policy);
         if (answering !== undefined) {
           handled.add(item.requestId);
-          const nativeId = item.nativeItemRef?.nativeId;
-          const action = approvalAction(
-            item,
-            nativeId == null ? undefined : tools.get(nativeId),
-            policy.cwd,
-          );
+          bound(handled, MAX_IDS);
           yield* Effect.forkDetach(
-            answer(event, item, action, answering.policy, answering.judge).pipe(
+            answer(event, item, policy.cwd, answering.policy, answering.judge).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("lastdrop command answer failed", cause),
               ),

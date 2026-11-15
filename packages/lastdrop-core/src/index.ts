@@ -14,3 +14,4 @@ export * from "./judge/permissionRules.ts";
 export * from "./judge/readOnlyCommands.ts";
 export * from "./judge/readOnlyFlagTables.ts";
 export * from "./threadRouting.ts";
+export * from "./judge/shellLaunch.ts";

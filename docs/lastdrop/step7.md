@@ -13,17 +13,23 @@ table is in `packages/lastdrop-core/PORTING.md`.
   right after `runtime_request.updated`) is answered in the background through the inner adapter's
   `respondToRuntimeRequest`: `accept` or `decline`. The row still reaches T3 and resolves as usual. Only
   T3's own event pump (`events`) answers; `subscribeEvents` only watches. Each request is answered once.
-- **What is checked** (review fix): never the approval row's text, which is only a summary (T3's ACP
-  path falls back to the title, `run_command` for agy). The action is the tool item the provider emitted
-  for the same native call (`nativeItemRef`) before asking:
-  - a `command_execution` item is a shell command: Antigravity's `rawInput.CommandLine` (T3's
-    Antigravity normalizer), Claude's `Bash.command`, Codex's command. Only these go through the shell
-    rules and the read-only list. Text that may be the title, a generic fallback or a cut command is not
-    a command;
-  - any other item (an MCP tool, `WebFetch`/`WebSearch`, `Agent`, a file edit or read) goes to the judge
-    with its tool name and input, as the standalone app sends non-command actions; edits are refused in
-    plan mode;
-  - no tool item for the call, or a command that can't be read: refused, never judged on the summary.
+- **What is checked** (reviews 1 and 2): never the approval row's text, which is a summary ("Ran
+  command"), and never a title:
+  - **Antigravity**: agy's own data for the call, from the driver's session events (a 2-line seam,
+    `acpToolCalls.ts`; T3's turn items drop it). Only agy's `run_command` tool (exact title, kind
+    `execute`) with a `CommandLine` that decodes (`Cwd` a string or absent) is a shell command, in its
+    own `Cwd`. Another tool of kind `execute`, an input that doesn't decode, a cut command, or no data
+    for the call within 5 s: refused. Any other tool goes to the judge with its title and full input.
+    An approval text that names another command (a backticked part, or text that is neither the command,
+    the title nor a summary) is refused.
+  - **Claude** (Z.ai, OpenRouter): the tool item for the same call; only Bash (`command_execution`) is a
+    shell command, and the approval's text, which is Bash's own command, must match it.
+  - **Codex**: the command item, unwrapped from Codex's `<shell> -lc "<script>"` launch (`shellLaunch.ts`,
+    only for exactly one known shell, `-c`/`-lc` and one quoted word; else left wrapped and so never
+    read-only). What its reviewer left to a person is allowed by rules or the read-only list, else declined.
+  - Any other tool goes to the judge with its name and input; no tool data for the call: refused.
+- **Rules where the command runs**: the thread folder's rules, plus the deny and ask rules of the
+  command's own folder when it differs (an allow there never widens the thread's).
 - **Who answers** (`permissions.ts` `lastdropAnswers`, after docs/agents.md "Permission modes"):
 
   | Thread mode                              | Antigravity entry                                                                                                                                                | Z.ai / OpenRouter / Claude entry                                                                                                                          | Codex entry                                                                                                   |
@@ -41,9 +47,10 @@ table is in `packages/lastdrop-core/PORTING.md`.
   project's two files, the main checkout's from a worktree). The judge prompt holds the agent's name,
   provider and role (the catalog description), the thread's messages and steers (trusted), earlier
   commands, edits and searches (inputs only, never outputs), and the planned action with its folder. The
-  latest 10 messages are kept, as in the standalone. Rules are read again for every request; only the
-  judge's verdicts are kept, per identical action and mode, and a failure (timeout, `agy` error) is never
-  kept, so the next identical request is judged again.
+  latest 10 messages are kept, as in the standalone, and `<` inside embedded input is escaped so it
+  can't close the prompt's tags. Rules are read again for every request; a judge verdict is kept only
+  for the same prompt (action, mode and conversation) and the same judge model, and a failure is never
+  kept. A session keeps at most 200 calls (inputs only), 500 request ids and 200 verdicts.
 - **The judge**: one `agy -p … --mode plan --model <m> [--effort <e>] --disable-slash-commands
   --print-timeout 120s` per check, from an empty temporary folder, in its own process group: at 150 s, or
   when its session closes, the whole group is killed and the request refused at once. At most 3 judges
@@ -54,7 +61,7 @@ table is in `packages/lastdrop-core/PORTING.md`.
   check, default `gemini-3.8-flash` at low effort. Z.ai and OpenRouter requests use the same judge; their
   own judge setting is Claude Code's `CLAUDE_CODE_AUTO_MODE_MODEL`, applied inside Claude Code (step 6).
 - **Never allowed by default**: `agy` missing, failing, timing out, answering anything but a clear
-  `{"outcome": "allow"}`, a model it won't run, or an exception: all decline, with the reason.
+  `{"outcome": "allow"}` (the first verdict object; several that disagree, or one that doesn't read, refuse), a model it won't run, or an exception: all decline, with the reason.
 - **Reporting**: every decision is a `system_notice` row in the thread ("Allowed as read-only (ls): ls",
   "Declined: rm -rf ~/Documents (not covered by your allow rules; judge: critical risk, user authorization unknown. …)") shown before
   the next event, and a line in `~/.t3/lastdrop/lastdrop.log` (`agent live (Antigravity · …), thread

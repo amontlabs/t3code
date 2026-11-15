@@ -110,9 +110,7 @@ export const judgePrompt = (policy: string, context: JudgeContext, action: unkno
   for (const request of context.requests)
     lines.push(embedded({ role: "user", content: clip(request, 4000) }));
   for (const call of context.calls)
-    lines.push(
-      embedded({ role: "assistant", tool_call: { tool: call.tool, input: call.input } }),
-    );
+    lines.push(embedded({ role: "assistant", tool_call: { tool: call.tool, input: call.input } }));
   return `${policy}
 
 # Output
