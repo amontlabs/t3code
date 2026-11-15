@@ -7,11 +7,13 @@ import type { AnyProviderDriver } from "@t3tools/provider-core/server/driver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as LimitSourcesLive from "./lastdrop/limitSourcesLive.ts";
 import * as LastdropAccounts from "./lastdrop/accounts.ts";
 import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 
 /** Services the extension drivers need to create instances. */
@@ -54,20 +56,11 @@ export const wrapClaudeQueryRunner = <E, R>(
   );
 
 /**
- * T3's usage limit sources (the hubs **Usage → Limits** reads) with lastdrop's Claude accounts, Z.ai and OpenRouter
- * after T3's own (`lastdrop/limitSourcesLive.ts`); `server.ts` uses it in place of `UsageLimitSources.layer`. With
- * nothing published it adds nothing.
+ * T3's usage limit sources with lastdrop's accounts, Z.ai and OpenRouter after T3's own; `server.ts` uses it in
+ * place of T3's layer. Keep both imports static: a dynamic one splits a second `server-*.mjs` chunk and breaks the
+ * desktop build (`scripts/lastdrop/check-server-bundle.ts`).
  */
-export const usageLimitSourcesLayer =
-  // Loaded lazily: T3's service reaches the settings module, which imports this file's lists.
-  Layer.unwrap(
-    Effect.promise(() =>
-      Promise.all([
-        import("../usage/UsageLimitSources.ts"),
-        import("./lastdrop/limitSourcesLive.ts"),
-      ]),
-    ).pipe(Effect.map(([t3, live]) => live.wrap(t3.layer))),
-  );
+export const usageLimitSourcesLayer = LimitSourcesLive.wrap(UsageLimitSources.layer);
 
 /**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
@@ -96,11 +89,7 @@ const services = Layer.mergeAll(
 );
 
 /** The services, and the publisher that feeds their readings to the usage limit sources wrapper. */
-export const layer = Layer.unwrap(
-  Effect.promise(() => import("./lastdrop/limitSourcesLive.ts")).pipe(
-    Effect.map((live) => live.publisher),
-  ),
-).pipe(Layer.provideMerge(services));
+export const layer = LimitSourcesLive.publisher.pipe(Layer.provideMerge(services));
 
 /**
  * HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section, and
