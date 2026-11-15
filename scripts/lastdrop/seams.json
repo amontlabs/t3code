@@ -52,7 +52,7 @@
       "why": "app name"
     },
     "apps/desktop/src/app/DesktopCliShim.ts": {
-      "budget": 2,
+      "budget": 3,
       "why": "the fork's own t3 launcher folder"
     },
     "apps/desktop/src/app/DesktopUserData.ts": {

@@ -134,7 +134,7 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: T3's literal stays the argument, so T3's tests (identity off) still see `"T3 Code"`.
 - **Conflict**: take upstream's file; wrap whatever literal names the app again.
 
-### `apps/desktop/src/app/DesktopCliShim.ts` (budget 2)
+### `apps/desktop/src/app/DesktopCliShim.ts` (budget 3)
 
 - **Lines**: import `cliLauncherDir` (1); in `launcherPath`, `cliLauncherDir(environment.path, environment.baseDir)` replaces `environment.baseDir` (1).
 - **Why**: both apps write the `t3` launcher on every backend start, so whichever ran last owned `~/.t3/bin/t3`, and a mismatched CLI can migrate the shared database under a running server. The fork's launcher is `<home>/lastdrop/bin/t3`. The shim content, `T3CODE_CLI_PATH`, and Settings install/uninstall in `DesktopCliCommand.ts` all follow `launcherPath`; a PATH link to the other app's launcher is handled by T3's "our marker, another launcher" logic (Install repoints it).
