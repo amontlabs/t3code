@@ -102,3 +102,18 @@ LCU: "Computer Use was not approved to use T3 Code lastdrop" (bundle id `com.amo
 
 ### Left
 Scratch folder `live-check2/` (copy of the data, app, builds, shots, scripts). The fork was stopped with SIGTERM to its main process after the checks (the app I started). `~/.t3/bin/t3` unchanged.
+
+## Second run, window checks (driven through LCU from the coordinator session)
+
+Same build and data copy, launched with a clean `env -i` + `open -n --env T3CODE_HOME=<scratch>/t3home`. LCU approval works only in an interactive session: a headless subagent can't show the approval panel, so the earlier refusals were LCU's headless rule, not a missing approval.
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 3 | Usage in the window | Pass | The sidebar Usage item's description lists every account's limits (Codex; Claude per e-mail with Weekly and Weekly · Fable; Antigravity; Z.ai; OpenRouter). |
+| 8 | Command judge on Antigravity | Not testable now | The copy lacked `~/.t3/tools/antigravity-acp` (copied in; Antigravity then showed v1.4.5 installed). A `build` thread under Auto: "Moved off Antigravity claude-sonnet-5-5 can't start: Individual quota reached … Resets in 49h12m", so it ran on the Claude entry, where Claude Code's own auto check allowed `ls` and `rm -rf ./definitely-not-here-xyz` (a missing relative path, exit 0). Retest the judge when Antigravity's quota resets (around 2026-11-17 21:00 local). |
+| 9 | Quit mid-subagent (app menu) | Pass | Haiku thread, foreground subagent in a 90 s sleep; Quit from the app menu; reopened. With `continueThreadsAfterServerUpdate` off in the copy, the note came with the next message ("continue"): the model said "The earlier Haiku subagent was cancelled by the server restart, so I'm starting it again" and started a fresh subagent (not SendMessage; upstream PR pingdotgg/t3code#37266 adds the hint). |
+
+Findings:
+- **Copy recipe**: also copy `~/.t3/tools/` (provider runtimes), or Antigravity shows "not installed".
+- **Fallback header wording**: the agent's reply header read "Ran on claude-2 (claude-sonnet-5-5, claude-sonnet-5-5 unavailable)". The unavailable entry should name its provider ("Antigravity · claude-sonnet-5-5 unavailable"), or it reads as if the model that ran was unavailable.
+- **Build**: the usage-accounts change split a second `server-*.mjs` chunk ("Ambiguous bundled server entry"); fixed on `lastdrop` (static imports, `scripts/lastdrop/check-server-bundle.ts`).
