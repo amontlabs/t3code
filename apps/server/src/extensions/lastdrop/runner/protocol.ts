@@ -224,6 +224,15 @@ const firstLine = (value: string, limit = 160): string => {
 };
 
 /**
+ * A row that isn't ready to read yet: a command without its text, a notice without its message. Read
+ * again next time rather than shown bare ("Bash") and marked seen.
+ */
+export const stepPending = (item: StepItem): boolean =>
+  (item.type === "command_execution" &&
+    (typeof item.input !== "string" || item.input.trim() === "")) ||
+  (item.type === "system_notice" && item.message === undefined);
+
+/**
  * A step line's text for a turn item of the agent's thread ("Bash: git status", "Edit: note.txt"), or
  * undefined for items that are not steps (messages, reasoning). A notice row (a fallback) is a step too.
  */

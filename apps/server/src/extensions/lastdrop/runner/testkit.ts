@@ -83,6 +83,8 @@ export interface FakeT3 {
   readonly sent: Array<{ parent: string; child: string; message: string }>;
   readonly stopped: Array<{ parent: string; child: string; taskId: string | undefined }>;
   readonly acknowledged: Array<string>;
+  /** Every read of the task's status, with whether it showed it ended. */
+  readonly ackReads: Array<boolean>;
   /** Replaces the child's script (a follow-up's runs). */
   script: (phases: ReadonlyArray<Phase>) => void;
   /** Settles once the runner first reads the child's runs: the run is under way. */
@@ -95,7 +97,22 @@ export const makeFakeT3 = (options: {
   readonly unavailable?: string;
   readonly startError?: string;
   readonly sendRunId?: string;
+  /** Threads deleted since their token was made. */
+  readonly deletedThreads?: ReadonlyArray<string>;
+  /** Threads on the agents' instance. */
+  readonly agentsThreads?: ReadonlyArray<string>;
+  /** The calling thread's folder; a `cwd` outside it is refused. */
+  readonly folder?: string;
+  readonly worktree?: { readonly path: string; readonly branch: string | undefined };
+  /** Reads of the task that still show it running before it shows ended. */
+  readonly ackPending?: number;
+  /** Which reads of the runs (0-based) fail, and how many outcome reads fail first. */
+  readonly failRunsReads?: ReadonlyArray<number>;
+  readonly failOutcomeReads?: number;
 }): FakeT3 => {
+  let runsReads = 0;
+  let outcomeReads = 0;
+  let ackReads = 0;
   let phases = options.phases;
   let index = 0;
   const current = () => phases[Math.min(index, phases.length - 1)]!;
@@ -111,6 +128,7 @@ export const makeFakeT3 = (options: {
     sent: [],
     stopped: [],
     acknowledged: [],
+    ackReads: [],
     script: (next) => {
       phases = next;
       index = 0;
@@ -131,16 +149,36 @@ export const makeFakeT3 = (options: {
           fake.sent.push({ parent, child, message });
           return { runId: options.sendRunId ?? "run-2", taskId: undefined };
         }),
+      threadLive: (thread) => Effect.succeed(!(options.deletedThreads?.includes(thread) ?? false)),
+      isAgentsThread: (thread) => Effect.succeed(options.agentsThreads?.includes(thread) ?? false),
+      outsideFolder: (_thread, cwd) =>
+        Effect.succeed(
+          options.folder === undefined ||
+            cwd === options.folder ||
+            cwd.startsWith(`${options.folder}/`)
+            ? undefined
+            : options.folder,
+        ),
+      worktree: () => Effect.succeed(options.worktree),
       runs: () =>
-        Effect.sync(() => {
-          shown = current();
-          index++;
-          followed();
-          return shown.runs;
-        }),
+        Effect.suspend(() =>
+          (options.failRunsReads ?? []).includes(runsReads++)
+            ? Effect.fail(new RunnerError({ message: "database busy" }))
+            : Effect.sync(() => {
+                shown = current();
+                index++;
+                followed();
+                return shown.runs;
+              }),
+        ),
       items: (_child, runIds) =>
         Effect.sync(() => (shown.items ?? []).filter((item) => runIds.includes(item.runId))),
-      outcome: (_child, runId) => Effect.succeed(options.outcomes?.[runId] ?? ""),
+      outcome: (_child, runId) =>
+        Effect.suspend(() =>
+          outcomeReads++ < (options.failOutcomeReads ?? 0)
+            ? Effect.fail(new RunnerError({ message: "database busy" }))
+            : Effect.succeed(options.outcomes?.[runId] ?? ""),
+        ),
       executed: () => Effect.sync(() => shown.executed),
       stop: (parent, child, taskId) =>
         Effect.sync(() => {
@@ -148,7 +186,10 @@ export const makeFakeT3 = (options: {
         }),
       acknowledge: (_parent, taskId) =>
         Effect.sync(() => {
-          fake.acknowledged.push(taskId);
+          const ended = ackReads++ >= (options.ackPending ?? 0);
+          fake.ackReads.push(ended);
+          if (ended) fake.acknowledged.push(taskId);
+          return ended;
         }),
     },
   };

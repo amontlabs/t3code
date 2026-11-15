@@ -5,6 +5,7 @@
  * projection. The service is built from its own layer here, as the MCP toolkit builds it.
  */
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import {
   NodeId,
@@ -15,10 +16,12 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import type { McpThreadInvocationScope } from "../../../mcp/McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../../mcp/OrchestratorMcpService.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import {
@@ -62,6 +65,29 @@ const message = (error: unknown): string =>
 const failed = (what: string) => (error: unknown) =>
   new RunnerError({ message: `${what}: ${message(error)}` });
 
+/** The path with its links resolved (`/var` is `/private/var` on macOS), else as given. */
+const real = (path: string): string => {
+  try {
+    return NodeFS.realpathSync(path);
+  } catch {
+    return NodePath.resolve(path);
+  }
+};
+
+const within = (path: string, folder: string): boolean =>
+  path === folder || path.startsWith(folder.endsWith("/") ? folder : `${folder}/`);
+
+/** The run a run continues: after a usage limit (T3's recovery, or the agents driver's fallback) or a restart. */
+const FALLBACK_MESSAGE = "lastdrop-fallback:";
+const continues = (run: OrchestrationV2Run): string | undefined =>
+  run.usageLimitContinuationOfRunId ??
+  run.restartContinuationOfRunId ??
+  (run.userMessageId.startsWith(FALLBACK_MESSAGE)
+    ? run.userMessageId.slice(FALLBACK_MESSAGE.length)
+    : undefined);
+
+const TERMINAL_TASK = new Set(["completed", "failed", "cancelled", "interrupted"]);
+
 const stepId = (step: AgentStep): string => `${step.instanceId}/${step.model}/${step.effort ?? ""}`;
 
 /** A turn item as a step line reads it. */
@@ -84,6 +110,7 @@ export const makeLivePort = Effect.gen(function* () {
   const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const projects = yield* ProjectStore.ProjectStoreV2;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
 
   /**
@@ -127,6 +154,42 @@ export const makeLivePort = Effect.gen(function* () {
             : undefined,
         ),
       ),
+    // A read that fails isn't a deletion: the token's MAC already held.
+    threadLive: (thread) =>
+      threads.getThreadShell(ThreadId.make(thread)).pipe(
+        Effect.map((shell) => shell !== null && shell.deletedAt === null),
+        Effect.orElseSucceed(() => true),
+      ),
+    isAgentsThread: (thread) =>
+      threads.getThreadRecords(ThreadId.make(thread), ["runs"]).pipe(
+        Effect.map(
+          (records) =>
+            records.thread.modelSelection?.instanceId === AGENTS_INSTANCE ||
+            records.runs.some((run) => run.providerInstanceId === AGENTS_INSTANCE),
+        ),
+        Effect.orElseSucceed(() => false),
+      ),
+    outsideFolder: Effect.fn("LastdropRunner.outsideFolder")(
+      function* (thread, cwd) {
+        const records = yield* threads.getThreadRecords(ThreadId.make(thread), []);
+        const root =
+          records.thread.worktreePath ??
+          Option.getOrUndefined(yield* projects.get(records.thread.projectId))?.workspaceRoot;
+        if (root === undefined) return undefined;
+        const folder = real(root);
+        return within(real(cwd), folder) ? undefined : folder;
+      },
+      Effect.orElseSucceed(() => undefined),
+    ),
+    worktree: Effect.fn("LastdropRunner.worktree")(
+      function* (parent, child) {
+        const own = (yield* threads.getThreadRecords(ThreadId.make(child), [])).thread;
+        const theirs = (yield* threads.getThreadRecords(ThreadId.make(parent), [])).thread;
+        if (own.worktreePath == null || own.worktreePath === theirs.worktreePath) return undefined;
+        return { path: own.worktreePath, branch: own.branch ?? undefined };
+      },
+      Effect.orElseSucceed(() => undefined),
+    ),
     start: Effect.fn("LastdropRunner.start")(function* (parent, input) {
       const scope = yield* scopeOf(parent);
       const result = yield* mcp
@@ -175,6 +238,7 @@ export const makeLivePort = Effect.gen(function* () {
             id: run.id,
             ordinal: run.ordinal,
             status: run.status,
+            continues: continues(run),
           })),
         ),
         Effect.mapError(failed("lastdrop couldn't read its agent's thread")),
@@ -240,10 +304,12 @@ export const makeLivePort = Effect.gen(function* () {
         .interruptThread(scope, { threadId: ThreadId.make(child), stop: true })
         .pipe(Effect.mapError(failed("lastdrop couldn't stop its agent")));
     }),
+    // Reading a task that ended marks it delivered (`readTask`'s acknowledgement); one still running isn't.
     acknowledge: (parent, taskId) =>
       scopeOf(parent).pipe(
         Effect.flatMap((scope) => mcp.taskStatus(scope, NodeId.make(taskId))),
-        Effect.ignore,
+        Effect.map((task) => TERMINAL_TASK.has(task.status)),
+        Effect.orElseSucceed(() => false),
       ),
   };
   return port;

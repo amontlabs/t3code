@@ -30,6 +30,7 @@ import {
 import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
 import { lastdropDataDir } from "../dataDir.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
+import { runnerVariables } from "./runner/endpoint.ts";
 import { withRunnerEnvironment } from "./runner/queryEnvironment.ts";
 
 const MAIN_THREAD: ThreadLineage = { delegated: false };
@@ -74,7 +75,8 @@ export const wrapLive = <E, R>(
         open: Effect.fn("LastdropRunnerEnvironment.open")(function* (
           input: ClaudeAgentSdkQueryOpenInput,
         ) {
-          return yield* inner.open(withRunnerEnvironment(input, hostEnvironment));
+          const added = yield* runnerVariables(input.threadId);
+          return yield* inner.open(withRunnerEnvironment(input, hostEnvironment, () => added));
         }),
       };
     }),

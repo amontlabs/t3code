@@ -192,7 +192,9 @@ describe("the runner script", () => {
     const list = await run(["--agents", "list"]);
     expect(JSON.parse(list.stdout).agents).toHaveLength(4);
     const remove = await run(["--agents", "remove", "review"]);
-    expect(remove.code).not.toBe(0);
+    // As the lastdrop app: 1, not curl's 22.
+    expect(remove.code).toBe(1);
+    expect(remove.stdout).toMatch(/doesn't change them/);
   });
 
   it("the other flags answer plainly", async () => {
@@ -210,6 +212,23 @@ describe("the runner script", () => {
     expect(out.code).not.toBe(0);
     expect(lines(out.stdout)[0]).toMatchObject({ type: "error" });
     expect(fake.started).toEqual([]);
+  });
+
+  it("refuses a deleted thread's token", async () => {
+    fake = makeFakeT3({ phases: [{ runs: [] }], deletedThreads: [PARENT] });
+    const out = await run(["--agent-run"], REQUEST);
+    expect(out.code).not.toBe(0);
+    expect(lines(out.stdout)[0]).toMatchObject({ type: "error" });
+    expect(fake.started).toEqual([]);
+  });
+
+  it("sends its token to this machine only", async () => {
+    const out = await run(["--agent-catalog"], undefined, {
+      ...env(),
+      LASTDROP_RUNNER_URL: "http://192.168.1.20:3773/api/lastdrop/runner",
+    });
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/isn't a loopback address/);
   });
 
   it("outside a fork thread it says so", async () => {

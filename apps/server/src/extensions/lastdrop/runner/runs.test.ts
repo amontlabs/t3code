@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
@@ -176,7 +177,7 @@ describe("run", () => {
           {
             runs: [
               { id: "run-1", ordinal: 1, status: "failed" },
-              { id: "run-2", ordinal: 2, status: "running" },
+              { id: "run-2", ordinal: 2, status: "running", continues: "run-1" },
             ],
             items: [
               {
@@ -192,7 +193,7 @@ describe("run", () => {
           {
             runs: [
               { id: "run-1", ordinal: 1, status: "failed" },
-              { id: "run-2", ordinal: 2, status: "completed" },
+              { id: "run-2", ordinal: 2, status: "completed", continues: "run-1" },
             ],
             executed: opus,
           },
@@ -239,7 +240,7 @@ describe("run", () => {
       ]);
       const worktree = yield* run({ cwd: "/repo/.claude/worktrees/agent-a1b2" });
       assert.strictEqual(worktree[0]!.type, "error");
-      assert.match(String(worktree[0]!.text), /Claude Code's worktrees/);
+      assert.match(String(worktree[0]!.text), /a worktree T3 Code makes/);
       assert.deepStrictEqual(yield* run({ agent: undefined }), [{ type: "no_room" }]);
     }),
   );
@@ -356,6 +357,194 @@ describe("run", () => {
       const lines = yield* collect(runLines(deps, PARENT, request()));
       assert.isTrue(types(lines).includes("tick"));
       assert.strictEqual(lines.at(-1)!.type, "result");
+    }),
+  );
+});
+
+describe("review fixes", () => {
+  const done = (id = "run-1") => ({
+    runs: [{ id, ordinal: 1, status: "completed" as const }],
+  });
+
+  it.live("marks the task delivered before the result, retrying until T3 shows it ended", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeT3({
+        phases: [done()],
+        outcomes: { "run-1": "Answer." },
+        ackPending: 2,
+      });
+      // As the plugin: it ends the runner as soon as it reads the result.
+      const lines = yield* runLines(fakeDeps(fake), PARENT, request()).pipe(
+        Stream.takeUntil((line) => line.type === "result"),
+        Stream.runCollect,
+      );
+      assert.strictEqual([...lines].at(-1)!.text, "Answer.");
+      assert.deepStrictEqual(fake.ackReads, [false, false, true]);
+      assert.deepStrictEqual(fake.acknowledged, ["task-1"]);
+      assert.deepStrictEqual(fake.stopped, []);
+    }),
+  );
+
+  it.live("reads again after a failed read, and never cancels the agent over reads", () =>
+    Effect.gen(function* () {
+      const running = { runs: [{ id: "run-1", ordinal: 1, status: "running" as const }] };
+      const fake = makeFakeT3({
+        phases: [running, running, done()],
+        outcomes: { "run-1": "Answer." },
+        failRunsReads: [1, 2],
+        failOutcomeReads: 2,
+      });
+      const lines = yield* collect(runLines(fakeDeps(fake), PARENT, request()));
+      assert.strictEqual(lines.at(-1)!.text, "Answer.");
+      assert.strictEqual(lines.at(-1)!.isError, false);
+      assert.deepStrictEqual(fake.stopped, []);
+
+      const lost = makeFakeT3({ phases: [running], failRunsReads: [0, 1, 2, 3, 4, 5] });
+      const deps = { ...fakeDeps(lost), readTries: 3 };
+      const gone = yield* collect(runLines(deps, PARENT, request()));
+      assert.match(
+        String(gone.at(-1)!.text),
+        /lost track of review: database busy\. It keeps running/,
+      );
+      assert.deepStrictEqual(lost.stopped, []);
+      // Not marked delivered: T3 brings the answer to the parent.
+      assert.deepStrictEqual(lost.acknowledged, []);
+
+      const unread = makeFakeT3({ phases: [done()], failOutcomeReads: 99 });
+      const answerless = yield* collect(
+        runLines({ ...fakeDeps(unread), readTries: 2 }, PARENT, request()),
+      );
+      assert.match(String(answerless.at(-1)!.text), /couldn't read review's answer/);
+      assert.deepStrictEqual(unread.stopped, []);
+      assert.deepStrictEqual(unread.acknowledged, []);
+    }),
+  );
+
+  it.live("a late cleanup doesn't stop a newer run of the child", () =>
+    Effect.gen(function* () {
+      const records = makeStoredMap<RunRecord>();
+      const fake = makeFakeT3({
+        phases: [{ runs: [{ id: "run-1", ordinal: 1, status: "running" }] }],
+      });
+      const deps = fakeDeps(fake, records);
+      const first = yield* collect(runLines(deps, PARENT, request())).pipe(Effect.forkChild);
+      yield* Effect.promise(() => fake.following);
+      // A steer: the same id again, while the first runner is still being ended.
+      const steered = yield* Deferred.make<void>();
+      const steer = yield* runLines(
+        deps,
+        PARENT,
+        request({ resume: "agent-a1", prompt: "Also tests." }),
+      ).pipe(
+        Stream.tap((line) =>
+          line.type === "started" ? Deferred.succeed(steered, undefined) : Effect.void,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(steered);
+      fake.script([
+        {
+          runs: [
+            { id: "run-1", ordinal: 1, status: "running" },
+            { id: "run-2", ordinal: 2, status: "queued" },
+          ],
+        },
+      ]);
+      yield* Fiber.interrupt(first);
+      assert.deepStrictEqual(fake.stopped, []);
+      yield* Fiber.interrupt(steer);
+      assert.strictEqual(fake.stopped.length, 1);
+
+      // The child already runs something else (the user typed in it): ending the runner leaves it.
+      const typed = makeFakeT3({
+        phases: [
+          {
+            runs: [
+              { id: "run-1", ordinal: 1, status: "running" },
+              { id: "run-7", ordinal: 2, status: "queued" },
+            ],
+          },
+        ],
+      });
+      yield* runLines(fakeDeps(typed), PARENT, request({ id: "agent-b2" })).pipe(
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      assert.deepStrictEqual(typed.stopped, []);
+    }),
+  );
+
+  it.live("any thread on the agents' instance counts as an agent", () =>
+    Effect.gen(function* () {
+      const deps = fakeDeps(
+        makeFakeT3({ phases: [{ runs: [] }], agentsThreads: ["agent-thread"] }),
+      );
+      assert.match(String((yield* routeLine(deps, "agent-thread", request())).text), /can't start/);
+      const lines = yield* collect(runLines(deps, "agent-thread", request()));
+      assert.match(String(lines[0]!.text), /can't start/);
+    }),
+  );
+
+  it.live("never runs outside the calling thread's folder; reports T3's worktree", () =>
+    Effect.gen(function* () {
+      const options = {
+        phases: [done()],
+        folder: "/repo",
+        worktree: { path: "/home/.t3/worktrees/repo/t3-1", branch: "t3/review" },
+      };
+      const outside = makeFakeT3(options);
+      const refused = yield* collect(
+        runLines(fakeDeps(outside), PARENT, request({ cwd: "/elsewhere" })),
+      );
+      assert.strictEqual(refused[0]!.type, "error");
+      assert.deepStrictEqual(outside.started, []);
+      const fake = makeFakeT3(options);
+      const lines = yield* collect(
+        runLines(fakeDeps(fake), PARENT, request({ cwd: "/repo/src", isolation: "worktree" })),
+      );
+      assert.strictEqual(fake.started[0]!.input.isolation, "worktree");
+      assert.strictEqual(lines.at(-1)!.worktreePath, "/home/.t3/worktrees/repo/t3-1");
+      assert.strictEqual(lines.at(-1)!.worktreeBranch, "t3/review");
+    }),
+  );
+
+  it.live("doesn't follow a later run that isn't this run's continuation", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeT3({
+        phases: [
+          {
+            runs: [
+              { id: "run-1", ordinal: 1, status: "completed" },
+              { id: "run-2", ordinal: 2, status: "running" },
+            ],
+          },
+        ],
+        outcomes: { "run-1": "First answer.", "run-2": "The user's answer." },
+      });
+      const lines = yield* collect(runLines(fakeDeps(fake), PARENT, request()));
+      assert.strictEqual(lines.at(-1)!.text, "First answer.");
+    }),
+  );
+
+  it.live("a command row is shown once its command is known", () =>
+    Effect.gen(function* () {
+      const row = (input: string | undefined, status: "running" | "completed") => ({
+        runs: [{ id: "run-1", ordinal: 1, status }],
+        items: [{ id: "c1", runId: "run-1", type: "command_execution", input }],
+      });
+      const fake = makeFakeT3({
+        phases: [
+          row(undefined, "running"),
+          row("git status", "running"),
+          row("git status", "completed"),
+        ],
+      });
+      const lines = yield* collect(runLines(fakeDeps(fake), PARENT, request()));
+      assert.deepStrictEqual(
+        lines.filter((line) => line.type === "step").map((line) => line.text),
+        ["Bash: git status"],
+      );
     }),
   );
 });

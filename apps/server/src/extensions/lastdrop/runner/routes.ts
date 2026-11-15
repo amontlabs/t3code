@@ -23,6 +23,7 @@ import { makeLivePort } from "./children.ts";
 import {
   bindRunner,
   installRunnerScript,
+  isLoopbackUrl,
   RUNNER_PATH,
   tokenThread,
   unbindRunner,
@@ -70,23 +71,23 @@ const bodyText = HttpServerRequest.HttpServerRequest.pipe(
 
 const form = bodyText.pipe(Effect.map((text) => new URLSearchParams(text)));
 
-const post = <E, R>(
-  command: string,
-  handle: (thread: string) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
-) =>
-  HttpRouter.add(
-    "POST",
-    `${RUNNER_PATH}/${command}`,
-    Effect.gen(function* () {
-      const thread = yield* caller;
-      if (thread === undefined) return unauthorized;
-      return yield* handle(thread);
-    }),
-  );
-
 /** The routes, closing over the runner's state: a route's handler may need only the request. */
-export const handlers = (deps: RunnerDeps) =>
-  Layer.mergeAll(
+export const handlers = (deps: RunnerDeps) => {
+  /** A token holds while its thread does: a deleted thread's token is refused. */
+  const post = <E, R>(
+    command: string,
+    handle: (thread: string) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+  ) =>
+    HttpRouter.add(
+      "POST",
+      `${RUNNER_PATH}/${command}`,
+      Effect.gen(function* () {
+        const thread = yield* caller;
+        if (thread === undefined || !(yield* deps.port.threadLive(thread))) return unauthorized;
+        return yield* handle(thread);
+      }),
+    );
+  return Layer.mergeAll(
     post("agent-catalog", () =>
       Effect.sync(() => {
         const read = deps.port.catalog();
@@ -174,6 +175,7 @@ export const handlers = (deps: RunnerDeps) =>
       }),
     ),
   );
+};
 
 const makeDeps = Effect.gen(function* () {
   const port = yield* makeLivePort;
@@ -186,33 +188,48 @@ const makeDeps = Effect.gen(function* () {
  * Writes the runner script and binds its address, so Claude queries opened from now on carry it. Not
  * under vitest: T3's own server tests start the routes.
  */
-const bindLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const underTest = yield* Config.String("VITEST").pipe(Config.option);
-    if (underTest._tag === "Some") return;
-    const server = yield* HttpServer.HttpServer;
-    if (!NetAddress.isInetAddress(server.address)) return;
-    const address = server.address.address;
-    const host = NetAddress.isUnspecified(address)
-      ? "127.0.0.1"
-      : NetAddress.formatUrlHostString(NetAddress.formatIp(address));
-    const dataDir = yield* resolveLastdropDataDir;
-    const script = yield* Effect.sync(() => {
-      try {
-        return installRunnerScript(dataDir);
-      } catch (cause) {
-        return String(cause);
+const bindLayer = (deps: RunnerDeps) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const underTest = yield* Config.String("VITEST").pipe(Config.option);
+      if (underTest._tag === "Some") return;
+      const server = yield* HttpServer.HttpServer;
+      if (!NetAddress.isInetAddress(server.address)) return;
+      const address = server.address.address;
+      const host = NetAddress.isUnspecified(address)
+        ? "127.0.0.1"
+        : NetAddress.formatUrlHostString(NetAddress.formatIp(address));
+      const url = `http://${host}:${server.address.port}${RUNNER_PATH}`;
+      // The bearer token never leaves the machine: a server bound to another address alone gets no runner.
+      if (!isLoopbackUrl(url)) {
+        return yield* Effect.logWarning(
+          "lastdrop runner not bound: the server listens off loopback",
+          url,
+        );
       }
-    });
-    if (!script.startsWith("/")) {
-      return yield* Effect.logWarning("lastdrop runner script not written", script);
-    }
-    bindRunner({ script, url: `http://${host}:${server.address.port}${RUNNER_PATH}` });
-    yield* Effect.addFinalizer(() => Effect.sync(unbindRunner));
-  }),
-);
+      const dataDir = yield* resolveLastdropDataDir;
+      const script = yield* Effect.sync(() => {
+        try {
+          return installRunnerScript(dataDir);
+        } catch (cause) {
+          return String(cause);
+        }
+      });
+      if (!script.startsWith("/")) {
+        return yield* Effect.logWarning("lastdrop runner script not written", script);
+      }
+      bindRunner({
+        script,
+        url,
+        available: deps.port.unavailable.pipe(Effect.map((problem) => problem === undefined)),
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(unbindRunner));
+    }),
+  );
 
-export const routes = Layer.mergeAll(Layer.unwrap(Effect.map(makeDeps, handlers)), bindLayer).pipe(
+export const routes = Layer.unwrap(
+  Effect.map(makeDeps, (deps) => Layer.mergeAll(handlers(deps), bindLayer(deps))),
+).pipe(
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
 );

@@ -8,6 +8,8 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import * as Effect from "effect/Effect";
+
 export const RUNNER_PATH = "/api/lastdrop/runner";
 
 const RUNNER_ENV = {
@@ -48,6 +50,15 @@ export const RUNNER_SCRIPT = `#!/bin/sh
 # Written by the fork's server at each start; changes are overwritten.
 : "\${LASTDROP_RUNNER_URL:?not inside a T3 Code lastdrop thread}"
 : "\${LASTDROP_RUNNER_TOKEN:?not inside a T3 Code lastdrop thread}"
+# The token goes to this machine only.
+case "$LASTDROP_RUNNER_URL" in
+  http://127.0.0.1:*|http://localhost:*|http://\\[::1\\]:*) ;;
+  *) echo "lastdrop (T3 Code lastdrop): LASTDROP_RUNNER_URL isn't a loopback address" >&2; exit 1 ;;
+esac
+call() {
+  /usr/bin/curl --silent --show-error --no-buffer --fail-with-body \\
+    -H "authorization: Bearer $LASTDROP_RUNNER_TOKEN" "$@"
+}
 post() {
   exec /usr/bin/curl --silent --show-error --no-buffer --fail-with-body \\
     -H "authorization: Bearer $LASTDROP_RUNNER_TOKEN" "$@"
@@ -61,8 +72,11 @@ case "$1" in
     post --data-binary '' "$LASTDROP_RUNNER_URL/\${1#--}" ;;
   --agents)
     shift
-    set -- --data-urlencode "args=$*" "$LASTDROP_RUNNER_URL/agents"
-    post "$@" ;;
+    call --data-urlencode "args=$*" "$LASTDROP_RUNNER_URL/agents"
+    code=$?
+    # A refused command (HTTP 400, curl's 22) exits 1, as the lastdrop app's does.
+    [ "$code" -eq 22 ] && exit 1
+    exit "$code" ;;
   *)
     echo "lastdrop (T3 Code lastdrop): unknown command $1" >&2
     exit 2 ;;
@@ -91,13 +105,25 @@ export const installRunnerScript = (dataDir: string): string => {
 interface Binding {
   readonly script: string;
   readonly url: string;
+  /** Whether lastdrop's agents can run now (their T3 instance is on); unbound means yes. */
+  readonly available?: Effect.Effect<boolean> | undefined;
 }
+
+/** Only an address on this machine carries the bearer token. */
+export const isLoopbackUrl = (url: string): boolean => {
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host);
+  } catch {
+    return false;
+  }
+};
 
 let bound: Binding | undefined;
 
 /** Called once the routes listen (`routes.ts`). */
 export const bindRunner = (binding: Binding): void => {
-  bound = binding;
+  bound = isLoopbackUrl(binding.url) ? binding : undefined;
 };
 
 export const unbindRunner = (): void => {
@@ -109,10 +135,26 @@ export const runnerEnvironment = (
   threadId: string,
   key: Uint8Array = secret,
 ): Record<string, string> | undefined =>
-  bound === undefined
+  bound === undefined || !isLoopbackUrl(bound.url)
     ? undefined
     : {
         [RUNNER_ENV.runner]: bound.script,
         [RUNNER_ENV.url]: bound.url,
         [RUNNER_ENV.token]: threadToken(threadId, key),
       };
+
+/**
+ * The variables a thread's Claude query gains now: none while lastdrop's agents can't run here (their
+ * instance off or absent), so the plugin answers its Agent types through the lastdrop app as before.
+ */
+export const runnerVariables = (
+  threadId: string,
+): Effect.Effect<Record<string, string> | undefined> =>
+  Effect.suspend(() => {
+    const binding = bound;
+    if (binding === undefined) return Effect.undefined;
+    return (binding.available ?? Effect.succeed(true)).pipe(
+      Effect.orElseSucceed(() => false),
+      Effect.map((available) => (available ? runnerEnvironment(threadId) : undefined)),
+    );
+  });

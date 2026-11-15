@@ -7,6 +7,7 @@ import * as Clock from "effect/Clock";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -21,6 +22,7 @@ import type { StoredMap } from "../agents/store.ts";
 import {
   pluginAgents,
   stepFields,
+  stepPending,
   stepText,
   type CatalogExtras,
   type RunnerLine,
@@ -48,6 +50,8 @@ export interface ChildRun {
   readonly id: string;
   readonly ordinal: number;
   readonly status: ChildRunStatus;
+  /** The run this one continues after a usage limit or restart (the agents driver's fallback, T3's recovery). */
+  readonly continues?: string | undefined;
 }
 
 const isTerminal = (status: ChildRunStatus): boolean =>
@@ -78,6 +82,17 @@ export interface RunnerPort {
   readonly catalog: () => CatalogRead;
   /** Why the agents' T3 instance can't take a run now; undefined when it can. */
   readonly unavailable: Effect.Effect<string | undefined>;
+  /** Whether the thread is there (not deleted): its token holds only while it is. */
+  readonly threadLive: (thread: string) => Effect.Effect<boolean>;
+  /** Whether the thread runs on the agents' T3 instance (any of lastdrop's agents, however it started). */
+  readonly isAgentsThread: (thread: string) => Effect.Effect<boolean>;
+  /** The thread's own folder when `cwd` is outside it; undefined when `cwd` is in it (or it can't be told). */
+  readonly outsideFolder: (thread: string, cwd: string) => Effect.Effect<string | undefined>;
+  /** The child's own worktree, when T3 made one for it. */
+  readonly worktree: (
+    parent: string,
+    child: string,
+  ) => Effect.Effect<{ readonly path: string; readonly branch: string | undefined } | undefined>;
   readonly start: (
     parent: string,
     input: StartInput,
@@ -108,8 +123,11 @@ export interface RunnerPort {
     child: string,
     taskId: string | undefined,
   ) => Effect.Effect<void, RunnerError>;
-  /** Marks the task's result delivered, so T3 doesn't wake the parent with it too. */
-  readonly acknowledge: (parent: string, taskId: string) => Effect.Effect<void>;
+  /**
+   * Marks the task's result delivered, so T3 doesn't wake the parent with it too. True once T3 shows the
+   * task ended (and so marked it); false while it doesn't yet, or the read failed.
+   */
+  readonly acknowledge: (parent: string, taskId: string) => Effect.Effect<boolean>;
 }
 
 /** A run the plugin may continue or stop, by Claude Code's agent id; kept across restarts. */
@@ -129,6 +147,8 @@ export interface RunnerDeps {
   readonly fallbackGraceMs?: number | undefined;
   /** Between two `tick` lines; a minute live, as the standalone runner. */
   readonly tick?: Duration.Input | undefined;
+  /** Reads of the child in a row that may fail before the runner lets the run go; 30 live (a poll apart). */
+  readonly readTries?: number | undefined;
 }
 
 interface Active {
@@ -141,14 +161,17 @@ interface Active {
 /** Runs in progress, by agent id. In memory: a run never outlives the server that follows it. */
 const active = new Map<string, Active>();
 
-/** Claude Code's worktree for a subagent (`.claude/worktrees/agent-<id>`), as the plugin passes it in `cwd`. */
-const ENGINE_WORKTREE = /\/\.claude\/worktrees\/agent-[^/]+\/?$/;
+/** Claude Code's worktrees for subagents (`.claude/worktrees/agent-<id>`). */
+const ENGINE_WORKTREE = /\/\.claude\/worktrees\/[^/]+/;
 
 const findAgent = (deps: RunnerDeps, name: string): AgentDefinition | undefined =>
   pluginAgents(deps.port.catalog().agents).find((agent) => agent.name === name);
 
-const isRunnerChild = (deps: RunnerDeps, thread: string): boolean =>
-  deps.records.entries().some(([, record]) => record.child === thread);
+/** A thread on lastdrop's agents: one this runner started, or any thread on the agents' instance. */
+const isRunnerChild = (deps: RunnerDeps, thread: string): Effect.Effect<boolean> =>
+  deps.records.entries().some(([, record]) => record.child === thread)
+    ? Effect.succeed(true)
+    : deps.port.isAgentsThread(thread);
 
 const notEnabled = (name: string): RunnerLine => ({
   type: "error",
@@ -172,7 +195,7 @@ export const routeLine = Effect.fn("LastdropRunner.route")(function* (
   }
   // A plain reroute stays on the thread's own account: the fork picks the account per thread.
   if (request.agent === undefined) return { type: "no_room" };
-  if (isRunnerChild(deps, parent)) return nested(request.agent);
+  if (yield* isRunnerChild(deps, parent)) return nested(request.agent);
   if (findAgent(deps, request.agent) === undefined) return notEnabled(request.agent);
   const problem = yield* deps.port.unavailable;
   return problem === undefined ? { type: "routed" } : { type: "error", text: problem };
@@ -226,14 +249,19 @@ const begin = Effect.fn("LastdropRunner.begin")(
       return { child: record.child, runId: sent.runId, taskId: sent.taskId, agent };
     }
     if (request.agent === undefined) return { line: { type: "no_room" } };
-    if (isRunnerChild(deps, parent)) return { line: nested(request.agent) };
+    if (yield* isRunnerChild(deps, parent)) return { line: nested(request.agent) };
     const agent = findAgent(deps, request.agent);
     if (agent === undefined) return { line: notEnabled(request.agent) };
-    if (ENGINE_WORKTREE.test(request.cwd)) {
+    // A run is a T3 thread in the calling thread's folder, or in a worktree T3 makes (isolation): never
+    // anywhere else, so a call from another folder (Claude Code's own worktree) is refused, not moved.
+    const folder = ENGINE_WORKTREE.test(request.cwd)
+      ? request.cwd
+      : yield* deps.port.outsideFolder(parent, request.cwd);
+    if (folder !== undefined) {
       return {
         line: {
           type: "error",
-          text: `In T3 Code lastdrop, lastdrop's agents don't run in Claude Code's worktrees yet. Call ${agent.name} without isolation, or ask for a worktree through delegate_task (isolation "worktree").`,
+          text: `In T3 Code lastdrop, ${agent.name} runs in this thread's folder or in a worktree T3 Code makes for it, not in ${request.cwd}. Call it from the thread's folder, with isolation "worktree" for a worktree.`,
         },
       };
     }
@@ -283,12 +311,27 @@ export const runLines = (
       const { child, agent, taskId } = begun;
       const state: Active = { parent, child, taskId, stopRequested: false };
       active.set(id, state);
+      const pause = Effect.sleep(deps.poll ?? "1 second");
+      const tries = deps.readTries ?? 30;
+      /** The runs this runner followed: its own, then the fallback's continuations of it. */
+      const followed = new Set<string>([begun.runId]);
       let finished = false;
       yield* Effect.addFinalizer(() =>
         Effect.suspend(() => {
-          if (active.get(id) === state) active.delete(id);
-          // The plugin ended the runner while the agent ran: the agent stops with it.
-          return finished ? Effect.void : deps.port.stop(parent, child, taskId).pipe(Effect.ignore);
+          // A follow-up with the same id (a steer) took the run over: the child is its now.
+          if (active.get(id) !== state) return Effect.void;
+          active.delete(id);
+          if (finished) return Effect.void;
+          // The plugin ended the runner while the agent ran: the agent stops with it, unless the child
+          // already runs something this runner didn't follow (the user, a wake).
+          return deps.port.runs(child).pipe(
+            Effect.map((runs) => runs.toSorted((a, b) => b.ordinal - a.ordinal)[0]),
+            Effect.map((newest) => newest === undefined || followed.has(newest.id)),
+            Effect.orElseSucceed(() => true),
+            Effect.flatMap((ours) =>
+              ours ? deps.port.stop(parent, child, taskId).pipe(Effect.ignore) : Effect.void,
+            ),
+          );
         }),
       );
       let announced = (yield* deps.port.executed(child, agent)) ?? agent.chain[0]!;
@@ -299,29 +342,62 @@ export const runLines = (
         Effect.forkScoped,
       );
 
+      /**
+       * The run is let go, not stopped: it keeps running in T3, and T3 brings its answer to the parent
+       * as the task's completion (not marked delivered).
+       */
+      const letGo = Effect.fn("LastdropRunner.letGo")(function* (what: string, error: RunnerError) {
+        finished = true;
+        emit({
+          type: "result",
+          text: `${what}: ${error.message}. It keeps running in T3 Code (its child thread); T3 Code brings its answer to this thread when it ends.`,
+          isError: true,
+          ...stepFields(announced),
+          childThreadId: child,
+        });
+        yield* Queue.end(queue);
+      });
+
       const seen = new Set<string>();
       let current = begun.runId;
       let failedAt: number | undefined;
       const graceMs = deps.fallbackGraceMs ?? 15_000;
+      let failures = 0;
       let last: ChildRun | undefined;
       for (;;) {
-        const runs = yield* deps.port.runs(child);
-        const run = runs.find((candidate) => candidate.id === current);
-        const later =
-          run === undefined
-            ? []
-            : runs
-                .filter((candidate) => candidate.ordinal > run.ordinal)
-                .toSorted((a, b) => a.ordinal - b.ordinal);
-        const items = yield* deps.port.items(child, [current, ...later.map((r) => r.id)]);
+        const read = yield* Effect.gen(function* () {
+          const runs = yield* deps.port.runs(child);
+          const run = runs.find((candidate) => candidate.id === current);
+          // Only a continuation of this run (a fallback partway): never a later run the user or a wake started.
+          const next =
+            run === undefined || state.stopRequested
+              ? undefined
+              : runs
+                  .filter((candidate) => candidate.continues === run.id)
+                  .toSorted((a, b) => a.ordinal - b.ordinal)[0];
+          // The continuation's rows too: the next read follows it, and they would show a read late.
+          const items = yield* deps.port.items(
+            child,
+            next === undefined ? [current] : [current, next.id],
+          );
+          return { run, next, items };
+        }).pipe(Effect.result);
+        if (read._tag === "Failure") {
+          // A read that fails now and then (a busy database) is read again; many in a row let the run go.
+          if (++failures >= tries)
+            return yield* letGo(`lastdrop lost track of ${agent.name}`, read.failure);
+          yield* pause;
+          continue;
+        }
+        failures = 0;
+        const { run, next, items } = read.success;
         for (const item of items) {
           if (seen.has(item.id)) continue;
-          const text = stepText(item);
-          // An item without its text yet (a row still filling in) is read again next time.
-          if (text === undefined && item.type !== "system_notice") seen.add(item.id);
-          if (text === undefined) continue;
+          // A row still filling in (a command without its text yet) is read again next time.
+          if (stepPending(item)) continue;
           seen.add(item.id);
-          emit({ type: "step", text });
+          const text = stepText(item);
+          if (text !== undefined) emit({ type: "step", text });
         }
         const runsOn = yield* deps.port.executed(child, agent);
         if (runsOn !== undefined && !sameStep(runsOn, announced)) {
@@ -330,9 +406,10 @@ export const runLines = (
           emit({ type: "started", agentId: id, ...stepFields(runsOn), childThreadId: child });
         }
         if (run !== undefined && isTerminal(run.status)) {
-          if (later.length > 0 && !state.stopRequested) {
+          if (next !== undefined) {
             // The agents driver continued the work in a new run (a usage limit partway).
-            current = later[0]!.id;
+            current = next.id;
+            followed.add(current);
             failedAt = undefined;
             continue;
           }
@@ -344,43 +421,61 @@ export const runLines = (
             break;
           }
         }
-        yield* Effect.sleep(deps.poll ?? "1 second");
+        yield* pause;
       }
       const status = last.status;
       const stopped = state.stopRequested || status === "cancelled" || status === "interrupted";
       const where = stepFields(announced);
+      let line: RunnerLine;
       if (stopped) {
-        emit({
-          type: "result",
-          text: "Stopped.",
-          isError: true,
-          stopped: true,
-          ...where,
-          childThreadId: child,
-        });
+        line = { type: "result", text: "Stopped.", isError: true, stopped: true };
       } else {
-        const text = yield* deps.port.outcome(child, last.id);
+        const answer = yield* deps.port.outcome(child, last.id).pipe(
+          Effect.retry({
+            times: Math.max(0, tries - 1),
+            schedule: Schedule.spaced(deps.poll ?? "1 second"),
+          }),
+          Effect.result,
+        );
+        if (answer._tag === "Failure") {
+          return yield* letGo(`lastdrop couldn't read ${agent.name}'s answer`, answer.failure);
+        }
+        const text = answer.success;
         const isError = status !== "completed";
-        emit({
+        line = {
           type: "result",
           text: text.trim() !== "" ? text : isError ? `${agent.name} failed (${status}).` : "",
           isError,
-          ...where,
-          childThreadId: child,
-        });
+        };
       }
       finished = true;
-      if (taskId !== undefined) yield* deps.port.acknowledge(parent, taskId);
-      yield* Queue.end(queue);
-    }).pipe(
-      Effect.catchTags({
-        LastdropRunnerError: (error) =>
-          Effect.sync(() => {
-            Queue.offerUnsafe(queue, { type: "result", text: error.message, isError: true });
-            Queue.endUnsafe(queue);
+      // Marked delivered before the plugin reads the result (it ends the runner then), and until T3 shows
+      // the task ended: else T3 also brings the same answer to the parent after its turn.
+      if (taskId !== undefined) {
+        yield* deps.port.acknowledge(parent, taskId).pipe(
+          Effect.flatMap((marked) => (marked ? Effect.void : Effect.fail("not yet" as const))),
+          Effect.retry({
+            times: Math.max(0, tries - 1),
+            schedule: Schedule.spaced(deps.poll ?? "1 second"),
           }),
-      }),
-    ),
+          Effect.ignore,
+          Effect.uninterruptible,
+        );
+      }
+      const worktree = yield* deps.port.worktree(parent, child);
+      emit({
+        ...line,
+        ...where,
+        ...(worktree === undefined
+          ? {}
+          : {
+              worktreePath: worktree.path,
+              ...(worktree.branch === undefined ? {} : { worktreeBranch: worktree.branch }),
+            }),
+        childThreadId: child,
+      });
+      yield* Queue.end(queue);
+    }),
   );
 
 /** `--agent-stop <id>`: cancels a run in progress; its runner then reports it stopped. */

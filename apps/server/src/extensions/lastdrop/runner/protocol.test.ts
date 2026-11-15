@@ -1,8 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   bindRunner,
+  isLoopbackUrl,
   runnerEnvironment,
+  runnerVariables,
   threadToken,
   tokenThread,
   unbindRunner,
@@ -82,6 +85,23 @@ describe("a query's environment", () => {
     threadId: "thread-1",
     options: { model: "opus" } as { env?: Record<string, string> },
   };
+
+  it.effect("has no runner while lastdrop's agents can't run, or off loopback", () =>
+    Effect.gen(function* () {
+      bindRunner({
+        script: "/t3/lastdrop/bin/lastdrop",
+        url: "http://127.0.0.1:1/api/lastdrop/runner",
+        available: Effect.succeed(false),
+      });
+      assert.isUndefined(yield* runnerVariables("thread-1"));
+      bindRunner({ script: "/s", url: "http://127.0.0.1:1/api/lastdrop/runner" });
+      assert.isDefined(yield* runnerVariables("thread-1"));
+      bindRunner({ script: "/s", url: "http://10.0.0.2:1/api/lastdrop/runner" });
+      assert.isUndefined(runnerEnvironment("thread-1"));
+      assert.isTrue(isLoopbackUrl("http://[::1]:5/x"));
+      assert.isFalse(isLoopbackUrl("http://127.0.0.1.example.com:5/x"));
+    }).pipe(Effect.ensuring(Effect.sync(unbindRunner))),
+  );
 
   it("is unchanged until the routes are bound", () => {
     unbindRunner();
