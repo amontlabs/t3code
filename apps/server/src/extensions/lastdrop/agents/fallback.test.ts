@@ -15,6 +15,8 @@ import {
   type ModelSelection,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
@@ -22,12 +24,14 @@ import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 
 import { ClaudeProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "../../../orchestration-v2/EffectOutbox.ts";
 import * as EffectWorker from "../../../orchestration-v2/EffectWorker.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../../../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import type { AgentDefinition } from "./catalog.ts";
-import { CONTINUE_TEXT, INTERRUPTED_COMMAND_NOTE, runFallbackReactor } from "./fallback.ts";
+import { CONTINUE_TEXT, holdId, INTERRUPTED_COMMAND_NOTE, runFallbackReactor } from "./fallback.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeRouterAdapter } from "./router.ts";
 import { makeFakeAdapter, makeFakeCalls } from "./testkit.ts";
@@ -124,7 +128,7 @@ describe("lastdrop fallback partway through a run", () => {
                 ({ event }) =>
                   event.type === "run.updated" &&
                   event.payload.ordinal === ordinal &&
-                  (event.payload.status === "completed" || event.payload.status === "failed"),
+                  (event.payload.status === "completed" || event.payload.status === "cancelled"),
               ),
               Stream.runHead,
               Effect.andThen(worker.drain()),
@@ -159,14 +163,31 @@ describe("lastdrop fallback partway through a run", () => {
           yield* settled(2);
 
           const projection = yield* orchestrator.getThreadProjection(threadId);
-          // Run 1 failed at the limit on Codex; run 2 is lastdrop's continuation and completed.
+          // Run 1 stopped at the limit on Codex, held for its continuation, not failed; run 2 is
+          // lastdrop's continuation of it and completed.
           assert.deepEqual(
-            projection.runs.map((run) => [run.ordinal, run.status, run.modelSelection.model]),
+            projection.runs.map((run) => [
+              run.ordinal,
+              run.status,
+              run.modelSelection.model,
+              run.restartContinuationOfRunId ?? null,
+            ]),
             [
-              [1, "failed", "build"],
-              [2, "completed", "build"],
+              [1, "cancelled", "build", null],
+              [2, "completed", "build", projection.runs[0]!.id],
             ],
           );
+          // No failure row for the limit: the notice says what happened.
+          assert.isFalse(
+            projection.turnItems.some(
+              (item) => item.type === "error" && item.runId === projection.runs[0]!.id,
+            ),
+          );
+          // The hold is let go once the continuation exists.
+          const hold = yield* (yield* EffectOutbox.EffectOutboxV2).get(
+            holdId(projection.runs[0]!.id),
+          );
+          assert.equal(Option.getOrUndefined(hold)?.status, "cancelled");
           // The switch is in the thread, not silent.
           const notices = projection.turnItems.flatMap((item) =>
             item.type === "system_notice" ? [{ run: item.runId, message: item.message }] : [],
@@ -225,16 +246,20 @@ describe("lastdrop fallback partway through a run", () => {
           }
         }).pipe(
           Effect.provide(
-            ProviderReplayHarness.layerWithRegistry(
-              {
-                name: "lastdrop-fallback",
-                runtimePolicyOverride: {
-                  cwd,
-                  approvalPolicy: "never",
-                  sandboxPolicy: { type: "readOnly" },
+            Layer.merge(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "lastdrop-fallback",
+                  runtimePolicyOverride: {
+                    cwd,
+                    approvalPolicy: "never",
+                    sandboxPolicy: { type: "readOnly" },
+                  },
                 },
-              },
-              registry,
+                registry,
+              ),
+              // The same database as the harness's (memoized), for the reactor's hold.
+              EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
             ),
           ),
         );

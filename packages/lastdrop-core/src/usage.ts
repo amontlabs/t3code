@@ -358,3 +358,60 @@ export const statusWithSignIn = (
     signInDetail: signIn.detail,
     signInEndsAt: signIn.endsAt,
   });
+
+/** Whether a plan has no 5-hour window ("Ultra"). */
+export const planHasNoSession = (plan: string | undefined): boolean =>
+  plan?.trim().toLowerCase() === "ultra";
+
+/**
+ * A reading's rows as they stand at `now`: none when the reading is older than `READING_VALID_MS` (or its time is
+ * unknown), and a row whose reset has passed counts as unused (no reset left to show), like `readingFromStatus`.
+ */
+export function currentWindows(
+  windows: ReadonlyArray<UsageWindow>,
+  at: number | undefined,
+  now: number,
+): UsageWindow[] {
+  if (at === undefined || !Number.isFinite(at) || now - at >= READING_VALID_MS) return [];
+  return windows.map((window) => {
+    if (window.resetsAt === undefined || window.resetsAt > now) return window;
+    const { resetsAt: _, ...rest } = window;
+    return window.usedPercent === undefined ? rest : { ...rest, usedPercent: 0 };
+  });
+}
+
+/**
+ * An account's windows from its `usage.json` entry at `now`, for a reading the standalone app made (it keeps numbers
+ * and resets, not rows). Session unless the plan has no 5-hour window (Ultra); then Weekly, then one weekly row per
+ * model ("Fable Weekly"). Old entries and passed resets go through `currentWindows`.
+ */
+export function windowsFromStatus(status: AccountStatus | undefined, now: number): UsageWindow[] {
+  if (status === undefined) return [];
+  const row = (
+    label: string,
+    used: number | undefined,
+    reset: number | undefined,
+  ): UsageWindow[] =>
+    used === undefined || !Number.isFinite(used)
+      ? []
+      : [
+          {
+            label,
+            usedPercent: Math.min(Math.max(used, 0), 100),
+            ...(reset !== undefined && Number.isFinite(reset) ? { resetsAt: reset } : {}),
+          },
+        ];
+  return currentWindows(
+    [
+      ...(planHasNoSession(status.plan)
+        ? []
+        : row("Session", status.session, status.resetsAt?.["Session"])),
+      ...row("Weekly", status.weekly, status.resetsAt?.["Weekly"]),
+      ...Object.entries(status.models ?? {}).flatMap(([name, used]) =>
+        row(`${name} Weekly`, used, status.resetsAt?.[name]),
+      ),
+    ],
+    status.at,
+    now,
+  );
+}

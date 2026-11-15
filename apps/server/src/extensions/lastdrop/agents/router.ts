@@ -1,7 +1,8 @@
 /**
  * The agents adapter: each session runs on one entry of its agent's chain, forwarded to that
  * entry's native instance. Records name the lastdrop instance, `driver` stays the inner one. At a
- * usage limit partway it marks the entry out, adds a notice and signals `fallback.ts`.
+ * usage limit partway it marks the entry out, adds a notice, ends the run as held for its continuation
+ * and signals `fallback.ts`.
  */
 import {
   ProviderDriverKind,
@@ -330,6 +331,13 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     const thisStep = stepId(step);
     let outerSelection = session.outerSelection;
     let pendingNotice = session.openNotice;
+    /** Set once this session hands a run over: a later limit here is T3's own (`atTerminal`). */
+    let handedOver = false;
+    /**
+     * Provider threads whose conversation this entry did not make (handed over from another one).
+     * On them a restart continuation is no native resume: the turn must send its prompt.
+     */
+    const handedIn = new Set<string>();
     /** The turn each provider thread runs now: a notice row needs its run and node. */
     const turns = new Map<
       string,
@@ -422,7 +430,12 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       return [event, notice];
     });
 
-    /** At a usage limit: mark the entry out; when another entry can run, say so and go on. */
+    /**
+     * At a usage limit: mark the entry out; when another entry can run, say so and go on. The run
+     * then ends as `cancelled`, held open by T3's restart-continuation marker (`fallback.ts`), not
+     * `failed`: whatever waits on it (`--wait`, a delegate_task parent, the thread's status) follows
+     * it to the continuation and sees that run's outcome instead of a failure.
+     */
     const atTerminal = Effect.fn("LastdropRouter.atTerminal")(function* (
       event: Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>,
     ) {
@@ -433,12 +446,17 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
         agent.chain.map((_, index) => index).filter((index) => index !== session.index),
       );
       const turn = turns.get(event.providerThreadId);
-      if (other === undefined || turn === undefined) return [event];
-      yield* options.fallbacks.offer({
+      // A session that already handed over was meant to be released; when it was not, the run
+      // fails as T3's own (an error row, T3's limit recovery) rather than hand over in a loop.
+      if (other === undefined || turn === undefined || handedOver) return [event];
+      const held = yield* options.fallbacks.offer({
         threadId: turn.threadId,
+        runId: turn.runId,
         agent: agent.name,
         from: stepLabel(step),
       });
+      if (!held) return [event];
+      handedOver = true;
       const notice = yield* noticeEvent({
         driver: event.driver,
         providerThreadId: event.providerThreadId,
@@ -447,7 +465,18 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
         title: "Continuing on another entry",
         message: `${agent.name} reached a usage limit on ${stepLabel(step)}. lastdrop continues on the next entry with room; the next run names it.`,
       });
-      return notice === undefined ? [event] : [notice, event];
+      const handover: ProviderAdapterV2Event = {
+        type: "turn.terminal",
+        driver: event.driver,
+        providerThreadId: event.providerThreadId,
+        providerTurnId: event.providerTurnId,
+        runOrdinal: event.runOrdinal,
+        status: "cancelled",
+        failure: null,
+        reason: `lastdrop: ${agent.name} continues on the next entry after a usage limit on ${stepLabel(step)}.`,
+        threadDisposition: event.threadDisposition,
+      };
+      return notice === undefined ? [handover] : [notice, handover];
     });
 
     const mapEvents = (
@@ -546,6 +575,7 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
                 },
               }
             : input;
+        if (adopted !== input) handedIn.add(existing!.id);
         return threadCall(inner.ensureThread)(adopted).pipe(Effect.map(remember));
       },
       resumeThread: (input) =>
@@ -566,7 +596,14 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
           nodeId: input.rootNodeId,
         });
         answers.onMessage(input.providerThread.id, input.message.text, input.runtimePolicy);
-        return threadCall(inner.startTurn)(input);
+        // T3 keeps `restartContinuationOfRunId` for a run it continues (lastdrop's fallback, a
+        // restart): an adapter such as Codex then resumes its native turn and drops the prompt
+        // (the continue text, the handoff context). An entry other than the one that ran it has
+        // no native turn to resume, so it gets the prompt as a new turn.
+        const { restartContinuationOfRunId: _continued, ...prompted } = input;
+        const resumable =
+          session.openNotice === undefined && !handedIn.has(input.providerThread.id);
+        return threadCall(inner.startTurn)(resumable ? input : prompted);
       },
       steerTurn: (input) => {
         answers.onMessage(input.providerThread.id, input.message.text);

@@ -12,6 +12,9 @@ import {
   poolRoom,
   readingFromStatus,
   recordBlock,
+  windowsFromStatus,
+  currentWindows,
+  READING_VALID_MS,
 } from "./usage.ts";
 
 const now = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -142,5 +145,67 @@ describe("reading a status for routing", () => {
     expect([full.session, full.weekly]).toEqual([100, 100]);
     const later = readingFromStatus(status, now, now - minutes(10));
     expect([later.session, later.weekly]).toEqual([10, 10]);
+  });
+});
+
+describe("windows from a usage.json entry", () => {
+  it("has no session row for Ultra, and a weekly row per model", () => {
+    expect(
+      windowsFromStatus(
+        {
+          at: now,
+          session: 0,
+          weekly: 98,
+          models: { Fable: 53 },
+          plan: "Ultra",
+          resetsAt: { Weekly: now + minutes(60), Fable: now + minutes(60) },
+        },
+        now,
+      ),
+    ).toEqual([
+      { label: "Weekly", usedPercent: 98, resetsAt: now + minutes(60) },
+      { label: "Fable Weekly", usedPercent: 53, resetsAt: now + minutes(60) },
+    ]);
+  });
+
+  it("decides the session row from the plan: an idle Max account keeps it", () => {
+    expect(
+      windowsFromStatus({ at: now, session: 0, weekly: 4, plan: "Max 20x" }, now).map(
+        (window) => window.label,
+      ),
+    ).toEqual(["Session", "Weekly"]);
+    expect(windowsFromStatus({ at: now, session: 12 }, now)[0]?.label).toBe("Session");
+    expect(windowsFromStatus({ at: now, session: 0, weekly: 4, plan: "ultra" }, now)).toEqual([
+      { label: "Weekly", usedPercent: 4 },
+    ]);
+    expect(windowsFromStatus(undefined, now)).toEqual([]);
+  });
+
+  it("drops an old or never-read entry and zeroes a window whose reset passed", () => {
+    expect(windowsFromStatus({ at: now - READING_VALID_MS, weekly: 40 }, now)).toEqual([]);
+    expect(windowsFromStatus({ at: -Infinity, weekly: 40 }, now)).toEqual([]);
+    expect(
+      windowsFromStatus(
+        {
+          at: now - minutes(30),
+          session: 80,
+          weekly: 40,
+          resetsAt: { Session: now - minutes(1), Weekly: now + minutes(60) },
+        },
+        now,
+      ),
+    ).toEqual([
+      { label: "Session", usedPercent: 0 },
+      { label: "Weekly", usedPercent: 40, resetsAt: now + minutes(60) },
+    ]);
+  });
+
+  it("current windows: the same rules for this app's own reading", () => {
+    const windows = [{ label: "Session", usedPercent: 70, resetsAt: now - 1 }];
+    expect(currentWindows(windows, now - minutes(10), now)).toEqual([
+      { label: "Session", usedPercent: 0 },
+    ]);
+    expect(currentWindows(windows, now - READING_VALID_MS - 1, now)).toEqual([]);
+    expect(currentWindows(windows, undefined, now)).toEqual([]);
   });
 });

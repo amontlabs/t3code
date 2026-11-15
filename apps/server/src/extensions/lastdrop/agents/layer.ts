@@ -1,15 +1,20 @@
 /**
  * The agents' server-side wiring, inside `Extensions.layer` (above T3's provider hydration, so no
  * new seam): binds the target lookup the driver reads when a session opens, and runs the fallback
- * reactor for runs that end at a limit partway.
+ * reactor for runs that end at a limit partway (holding them open for their waiters, `fallback.ts`). Also keeps
+ * the instance on while settings have no entry for it (`defaultOn.ts`).
  */
 import type { ProviderInstanceId } from "@t3tools/contracts";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as EffectOutbox from "../../../orchestration-v2/EffectOutbox.ts";
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
+import { ServerSettingsService } from "../../../serverSettings.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
+import { keepAgentsInstanceOn } from "./defaultOn.ts";
 import { runFallbackReactor } from "./fallback.ts";
 import { LASTDROP_AGENTS_DRIVER } from "./settings.ts";
 import * as Shared from "./shared.ts";
@@ -57,6 +62,21 @@ export const layer = Layer.effectDiscard(
     });
     yield* Effect.addFinalizer(() => Shared.unbindTargets);
     yield* Shared.attachStore(yield* resolveLastdropDataDir);
-    yield* runFallbackReactor(Shared.fallbacks).pipe(Effect.forkScoped);
+    // Out of this context, T3's outbox is rebuilt here; in production it is T3's own instance (the
+    // shared memo map), but the reactor only touches table rows, so it need not be.
+    yield* runFallbackReactor(Shared.fallbacks).pipe(
+      Effect.provide(EffectOutbox.layer),
+      Effect.forkScoped,
+    );
+    // Not under vitest: T3's own tests build this layer and must not see an extra instance.
+    const underTest = yield* Config.String("VITEST").pipe(Config.option);
+    if (underTest._tag === "None") {
+      const settings = yield* ServerSettingsService;
+      yield* settings.ready.pipe(
+        Effect.andThen(keepAgentsInstanceOn(settings)),
+        Effect.catch((error) => Effect.logWarning("lastdrop agents: turning on stopped", error)),
+        Effect.forkScoped,
+      );
+    }
   }),
 ).pipe(Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry));

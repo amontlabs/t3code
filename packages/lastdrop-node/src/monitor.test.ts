@@ -191,11 +191,53 @@ describe("the accounts monitor", () => {
       ["main", 12, 34, "ok", "standalone"],
       ["Pro", 50, 60, "needsSignIn", "standalone"],
     ]);
+    // An idle Max-sized session still has its row; Ultra has none.
+    expect(view.accounts.map((a) => a.windows.map((w) => w.label))).toEqual([
+      ["Weekly"],
+      ["Session", "Weekly"],
+    ]);
     expect((await monitor.routingStatuses())["main"]?.session).toBe(12);
     expect(asked).toEqual([]);
     expect(renewed).toEqual([]);
     // Nothing of the fork's own was written, and the app's file is only read.
     expect(NodeFS.existsSync(statusFile(t.paths))).toBe(false);
+  });
+
+  it("a never-read account has no read time, and an old usage.json entry shows no windows", async () => {
+    t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: mainUUID } });
+    t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
+    const monitor = new AccountsMonitor({
+      paths: t.paths,
+      env: {},
+      fetch: async () => {
+        throw new Error("no network");
+      },
+      sessionId: "s",
+      now: () => at,
+      renew: async () => false,
+      standaloneRunning: async () => false,
+    });
+    const [main] = (await monitor.view()).accounts;
+    expect(main?.readAt).toBeUndefined();
+    expect(main?.windows).toEqual([]);
+    expect(main?.error).toContain("no network");
+
+    t.write(standaloneStatusFile(t.paths), {
+      main: { session: 0, weekly: 34, at: at / 1000 - 3 * 3600, plan: "Max 20x" },
+    });
+    const standalone = new AccountsMonitor({
+      paths: t.paths,
+      env: {},
+      fetch: async () => {
+        throw new Error("no network");
+      },
+      sessionId: "s",
+      now: () => at,
+      standaloneRunning: async () => true,
+    });
+    const [old] = (await standalone.view()).accounts;
+    expect(old?.readAt).toBe(at - 3 * 3_600_000);
+    expect(old?.windows).toEqual([]);
   });
 
   it("the standalone app counts as running while its heartbeat is under a minute old", async () => {

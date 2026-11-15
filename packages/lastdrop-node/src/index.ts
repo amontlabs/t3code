@@ -24,3 +24,5 @@ export {
   standardRetryPolicy,
   type ThreadIdentity,
 } from "@t3tools/lastdrop-core";
+/** Usage shapes the server turns into T3's limit windows (`extensions/lastdrop/limitSources.ts`). */
+export type { LimitResets, UsageWindow } from "@t3tools/lastdrop-core";
