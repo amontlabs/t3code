@@ -36,3 +36,15 @@ export function userDataNames(
 ): { readonly current: string; readonly legacy: string } {
   return active ? USER_DATA_NAMES[isDevelopment ? "development" : "production"] : upstream;
 }
+
+/**
+ * Folder holding the `t3` launcher (`<folder>/bin/t3`) where T3 would use `upstream` (its home).
+ * The fork keeps its own under `<home>/lastdrop/`, the folder `lastdropDataDir` names, so it never
+ * overwrites the official app's `<home>/bin/t3`.
+ */
+export function cliLauncherDir(
+  path: { readonly join: (...parts: ReadonlyArray<string>) => string },
+  upstream: string,
+): string {
+  return active ? path.join(upstream, "lastdrop") : upstream;
+}

@@ -51,6 +51,10 @@
       "budget": 3,
       "why": "app name"
     },
+    "apps/desktop/src/app/DesktopCliShim.ts": {
+      "budget": 2,
+      "why": "the fork's own t3 launcher folder"
+    },
     "apps/desktop/src/app/DesktopUserData.ts": {
       "budget": 4,
       "why": "Electron profile folder"

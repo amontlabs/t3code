@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { cliLauncherDir } from "../extensions/identity.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // AppImage mounts change each run; the launcher must mount the image itself.
@@ -115,7 +116,7 @@ export const renderCliShim = (input: {
 
 export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
   environment.path.join(
-    environment.baseDir,
+    cliLauncherDir(environment.path, environment.baseDir),
     "bin",
     environment.platform === "win32" ? "t3.cmd" : "t3",
   );
