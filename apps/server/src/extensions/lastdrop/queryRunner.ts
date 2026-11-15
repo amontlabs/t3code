@@ -35,6 +35,7 @@ import {
   type ClaudeAgentSdkQueryRunnerShape,
   type ClaudeAgentSdkQuerySession,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import { type CutWork, CutWorkTracker } from "./moveContinuation.ts";
 
 /** The router's surface the wrapper uses (lastdrop-node's `ThreadRouter`; tests may stand in another). */
 export interface QueryRouter {
@@ -44,6 +45,7 @@ export interface QueryRouter {
   messageId(session: string, uuid: string): Promise<{ session: string; uuid: string }>;
   lineage(session: string): Promise<ReadonlyArray<string>>;
   recordFork(source: string, forked: string): Promise<void>;
+  copySubagents(source: string, forked: string): Promise<void>;
   markFull(account: string): void;
   markTroubled(account: string): void;
   signInWorks(account: string): Promise<boolean>;
@@ -73,6 +75,18 @@ export interface WrapOptions {
   readonly log?: (line: string) => void;
   /** Choosing an account never holds a thread up longer than this; then it opens where it was. */
   readonly deadlineMs?: number;
+  /**
+   * The query ended at a usage limit and the thread's next query moves to `to`: the work the end cut, for the
+   * continuation T3 would send after a restart (`moveContinuation.ts`).
+   */
+  readonly onLimitMove?: (move: {
+    readonly threadId: string;
+    readonly from: string;
+    readonly to: string;
+    readonly work: ReadonlyArray<CutWork>;
+  }) => void;
+  /** A query opens on the thread. */
+  readonly onOpen?: (threadId: string) => void;
 }
 
 /** lastdrop's own bookkeeping failed; the query then opens as T3 asked (or where it was). */
@@ -181,10 +195,26 @@ export function wrapQueryRunner(
       }),
     ).pipe(Effect.tap(() => Effect.sync(() => log(`thread ${threadId}: open refused (${why})`))));
 
+  /** Copies a fork's subagents; a failure is logged, never fails the query. */
+  const copySubagents = (source: string, forked: string) =>
+    io(() => router.copySubagents(source, forked)).pipe(
+      Effect.timeoutOption(deadline),
+      Effect.catchCause((cause) =>
+        Effect.sync(() =>
+          log(`fork ${forked.slice(0, 8)}: copying subagents failed (${String(cause)})`),
+        ),
+      ),
+      Effect.asVoid,
+    );
+
   const watch = (
     session: ClaudeAgentSdkQuerySession,
     route: Route | undefined,
-    input: { readonly model: string | undefined; readonly delegated: boolean },
+    input: {
+      readonly threadId: string;
+      readonly model: string | undefined;
+      readonly delegated: boolean;
+    },
   ): ClaudeAgentSdkQuerySession => {
     const account = route?.decision?.account;
     if (account === undefined) return session;
@@ -193,6 +223,7 @@ export function wrapQueryRunner(
       retryDelayMs(standardRetryPolicy, failures, r),
     );
     let pendingNotice = route?.notice;
+    const cut = new CutWorkTracker();
     let rejected = false;
     let released: Deferred.Deferred<SDKMessage> | undefined;
     let closed = false;
@@ -217,6 +248,7 @@ export function wrapQueryRunner(
 
     const step = Effect.fn("LastdropQueryRunner.step")(function* (message: SDKMessage) {
       const lead: SDKMessage[] = [];
+      cut.observe(message);
       if (isRejectedRateLimit(message)) rejected = true;
       if (!isResult(message)) {
         // The thread had to leave its account: say so just before its first answer (earlier frames, such as
@@ -258,9 +290,11 @@ export function wrapQueryRunner(
             end: false,
           };
         }
+        const work = cut.work();
         log(
-          `thread ${label} on ${account}: usage limit; ending the query so the next message moves to ${to}`,
+          `thread ${label} on ${account}: usage limit; ending the query so the thread continues on ${to} (${work.length} cut: ${work.map((w) => w.label).join("; ") || "none"})`,
         );
+        options.onLimitMove?.({ threadId: input.threadId, from: account, to, work });
         return {
           emit: [...lead, noticeMessage(notice, message.session_id), withNotice(message, notice)],
           end: true,
@@ -352,6 +386,7 @@ export function wrapQueryRunner(
       >;
       // A Z.ai or OpenRouter instance (step 6) is never account-picked, moved or translated (FORK.md rule).
       if (isLastdropEndpointEnvironment(env)) return yield* inner.open(input);
+      options.onOpen?.(input.threadId);
       const model = typeof input.options.model === "string" ? input.options.model : undefined;
       const routeInput = {
         threadId: input.threadId,
@@ -398,6 +433,16 @@ export function wrapQueryRunner(
         }
         route = recorded;
       }
+      // A move forks under a new id: its subagents come along, or SendMessage to one of them finds nothing.
+      const moved = route.identity;
+      if (
+        moved.forkSession === true &&
+        moved.resume !== undefined &&
+        moved.sessionId !== undefined
+      ) {
+        const [source, forked] = [moved.resume, moved.sessionId];
+        yield* copySubagents(source, forked);
+      }
       const session = yield* inner.open({
         ...input,
         options: withIdentity(
@@ -406,7 +451,11 @@ export function wrapQueryRunner(
           route.decision === undefined ? undefined : route.env,
         ),
       });
-      return watch(session, route, { model, delegated: lineage.delegated });
+      return watch(session, route, {
+        threadId: input.threadId,
+        model,
+        delegated: lineage.delegated,
+      });
     }),
     forkSession: Effect.fn("LastdropQueryRunner.forkSession")(function* (
       input: Parameters<ClaudeAgentSdkQueryRunnerShape["forkSession"]>[0],
@@ -428,6 +477,7 @@ export function wrapQueryRunner(
             : { ...input.options, upToMessageId: source.uuid },
       });
       yield* io(() => router.recordFork(input.sessionId, result.sessionId)).pipe(Effect.ignore);
+      yield* copySubagents(source.session, result.sessionId);
       return result;
     }),
     subagentLaunchToolUseId: Effect.fn("LastdropQueryRunner.subagentLaunchToolUseId")(function* (

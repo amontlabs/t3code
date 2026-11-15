@@ -472,7 +472,7 @@ export function moveNotice(input: {
     case "limit":
       return where === undefined
         ? `lastdrop: Claude account ${input.from} reached its usage limit, and no other account has room right now. Send the message again once a limit resets.`
-        : `lastdrop: Claude account ${input.from} reached its usage limit. Send your next message to continue this thread on ${where}; the conversation carries over.`;
+        : `lastdrop: Claude account ${input.from} reached its usage limit. This thread continues on ${where}; the conversation carries over.`;
     case "full":
       return `lastdrop: Claude account ${input.from} is at its usage limit, so this thread continues on ${where ?? "another account"}. The conversation carries over; its prompt cache is read again once.`;
     case "gone":

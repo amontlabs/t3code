@@ -55,7 +55,7 @@ export const wrapClaudeQueryRunner = <E, R>(
 
 /**
  * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
- * agents' target lookup and fallback reactor; the Z.ai and OpenRouter instances and their usage.
+ * agents' target lookup and fallback reactor; the move continuation; the Z.ai and OpenRouter instances and their usage.
  */
 export const layer = Layer.mergeAll(
   LastdropAccounts.layer,
@@ -69,6 +69,12 @@ export const layer = Layer.mergeAll(
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/agents/layer.ts")).pipe(
       Effect.map((agents) => agents.layer),
+    ),
+  ),
+  // The continuation after a Claude thread moved at a usage limit; it too reaches T3's orchestrator.
+  Layer.unwrap(
+    Effect.promise(() => import("./lastdrop/moveContinuationLayer.ts")).pipe(
+      Effect.map((move) => move.layer),
     ),
   ),
 );

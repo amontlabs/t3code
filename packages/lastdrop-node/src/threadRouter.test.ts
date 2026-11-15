@@ -6,6 +6,8 @@ import {
   emptyConfig,
   encodeAccountsConfig,
 } from "@t3tools/lastdrop-core";
+import * as NodeFS from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { accountsFiles, claudeFolder } from "./paths.ts";
@@ -270,6 +272,39 @@ describe("the thread router", () => {
     router.markFull("Pro");
     expect((await router.limitNotice("Ultra", undefined, false)).to).toBeUndefined();
     expect((await router.limitNotice("main", undefined, false)).to).toBe("Ultra");
+  });
+
+  it("a fork gets the subagents of its source and every older conversation, never overwriting", async () => {
+    await ledger.record({ session: "X", account: "Ultra", at });
+    await ledger.record({ session: "C", account: "Pro", at, forkedAt: at, from: "X" });
+    await ledger.setCurrent("C", "X", at);
+    t.write(`${shared()}/proj/X.jsonl`, line({ type: "user", uuid: "x1" }));
+    t.write(`${shared()}/proj/C.jsonl`, line({ type: "user", uuid: "c1" }));
+    t.write(`${shared()}/proj/X/subagents/agent-old.jsonl`, "old\n");
+    t.write(`${shared()}/proj/X/subagents/agent-old.meta.json`, { agentType: "general-purpose" });
+    t.write(`${shared()}/proj/X/subagents/agent-both.jsonl`, "from X\n");
+    t.write(`${shared()}/proj/C/subagents/agent-both.jsonl`, "from C\n");
+    t.write(`${shared()}/proj/C/subagents/agent-new.jsonl`, "new\n");
+    t.write(`${shared()}/proj/N/subagents/agent-new.jsonl`, "already there\n");
+    await router.copySubagents("C", "N");
+    const read = (name: string) =>
+      NodeFS.readFileSync(`${shared()}/proj/N/subagents/${name}`, "utf8");
+    expect(read("agent-old.jsonl")).toBe("old\n");
+    expect(JSON.parse(read("agent-old.meta.json"))).toEqual({ agentType: "general-purpose" });
+    expect(read("agent-both.jsonl")).toBe("from C\n");
+    expect(read("agent-new.jsonl")).toBe("already there\n");
+    // The sources are untouched.
+    expect(NodeFS.readFileSync(`${shared()}/proj/X/subagents/agent-both.jsonl`, "utf8")).toBe(
+      "from X\n",
+    );
+  });
+
+  it("a fork whose lineage has no subagents folder copies nothing and fails nothing", async () => {
+    await ledger.record({ session: "X", account: "Ultra", at });
+    t.write(`${shared()}/proj/X.jsonl`, line({ type: "user", uuid: "x1" }));
+    await router.copySubagents("X", "N");
+    await router.copySubagents("unknown", "N");
+    expect(NodeFS.existsSync(`${shared()}/proj/N`)).toBe(false);
   });
 
   it("a T3 fork that wrote no transcript is not recorded", async () => {
