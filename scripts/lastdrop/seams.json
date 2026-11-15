@@ -74,6 +74,10 @@
     "apps/server/src/orchestration-v2/IdleCompactionService.ts": {
       "budget": 6,
       "why": "idle compaction for lastdrop agent threads"
+    },
+    "apps/server/src/provider/Drivers/AntigravityDriver.ts": {
+      "budget": 2,
+      "why": "agy's raw tool calls for lastdrop's command answers"
     }
   }
 }

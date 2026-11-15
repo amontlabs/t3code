@@ -34,6 +34,7 @@ import {
   makeTurnInput,
 } from "../../../orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
 import { makeAntigravityAdapterV2 } from "../../../orchestration-v2/Adapters/AntigravityAdapterV2.ts";
+import { observeAntigravitySessionEvent } from "../../acpToolCalls.ts";
 import { allAgents, parseCatalog } from "./catalog.ts";
 import { makeFallbackSignals, makeRoom } from "./room.ts";
 import { makeRouterAdapter } from "./router.ts";
@@ -57,23 +58,44 @@ const agents = allAgents(
 );
 
 /** One agy call: `tool_call` in progress, then `session/request_permission` for it (agy's order). */
+/** One agy call as sent: `tool_call` in progress, then `session/request_permission` for it. */
+const toolCall = (
+  id: string,
+  fields: Record<string, unknown>,
+  optionId: "allow" | "deny",
+  permission: Record<string, unknown> = {},
+) => {
+  const call = { toolCallId: id, ...fields };
+  return callFrames(id, call, { ...call, ...permission }, optionId);
+};
+
 const commandCall = (
   id: string,
   command: string,
   optionId: "allow" | "deny",
   title = "run_command",
-) => {
-  const call = {
-    toolCallId: id,
-    title,
-    kind: "execute",
-    rawInput: {
-      CommandLine: command,
-      Cwd: "<workspace>",
-      WaitMsBeforeAsync: 5000,
-      toolSummary: "my own words",
+) =>
+  toolCall(
+    id,
+    {
+      title,
+      kind: "execute",
+      rawInput: {
+        CommandLine: command,
+        Cwd: "<workspace>",
+        WaitMsBeforeAsync: 5000,
+        toolSummary: "my own words",
+      },
     },
-  };
+    optionId,
+  );
+
+const callFrames = (
+  id: string,
+  call: Record<string, unknown>,
+  permissionCall: Record<string, unknown>,
+  optionId: "allow" | "deny",
+) => {
   return [
     {
       type: "emit_inbound",
@@ -95,7 +117,7 @@ const commandCall = (
         method: "session/request_permission",
         params: {
           sessionId: SESSION,
-          toolCall: { ...call, status: "pending" },
+          toolCall: { ...permissionCall, status: "pending" },
           options: [
             { optionId: "allow", name: "Allow", kind: "allow_once" },
             { optionId: "deny", name: "Deny", kind: "reject_once" },
@@ -243,8 +265,30 @@ const transcript = {
     // command under the same title is allowed (no verdict carries over).
     ...commandCall("call-1", "rm -rf ~/Documents", "deny"),
     ...commandCall("call-2", "ls -la", "allow"),
-    // A title that looks read-only does not make its real command so.
+    // A title that looks read-only does not make its real command so: not agy's run_command, refused.
     ...commandCall("call-3", "rm -rf ~/Documents", "deny", "Run `ls`"),
+    // Review 2, item 1: no rawInput, a backticked title. T3 takes `ls` from the title; nothing
+    // says what runs, so it is refused without the judge.
+    ...toolCall("call-4", { title: "Run `ls`", kind: "execute" }, "deny"),
+    // Item 2: not agy's run_command, though it carries a `command`: judged as the tool it is.
+    ...toolCall("call-5", { title: "ssh_exec", rawInput: { command: "cat /etc/shadow" } }, "deny"),
+    // A run_command whose input doesn't decode: refused.
+    ...toolCall(
+      "call-6",
+      { title: "run_command", kind: "execute", rawInput: { CommandLine: "ls", Cwd: 5 } },
+      "deny",
+    ),
+    // The request names another command than the call: refused.
+    ...toolCall(
+      "call-7",
+      {
+        title: "run_command",
+        kind: "execute",
+        rawInput: { CommandLine: "ls -la", Cwd: "<workspace>" },
+      },
+      "deny",
+      { title: "Run `rm -rf x`" },
+    ),
     {
       type: "emit_inbound",
       label: "assistant.final",
@@ -307,6 +351,9 @@ describe("lastdrop on T3's real Antigravity adapter", () => {
           replay(input as never).pipe(Effect.provideService(SecureRandom.SecureRandom, crypto)),
         withProcess: (_stop, task) => task,
         defaultModel: Effect.undefined,
+        // What the driver's seam does in the app: agy's own calls reach lastdrop.
+        onSessionEvent: (event) =>
+          Effect.sync(() => observeAntigravitySessionEvent(ANTIGRAVITY, event)),
       });
       const prompts: Array<string> = [];
       const notices: Array<string> = [];
@@ -323,7 +370,7 @@ describe("lastdrop on T3's real Antigravity adapter", () => {
           judge: async (prompt) => {
             prompts.push(prompt);
             const planned = prompt.split("<planned_action>")[1] ?? "";
-            return planned.includes("rm -rf")
+            return planned.includes("rm -rf") || planned.includes("ssh_exec")
               ? {
                   allow: false,
                   risk: "critical",
@@ -376,17 +423,33 @@ describe("lastdrop on T3's real Antigravity adapter", () => {
         if (event.type === "turn.terminal") break;
       }
       yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, decoded);
+      // The answers themselves are the transcript's expected ACP responses (checked above).
+      const shown = notices.filter((notice) => !notice.startsWith("live runs on"));
+      assert.deepEqual(shown.slice(0, 3), [
+        "Declined: rm -rf ~/Documents (not covered by your allow rules; judge: critical risk, user authorization unknown. Deletes documents.)",
+        "Allowed as read-only (ls): ls -la",
+        // Not agy's run_command (its title is changed): a command-running tool lastdrop can't read.
+        "Declined: ls (lastdrop could not read which command this request is for)",
+      ]);
+      assert.include(shown[3]!, "could not read which command");
+      assert.include(shown[4]!, "ssh_exec");
+      assert.include(shown[5]!, "could not read which command");
+      assert.include(shown[6]!, "names another command");
+      assert.equal(shown.length, 7);
+      const planned = prompts.map((prompt) => prompt.split("<planned_action>")[1]!);
       assert.deepEqual(
-        notices.filter((notice) => !notice.startsWith("live runs on")),
-        [
-          "Declined: rm -rf ~/Documents (not covered by your allow rules; judge: critical risk, user authorization unknown. Deletes documents.)",
-          "Allowed as read-only (ls): ls -la",
-          "Declined: rm -rf ~/Documents (not covered by your allow rules; judge: critical risk, user authorization unknown. Deletes documents.)",
-        ],
+        planned.map((text) =>
+          text.includes("ssh_exec")
+            ? "ssh_exec"
+            : text.includes("rm -rf ~/Documents")
+              ? "rm"
+              : "other",
+        ),
+        ["rm", "ssh_exec"],
+        "ls, the unreadable and the mismatched calls never reach the judge",
       );
-      // Judged once: the second removal reuses its verdict; `ls` never reaches the judge.
-      assert.equal(prompts.length, 1);
-      assert.include(prompts[0]!.split("<planned_action>")[1]!, `"command":"rm -rf ~/Documents"`);
+      assert.include(planned[1]!, `"tool":"ssh_exec"`);
+      assert.include(planned[1]!, "cat /etc/shadow");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });
