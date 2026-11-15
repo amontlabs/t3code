@@ -29,6 +29,7 @@ import {
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
 import { lastdropDataDir } from "../dataDir.ts";
+import { pendingContinuations } from "./moveContinuation.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
 import { runnerVariables } from "./runner/endpoint.ts";
 import { withRunnerEnvironment } from "./runner/queryEnvironment.ts";
@@ -145,6 +146,9 @@ const wrapRouting = <E, R>(
         lineage: lineage ?? (() => Effect.succeed(MAIN_THREAD)),
         hostEnvironment: yield* HostProcess.Environment,
         log,
+        // After a move at a limit, the thread continues as after a restart (moveContinuationLayer.ts).
+        onLimitMove: (move) => pendingContinuations.offer(move),
+        onOpen: (threadId) => pendingContinuations.drop(threadId),
       });
     }),
   ).pipe(Layer.provide(queryRunner));

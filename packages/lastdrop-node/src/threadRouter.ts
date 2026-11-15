@@ -28,6 +28,7 @@ import { claudeFolder, type LastdropPaths, profileDirectory } from "./paths.ts";
 import { currentSessionIn, lineageIn, type LedgerStore, SessionLedger } from "./sessionLedger.ts";
 import {
   conversationTail,
+  copySubagentFolders,
   findTranscript,
   hasTranscriptLines,
   messageIdIn,
@@ -386,6 +387,31 @@ export class ThreadRouter {
       from: current,
       at: this.now(),
     });
+  }
+
+  /**
+   * A conversation forked to `forked` (a move, or T3's own fork) keeps its subagents: their transcripts are
+   * copied from `source` and every older conversation of its lineage (docs/lastdrop/subagent-resume.md).
+   */
+  async copySubagents(source: string, forked: string): Promise<void> {
+    const store = await this.options.ledger.read();
+    // `source` and the conversations it was forked from, newest first, then T3's own lineage if it names a thread.
+    const sources: string[] = [];
+    let s: string | undefined = source;
+    while (s !== undefined && !sources.includes(s)) {
+      sources.push(s);
+      s = store.sessions[s]?.from;
+    }
+    for (const t of lineageIn(store, source)) if (!sources.includes(t)) sources.push(t);
+    const copied = await copySubagentFolders(
+      sources.filter((s) => s !== forked),
+      forked,
+      sharedProjects(this.options.paths),
+    );
+    if (copied > 0)
+      this.log(
+        `fork ${forked.slice(0, 8)}: subagents copied from ${copied} conversation(s) of ${source.slice(0, 8)}`,
+      );
   }
 
   /** The notice for a limit reached mid-run on `account`, naming where the next message goes. */

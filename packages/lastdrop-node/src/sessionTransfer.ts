@@ -165,6 +165,35 @@ export async function copyTranscript(
 }
 
 /**
+ * Claude Code resumes a subagent (SendMessage to its id) only from `<project>/<session>/subagents/` of the
+ * session it runs as, and its `--fork-session` doesn't copy that folder. Copies each source's `subagents/`
+ * (newest source first) into `target`'s, beside the first source's transcript, never overwriting a file
+ * already there. Sources without a transcript or the folder are skipped. Returns how many were copied from.
+ */
+export async function copySubagentFolders(
+  sources: ReadonlyArray<string>,
+  target: string,
+  projects: string,
+): Promise<number> {
+  if (target === "") return 0;
+  let into: string | undefined;
+  let copied = 0;
+  for (const source of sources) {
+    if (source === "" || source === target) continue;
+    const file = await findTranscript(source, projects);
+    if (file === undefined) continue;
+    const project = file.slice(0, file.length - `/${source}.jsonl`.length);
+    into ??= `${project}/${target}/subagents`;
+    const from = `${project}/${source}/subagents`;
+    if (!(await exists(from))) continue;
+    await NodeFSP.mkdir(into, { recursive: true, mode: 0o700 });
+    await NodeFSP.cp(from, into, { recursive: true, force: false, errorOnExist: false });
+    copied += 1;
+  }
+  return copied;
+}
+
+/**
  * The session's transcript in the shared folder; one only in an account's own old folder (runs from before
  * conversations were shared) is copied there first. Undefined when none has it.
  */

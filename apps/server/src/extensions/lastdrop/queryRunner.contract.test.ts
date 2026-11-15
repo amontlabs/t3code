@@ -175,4 +175,22 @@ describe("the wrapper's contract with T3's Claude adapter", () => {
     // That the fork keeps message uuids (so a rewind's id stays valid after a move) is Claude Code's behaviour,
     // checked live (docs/lastdrop/claude-routing.md, "Checked live"), not pinnable here.
   });
+
+  it("the continuation after a move is T3's restart continuation: its prompt, after its note when work was cut", () => {
+    const restart = source("../../orchestration-v2/RestartContinuation.ts");
+    // A run cut mid-turn: the prompt alone with no note, else note, blank line, prompt.
+    assert.include(
+      restart,
+      "note.work.length === 0 ? undefined : restartCancelledBackgroundWorkNote(note.work)",
+    );
+    assert.include(restart, "? CONTINUE_PROMPT");
+    assert.include(restart, "`${noteText}\\n\\n${CONTINUE_PROMPT}`");
+    // Cut native subagents go through cancelledTurnItemWork, background shells through cancelledRosterTaskWork.
+    const recovery = source("../../orchestration-v2/ProviderRuntimeRecoveryService.ts");
+    assert.include(recovery, "cancelledTurnItemWork(");
+    assert.include(
+      recovery,
+      "recordCancelledBackgroundWork(providerThread.id, cancelledRosterTaskWork(task))",
+    );
+  });
 });

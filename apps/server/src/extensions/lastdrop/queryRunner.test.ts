@@ -1,5 +1,8 @@
 // Replays of the query-runner wrapper with a fake runner (scripted SDK messages, no Claude Code) and the real
 // lastdrop-node router over a temporary home: never the real ~/.claude, ~/.claude-accounts, ~/.t3 or keychain.
+// @effect-diagnostics nodeBuiltinImport:off - checks the temporary home's files.
+import * as NodeFS from "node:fs";
+
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { assert, describe, it } from "@effect/vitest";
 import { accountsFiles, claudeFolder, SessionLedger, ThreadRouter } from "@t3tools/lastdrop-node";
@@ -25,7 +28,12 @@ import type {
   ClaudeAgentSdkQueryRunnerShape,
   ClaudeAgentSdkQuerySession,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import { type QueryRouter, type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
+import {
+  type QueryRouter,
+  type ThreadLineage,
+  type WrapOptions,
+  wrapQueryRunner,
+} from "./queryRunner.ts";
 
 const MIN = 60_000;
 /** A transcript line's timestamp (plain data, written as Claude Code writes it). */
@@ -196,6 +204,8 @@ const wrap = (
     readonly router?: QueryRouter;
     readonly deadlineMs?: number;
     readonly sleep?: (ms: number) => Effect.Effect<void>;
+    readonly onLimitMove?: WrapOptions["onLimitMove"];
+    readonly onOpen?: WrapOptions["onOpen"];
   } = {},
 ) => {
   const waits: number[] = [];
@@ -206,6 +216,8 @@ const wrap = (
     sleep: extra.sleep ?? ((ms) => Effect.sync(() => void waits.push(ms))),
     random: Effect.succeed(0),
     ...(extra.deadlineMs === undefined ? {} : { deadlineMs: extra.deadlineMs }),
+    ...(extra.onLimitMove === undefined ? {} : { onLimitMove: extra.onLimitMove }),
+    ...(extra.onOpen === undefined ? {} : { onOpen: extra.onOpen }),
   });
   return { runner, waits };
 };
@@ -424,6 +436,131 @@ describe("the query-runner wrapper (replays)", () => {
         );
       }),
     ),
+  );
+
+  it.effect(
+    "a limit move reports the cut subagent and brings its transcript to the fork before it opens",
+    () =>
+      withWorld((w) =>
+        Effect.gen(function* () {
+          const frame = (o: Record<string, unknown>) =>
+            ({ session_id: "s", uuid: "u", ...o }) as unknown as SDKMessage;
+          const frames = [
+            init(),
+            frame({
+              type: "assistant",
+              parent_tool_use_id: null,
+              message: {
+                model: "claude-haiku-5-5",
+                content: [{ type: "tool_use", id: "toolu_cut", name: "Agent", input: {} }],
+              },
+            }),
+            frame({
+              type: "system",
+              subtype: "task_started",
+              task_id: "a-cut",
+              tool_use_id: "toolu_cut",
+              description: "Remember and write",
+              task_type: "local_agent",
+              prompt: "Remember the word, write the file, then go on.",
+              is_backgrounded: false,
+            }),
+            frame({
+              type: "system",
+              subtype: "task_started",
+              task_id: "a-done",
+              tool_use_id: "toolu_done",
+              description: "Quick look",
+              task_type: "local_agent",
+            }),
+            frame({
+              type: "system",
+              subtype: "task_notification",
+              task_id: "a-done",
+              status: "completed",
+              output_file: "",
+              summary: "ok",
+            }),
+            frame({
+              type: "user",
+              parent_tool_use_id: null,
+              message: {
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "toolu_cut",
+                    is_error: true,
+                    content: [
+                      {
+                        type: "text",
+                        text: "Agent terminated early due to an API error: You've hit your 5-hour limit · resets 5pm",
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+            result({
+              is_error: true,
+              result: "You've hit your session limit · resets 5pm",
+              api_error_status: 429,
+            }),
+          ];
+          const fake = fakeRunner((n) => (n === 1 ? [frames] : [[init(), answer(), result()]]));
+          const projects = `${w.t.paths.sharedClaude}/projects`;
+          const copied = `${projects}/p/moved-1/subagents/agent-a-cut.jsonl`;
+          const atOpen: boolean[] = [];
+          const checked: Fake = {
+            ...fake,
+            runner: {
+              ...fake.runner,
+              open: (input) =>
+                Effect.sync(() => void atOpen.push(NodeFS.existsSync(copied))).pipe(
+                  Effect.andThen(fake.runner.open(input)),
+                ),
+            },
+          };
+          const moves: Array<Parameters<NonNullable<WrapOptions["onLimitMove"]>>[0]> = [];
+          const opens: string[] = [];
+          const { runner } = wrap(w, checked, undefined, {
+            onLimitMove: (move) => void moves.push(move),
+            onOpen: (threadId) => void opens.push(threadId),
+          });
+          yield* drain(yield* runner.open(openInput("thread-1", { sessionId: "X" })));
+          assert.deepEqual(moves, [
+            {
+              threadId: "thread-1",
+              from: "Ultra",
+              to: "Pro",
+              work: [
+                {
+                  kind: "subagent",
+                  label: "Remember and write (id a-cut)",
+                  id: "lastdrop-cut:a-cut",
+                },
+              ],
+            },
+          ]);
+          // The cut subagent's transcript sits under the conversation the limit ended.
+          w.t.write(
+            `${projects}/p/X.jsonl`,
+            line({ type: "assistant", uuid: "x1", timestamp: iso(w.now - MIN) }),
+          );
+          w.t.write(
+            `${projects}/p/X/subagents/agent-a-cut.jsonl`,
+            line({ type: "user", uuid: "s1" }),
+          );
+          w.t.write(`${projects}/p/X/subagents/agent-a-cut.meta.json`, {
+            agentType: "general-purpose",
+          });
+          yield* drain(yield* runner.open(openInput("thread-1", { resume: "X" })));
+          assert.equal(opts(fake.opened[1]!)["sessionId"], "moved-1");
+          assert.deepEqual(atOpen, [false, true]);
+          assert.isTrue(NodeFS.existsSync(`${projects}/p/moved-1/subagents/agent-a-cut.meta.json`));
+          assert.deepEqual(opens, ["thread-1", "thread-1"]);
+        }),
+      ),
   );
 
   it.effect("a passing API error is retried in the same query, T3 sees one turn", () =>
