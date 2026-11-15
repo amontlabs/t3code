@@ -1,15 +1,19 @@
 /**
  * The agents' server-side wiring, inside `Extensions.layer` (above T3's provider hydration, so no
  * new seam): binds the target lookup the driver reads when a session opens, and runs the fallback
- * reactor for runs that end at a limit partway.
+ * reactor for runs that end at a limit partway. Also turns the instance on in a home that never set
+ * it (`defaultOn.ts`).
  */
 import type { ProviderInstanceId } from "@t3tools/contracts";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
+import { ServerSettingsService } from "../../../serverSettings.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
+import { ensureAgentsInstanceOn, LASTDROP_AGENTS_INSTANCE } from "./defaultOn.ts";
 import { runFallbackReactor } from "./fallback.ts";
 import { LASTDROP_AGENTS_DRIVER } from "./settings.ts";
 import * as Shared from "./shared.ts";
@@ -58,5 +62,20 @@ export const layer = Layer.effectDiscard(
     yield* Effect.addFinalizer(() => Shared.unbindTargets);
     yield* Shared.attachStore(yield* resolveLastdropDataDir);
     yield* runFallbackReactor(Shared.fallbacks).pipe(Effect.forkScoped);
+    // Not under vitest: T3's own tests build this layer and must not see an extra instance.
+    const underTest = yield* Config.String("VITEST").pipe(Config.option);
+    if (underTest._tag === "None") {
+      const settings = yield* ServerSettingsService;
+      yield* settings.ready.pipe(
+        Effect.andThen(ensureAgentsInstanceOn(settings)),
+        Effect.tap((outcome) =>
+          outcome === "created"
+            ? Effect.logInfo(`lastdrop agents: instance ${LASTDROP_AGENTS_INSTANCE} turned on`)
+            : Effect.void,
+        ),
+        Effect.catch((error) => Effect.logWarning("lastdrop agents: turning on failed", error)),
+        Effect.forkScoped,
+      );
+    }
   }),
 ).pipe(Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry));
