@@ -324,3 +324,69 @@ is replaced by "a usage limit mid-run is surfaced in the thread and ends the que
   Terminal sign-ins (`openTerminalSignIn`, `browserSignIn`, `CLILogin`) are not ported: the section is read
   only. The fork's `usage.json` lives in `~/.t3/lastdrop/`, apart from the standalone app's, so each keeps
   its own 429 block. Extra usage money is formatted en-US.
+
+## Step 7: the command judge
+
+Ported from headroom `main` at `d0730f5`: `PermissionRules.swift`, `ReadOnlyCommands.swift`,
+`ReadOnlyFlagTables.swift` (data, regenerated into `src/judge/readOnlyFlagTables.ts`, 73 commands,
+1,748 entries), `CommandJudge.swift` and `AntigravityBackend.decide`. Codex's reviewer policy files
+(Apache 2.0) are in `src/judge/codex-guardian/` (as `.md.txt`, byte for byte) with their LICENSE and NOTICE, and embedded as
+strings in `src/judge/guardianPolicy.ts` (a test checks they still equal the files).
+
+| Swift                                                                                                                     | TS                                                           |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `PermissionRules` (`add`, `bashSpecifier`, `check`, `matches`, `split`, `unwrap`, `redirects`, `needsExactRule`)          | `src/judge/permissionRules.ts`                               |
+| `PermissionRules.load`, `mainCheckout`, `gitRoot`                                                                         | lastdrop-node `judge.ts` `loadPermissionRules`               |
+| `ReadOnlyCommands` (all of it), `ReadOnlyFlagTables`                                                                      | `src/judge/readOnlyCommands.ts`, `readOnlyFlagTables.ts`     |
+| `CommandJudge` `Verdict`, `Context.record`, `policy`, `prompt`, `parse`, `unavailable`, `problem`, `clip`, `defaultJudge` | `src/judge/commandJudge.ts`                                  |
+| `CommandJudge.judge` (runs `agy`), `AntigravityBackend.executable`                                                        | lastdrop-node `judge.ts` `runCommandJudge`, `findAgy`        |
+| `AntigravityBackend.modelUnavailable`                                                                                     | `agyModelUnavailable` (Claude's `modelUnavailable` is taken) |
+| `AgentCatalog.judges[.antigravity]` decoding                                                                              | `catalogJudge`, lastdrop-node `readCatalogJudge`             |
+| `AntigravityBackend.decide`, `Decision`                                                                                   | `src/judge/decide.ts` `decideAction`                         |
+
+| Swift test                                                              | TS test                                                                                                                                                                           |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PermissionRulesTests.testOnlyBashRulesAreKeptAndParameterRulesSkipped` | `permissionRules.test.ts` "keeps only Bash rules and skips parameter rules"                                                                                                       |
+| `testWildcardsMatchLikeClaudeCode`                                      | "matches wildcards like Claude Code"                                                                                                                                              |
+| `testEveryPartOfACompoundCommandMustBeAllowed`                          | "needs every part of a compound command allowed"                                                                                                                                  |
+| `testAllowNeverCoversSubstitutionsRedirectsOrControlFlow`               | "never allows substitutions, redirects or control flow"                                                                                                                           |
+| `testDenyAndAskMatchAnyPartIncludingNestedOnes`                         | "matches deny and ask on any part, nested ones included"                                                                                                                          |
+| `testWrappersAreStrippedAndExecWrappersNeedAnExactRule`                 | "strips wrappers, and exec wrappers need an exact rule"                                                                                                                           |
+| `testLoadsUserAndProjectSettings`                                       | lastdrop-node `judge.test.ts` "loads user and project settings" (+ managed settings)                                                                                              |
+| `ReadOnlyCommandsTests.testPlainAndSpecialCommandsRead`                 | `readOnlyCommands.test.ts` "allows plain and special commands that read"                                                                                                          |
+| `testFlagTablesAllowListedFlagsOnly`                                    | "allows only the flags in the tables"                                                                                                                                             |
+| `testGitReadsOnly`                                                      | "allows git only where it reads"                                                                                                                                                  |
+| `testGhAndDockerReadsOnly`                                              | "allows gh and docker only where they read"                                                                                                                                       |
+| `testDangerousShapesAreNeverReadOnly`                                   | "never takes dangerous shapes for read-only"                                                                                                                                      |
+| `testCompoundCommandsNeedEveryPartReadOnly`                             | "needs every part of a compound command read-only"                                                                                                                                |
+| `ReadOnlyTablesTests.testEveryFlagClaudeCodeAllowsIsReadOnly`           | "takes every flag Claude Code allows as read-only" (same 3 refused lines)                                                                                                         |
+| `testNoFlagOutsideClaudeCodesTablesIsReadOnly`                          | "takes no flag outside Claude Code's tables as read-only" (none accepted)                                                                                                         |
+| `CommandJudgeTests.testThePolicyFilesShipWithTheirLicence`              | `commandJudge.test.ts` "ships the policy files with their licence" (+ embedded copies equal the files)                                                                            |
+| `testThePromptHoldsTheTaskAndCallInputsOnly`                            | "holds the task and call inputs only in the prompt"                                                                                                                               |
+| `testContextKeepsTheLatestCalls`                                        | "keeps the latest calls"                                                                                                                                                          |
+| `testOnlyAClearAllowAllows`                                             | "allows only on a clear allow"                                                                                                                                                    |
+| `testAJudgeThatFailsOrHangsDenies`                                      | lastdrop-node "denies when the judge fails or hangs" (+ a real hang killed, `agy` missing)                                                                                        |
+| `CommandJudgeSettingTests.testTheJudgeRunsTheConfiguredModelAndEffort`  | `commandJudge.test.ts` "runs the configured model and effort" (arguments) and lastdrop-node "runs the configured model and effort, and names a model agy won't run" (the process) |
+| `testTheJudgeIsCheckedAgainstTheSessionsModels`                         | "checks the judge against the session's models"                                                                                                                                   |
+
+Totals for step 7: all 22 Swift cases are ported (7 + 8 + 7), as 22 TS cases, plus 4 added
+(`catalogJudge`, `findAgy`/`readCatalogJudge`, and `decideAction`'s rules, plan mode and failures in 3
+cases). The router side (`apps/server/src/extensions/lastdrop/agents/commandAnswers.test.ts`) is new:
+see `docs/lastdrop/step7.md`.
+
+Behaviour that differs:
+
+- Numbers: Swift's `isNumber` (any Unicode number) and `Double(...)` became ASCII digits and plain
+  decimals: stricter, never looser.
+- Text (review fix): characters are grapheme clusters and whitespace is Swift's (`src/judge/swiftText.ts`),
+  so `"\r\n"` never splits and U+0085 is a space, U+FEFF is not, as in Swift. Stricter than Swift: a
+  command with a carriage return is never allowed by a pattern or as read-only, and deny and ask rules
+  also see it split at `"\r\n"` as bash does.
+- The judge's policy line names "the user or the main agent" as the task's author (T3 threads are
+  started by a person), and its read-only line says "a plan run" instead of "an Explore or Plan agent".
+- `judgeUnavailable` points at `lastdrop --agents judge antigravity <model> [effort]` (the fork has no
+  Settings → Accounts row for it).
+- Not ported: the agent's up-front note (`commandNote`, sent through ACP `_meta`) and continuing a turn
+  `agy` ended at a refusal (`continuePrompt`, `maxContinues`): T3's ACP adapter owns the session, and the
+  person sees the refusal in the thread. Where the provider takes feedback (Claude instances), the
+  refusal carries `continuePrompt`'s text.

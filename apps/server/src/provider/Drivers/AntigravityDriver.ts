@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
 import * as AcpErrors from "effect-acp/errors";
+import { observeAntigravitySessionEvent } from "../../extensions/acpToolCalls.ts";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import {
@@ -465,6 +466,7 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       onSessionStarted: provider.onSessionStarted,
       onSessionEvent: (event) => {
+        observeAntigravitySessionEvent(instanceId, event);
         if (event._tag === "ConfigOptionsUpdated") {
           return provider.onConfigOptionsUpdated(event.configOptions);
         }

@@ -8,6 +8,7 @@ export * from "./keychain.ts";
 export * from "./monitor.ts";
 export * from "./paths.ts";
 export * from "./statusStore.ts";
+export * from "./judge.ts";
 export * from "./sessionLedger.ts";
 export * from "./sessionTransfer.ts";
 export * from "./standalone.ts";

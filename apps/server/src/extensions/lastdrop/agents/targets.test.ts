@@ -178,16 +178,16 @@ describe("lastdrop router targets", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("asks for approval where the entry's instance has no auto mode", () =>
+  it.effect("runs auto as accept-edits where the entry's instance has no auto mode", () =>
     Effect.gen(function* () {
-      // Antigravity lacks `auto`: T3's own rule makes it approval-required, so every prompt
-      // reaches the person (no silent approval) until the command judge lands.
+      // Antigravity lacks `auto`: it runs accept-edits, and lastdrop answers its command prompts
+      // (`commandAnswers.ts`) instead of the person.
       const antigravity = yield* openOn({
         agent: "live",
         available: [ANTIGRAVITY],
         runtimeMode: "auto",
       });
-      assert.equal(antigravity.last.runtimePolicy.runtimeMode, "approval-required");
+      assert.equal(antigravity.last.runtimePolicy.runtimeMode, "auto-accept-edits");
       const claude = yield* openOn({ agent: "live", available: [CLAUDE], runtimeMode: "auto" });
       assert.equal(claude.last.runtimePolicy.runtimeMode, "auto");
       const full = yield* openOn({
@@ -196,13 +196,38 @@ describe("lastdrop router targets", () => {
         runtimeMode: "full-access",
       });
       assert.equal(full.last.runtimePolicy.runtimeMode, "full-access");
-      // Z.ai and OpenRouter: Claude Code's auto check on their endpoints is untested.
+      const asking = yield* openOn({
+        agent: "live",
+        available: [ANTIGRAVITY],
+        runtimeMode: "approval-required",
+      });
+      assert.equal(asking.last.runtimePolicy.runtimeMode, "approval-required");
+      // Z.ai keeps Claude Code's auto mode (its check works there); what it still asks, lastdrop answers.
       const zai = yield* openOn({ agent: "cheap", available: [ZAI], runtimeMode: "auto" });
-      assert.equal(zai.last.runtimePolicy.runtimeMode, "approval-required");
+      assert.equal(zai.last.runtimePolicy.runtimeMode, "auto");
+      // OpenRouter's auto check is untested: accept-edits, every command answered by lastdrop.
+      const openrouter = yield* openOn({
+        agent: "cheap",
+        available: [OPENROUTER],
+        runtimeMode: "auto",
+      });
+      assert.equal(openrouter.last.runtimePolicy.runtimeMode, "auto-accept-edits");
       const step = agents.find((agent) => agent.name === "live")!.chain[0]!;
-      // Antigravity has no auto mode: even with its modes unknown, its prompts reach the person.
-      assert.equal(entryRuntimeMode(step, "auto", undefined), "approval-required");
-      assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "approval-required");
+      // Antigravity has no auto mode, even with its modes unknown.
+      assert.equal(entryRuntimeMode(step, "auto", undefined), "auto-accept-edits");
+      assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "auto-accept-edits");
+      // A target with neither mode still asks the person.
+      assert.equal(entryRuntimeMode(step, "auto", ["approval-required"]), "approval-required");
+      // Plan mode: edits must reach lastdrop to be refused, so not accept-edits (review item 3).
+      assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES, "plan"), "approval-required");
+      assert.equal(entryRuntimeMode(step, "auto", undefined, "plan"), "approval-required");
+      const openrouterStep = agents.find((agent) => agent.name === "cheap")!.chain[1]!;
+      assert.equal(
+        entryRuntimeMode(openrouterStep, "auto", [...ALL_RUNTIME_MODES], "plan"),
+        "approval-required",
+      );
+      const zaiStep = agents.find((agent) => agent.name === "cheap")!.chain[0]!;
+      assert.equal(entryRuntimeMode(zaiStep, "auto", [...ALL_RUNTIME_MODES], "plan"), "auto");
     }).pipe(Effect.scoped),
   );
 
