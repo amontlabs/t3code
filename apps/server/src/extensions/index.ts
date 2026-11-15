@@ -73,8 +73,20 @@ export const layer = Layer.mergeAll(
   ),
 );
 
-/** HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section. */
-export const routes = Layer.mergeAll(LastdropAccounts.routes, LastdropEndpointsView.routes);
+/**
+ * HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section, and
+ * the runner lastdrop's Claude Code plugin calls for its Agent types (`lastdrop/runner/`, step 8).
+ */
+export const routes = Layer.mergeAll(
+  LastdropAccounts.routes,
+  LastdropEndpointsView.routes,
+  // Imported when the layer builds: it reaches T3's orchestrator, which imports this module's lists.
+  Layer.unwrap(
+    Effect.promise(() => import("./lastdrop/runner/routes.ts")).pipe(
+      Effect.map((runner) => runner.routes),
+    ),
+  ),
+);
 
 /** Refuses a database migrated by a newer T3 build; `server.ts` runs it before opening the database. */
 export { refuseNewerDatabase } from "./databaseVersion.ts";

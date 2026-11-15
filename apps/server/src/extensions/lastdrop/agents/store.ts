@@ -11,6 +11,8 @@ export interface StoredMap<V> {
   readonly get: (key: string) => V | undefined;
   readonly set: (key: string, value: V) => void;
   readonly delete: (key: string) => void;
+  /** Every entry, oldest first. */
+  readonly entries: () => ReadonlyArray<readonly [string, V]>;
   /** Loads the file (its entries win) and writes every later change to it. */
   readonly attach: (file: string) => void;
 }
@@ -40,6 +42,7 @@ export const makeStoredMap = <V>(limit = 5_000): StoredMap<V> => {
     delete: (key) => {
       if (map.delete(key)) write();
     },
+    entries: () => [...map.entries()],
     attach: (path) => {
       file = path;
       try {
