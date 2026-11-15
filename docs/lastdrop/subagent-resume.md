@@ -26,9 +26,8 @@ subagents the limit cut can still be resumed on the new account.
   nothing was cut, else `restartCancelledBackgroundWorkNote(work)`, a blank line, and `CONTINUE_PROMPT`: what
   `RestartContinuation.ts` sends for a run cut mid-turn. The note and labels come from T3's functions, so
   upstream wording changes (such as a "resume it with SendMessage" hint) arrive with a sync. `CONTINUE_PROMPT`
-  isn't exported, and fork code never edits `RestartContinuation.ts`, so the fork keeps a copy that
-  `queryRunner.contract.test.ts` compares with T3's literal (and the note-then-prompt shape) on every run.
-  The alternative would be a one-line seam (`export const CONTINUE_PROMPT`, budget 2).
+  is T3's own, exported through a one-word seam in `RestartContinuation.ts` (FORK.md);
+  `queryRunner.contract.test.ts` pins the note-then-prompt shape.
 - **Sending it** (`moveContinuationLayer.ts`, in `Extensions.layer`). At a limit with another account to go to,
   the wrapper hands the thread and its cut work to `pendingContinuations` (dropped if a query opens on the
   thread first). On T3's `run.updated` to `failed` for that thread, the reactor releases the run's provider

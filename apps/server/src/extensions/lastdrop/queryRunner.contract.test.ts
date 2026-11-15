@@ -10,7 +10,6 @@ import { ClaudeSettings, type ModelSelection, ProviderInstanceId } from "@t3tool
 import * as Schema from "effect/Schema";
 
 import * as ClaudeAdapterV2 from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import { CONTINUE_PROMPT } from "./moveContinuation.ts";
 import { identityOf, withIdentity } from "./queryRunner.ts";
 
 const here = NodePath.dirname(new URL(import.meta.url).pathname);
@@ -179,13 +178,6 @@ describe("the wrapper's contract with T3's Claude adapter", () => {
 
   it("the continuation after a move is T3's restart continuation: its prompt, after its note when work was cut", () => {
     const restart = source("../../orchestration-v2/RestartContinuation.ts");
-    // CONTINUE_PROMPT isn't exported; the fork's copy must match T3's literal word for word.
-    const literal = /const CONTINUE_PROMPT =\s*("(?:[^"\\]|\\.)*");/u.exec(restart)?.[1];
-    assert.isDefined(
-      literal,
-      "T3's CONTINUE_PROMPT moved or was renamed: find it and update moveContinuation.ts",
-    );
-    assert.equal(CONTINUE_PROMPT, JSON.parse(literal!) as string);
     // A run cut mid-turn: the prompt alone with no note, else note, blank line, prompt.
     assert.include(
       restart,

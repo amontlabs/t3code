@@ -9,7 +9,8 @@ import {
   cancelledTurnItemWork,
   restartCancelledBackgroundWorkNote,
 } from "../../orchestration-v2/RestartBackgroundNote.ts";
-import { CONTINUE_PROMPT, continuationText, CutWorkTracker } from "./moveContinuation.ts";
+import { CONTINUE_PROMPT } from "../../orchestration-v2/RestartContinuation.ts";
+import { continuationText, CutWorkTracker } from "./moveContinuation.ts";
 import { continuationCommand } from "./moveContinuationLayer.ts";
 
 const frame = (o: Record<string, unknown>) =>
