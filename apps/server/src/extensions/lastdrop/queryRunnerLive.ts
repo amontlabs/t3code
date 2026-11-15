@@ -23,10 +23,15 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { ServerConfig } from "../../config.ts";
-import { ClaudeAgentSdkQueryRunner } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import {
+  type ClaudeAgentSdkQueryOpenInput,
+  ClaudeAgentSdkQueryRunner,
+} from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
 import { lastdropDataDir } from "../dataDir.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
+import { runnerVariables } from "./runner/endpoint.ts";
+import { withRunnerEnvironment } from "./runner/queryEnvironment.ts";
 
 const MAIN_THREAD: ThreadLineage = { delegated: false };
 
@@ -48,8 +53,37 @@ const lineageReader = Effect.gen(function* () {
     );
 });
 
-/** The wrapped runner, or T3's own where lastdrop doesn't choose accounts. */
+/**
+ * The runner's variables on every query (step 8, `runner/`), around the routing wrapper so a routed
+ * query's environment keeps them. Not under vitest, where T3's tests pin the query's options.
+ */
 export const wrapLive = <E, R>(
+  queryRunner: Layer.Layer<ClaudeAgentSdkQueryRunner, E, R>,
+): Layer.Layer<ClaudeAgentSdkQueryRunner, E, R> =>
+  Layer.effect(
+    ClaudeAgentSdkQueryRunner,
+    Effect.gen(function* () {
+      const inner = yield* ClaudeAgentSdkQueryRunner;
+      const underTest = yield* Config.String("VITEST").pipe(
+        Config.option,
+        Effect.orElseSucceed(Option.none),
+      );
+      if (underTest._tag === "Some") return inner;
+      const hostEnvironment = yield* HostProcess.Environment;
+      return {
+        ...inner,
+        open: Effect.fn("LastdropRunnerEnvironment.open")(function* (
+          input: ClaudeAgentSdkQueryOpenInput,
+        ) {
+          const added = yield* runnerVariables(input.threadId);
+          return yield* inner.open(withRunnerEnvironment(input, hostEnvironment, () => added));
+        }),
+      };
+    }),
+  ).pipe(Layer.provide(wrapRouting(queryRunner)));
+
+/** The wrapped runner, or T3's own where lastdrop doesn't choose accounts. */
+const wrapRouting = <E, R>(
   queryRunner: Layer.Layer<ClaudeAgentSdkQueryRunner, E, R>,
 ): Layer.Layer<ClaudeAgentSdkQueryRunner, E, R> =>
   Layer.effect(

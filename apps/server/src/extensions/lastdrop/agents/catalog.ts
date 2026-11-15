@@ -228,7 +228,8 @@ export const stepLabel = (step: AgentStep): string =>
   [step.providerLabel, step.model, ...(step.effort === undefined ? [] : [step.effort])].join(" · ");
 
 /** "Codex · gpt-6.1-sol, then Claude · opus" (`AgentDefinition.summary`). */
-const agentSummary = (agent: AgentDefinition): string => agent.chain.map(stepLabel).join(", then ");
+export const agentSummary = (agent: AgentDefinition): string =>
+  agent.chain.map(stepLabel).join(", then ");
 
 /** "build · Antigravity Claude Sonnet 5.5"; a Claude agent is "judge · Claude Fable 5.2". */
 const agentDisplayName = (agent: AgentDefinition): string => {
