@@ -99,15 +99,19 @@ export const policyText = (readOnly: boolean): string => {
   ).replaceAll("{{ extra_policy }}", extra);
 };
 
+/** JSON for the prompt with `<` escaped, so input can't close or open the prompt's tags. */
+const embedded = (value: unknown): string =>
+  sortedJson(value).replace(/<(?!truncated \/>)/g, "\\u003c");
+
 export const judgePrompt = (policy: string, context: JudgeContext, action: unknown): string => {
   const lines: Array<string> = [];
   if (context.instructions !== "")
-    lines.push(sortedJson({ role: "developer", content: clip(context.instructions, 1500) }));
+    lines.push(embedded({ role: "developer", content: clip(context.instructions, 1500) }));
   for (const request of context.requests)
-    lines.push(sortedJson({ role: "user", content: clip(request, 4000) }));
+    lines.push(embedded({ role: "user", content: clip(request, 4000) }));
   for (const call of context.calls)
     lines.push(
-      sortedJson({ role: "assistant", tool_call: { tool: call.tool, input: call.input } }),
+      embedded({ role: "assistant", tool_call: { tool: call.tool, input: call.input } }),
     );
   return `${policy}
 
@@ -120,40 +124,50 @@ ${lines.join("\n")}
 </transcript>
 
 <planned_action>
-${clip(sortedJson(action), 4000)}
+${clip(embedded(action), 4000)}
 </planned_action>`;
 };
 
 const stringField = (object: Record<string, unknown>, key: string): string | undefined =>
   typeof object[key] === "string" ? (object[key] as string) : undefined;
 
-/** The last JSON object with an `outcome` in the judge's answer. Only "allow" allows. */
+/**
+ * The verdict: every `{…"outcome"…}` object in the answer must read and agree; the first is taken.
+ * Several that disagree, or one that doesn't read, refuse (Swift took the last one, so an echo of the
+ * action after the verdict could decide it). Only "allow" allows.
+ */
 export const parseVerdict = (text: string): Verdict => {
-  const matches = [...text.matchAll(/\{[^{}]*"outcome"[^{}]*\}/g)];
-  const last = matches.at(-1)?.[0];
-  let object: Record<string, unknown> | undefined;
-  if (last !== undefined) {
-    try {
-      const parsed: unknown = JSON.parse(last);
-      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))
-        object = parsed as Record<string, unknown>;
-    } catch {
-      object = undefined;
-    }
-  }
-  const outcome = object === undefined ? undefined : stringField(object, "outcome")?.toLowerCase();
-  if (object === undefined || (outcome !== "allow" && outcome !== "deny")) {
+  const unreadable = (why?: string): Verdict => {
     const tail = Array.from(text.trim()).slice(-200).join("");
     return {
       allow: false,
-      failure: tail === "" ? "no answer" : `unreadable answer (${tail.replaceAll("\n", " ")})`,
+      failure:
+        why ?? (tail === "" ? "no answer" : `unreadable answer (${tail.replaceAll("\n", " ")})`),
     };
+  };
+  const objects: Array<Record<string, unknown>> = [];
+  for (const match of text.matchAll(/\{[^{}]*"outcome"[^{}]*\}/g)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch {
+      return unreadable();
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return unreadable();
+    const outcome = stringField(parsed as Record<string, unknown>, "outcome")?.toLowerCase();
+    if (outcome !== "allow" && outcome !== "deny") return unreadable();
+    objects.push(parsed as Record<string, unknown>);
   }
+  const first = objects[0];
+  if (first === undefined) return unreadable();
+  const outcome = stringField(first, "outcome")!.toLowerCase();
+  if (objects.some((object) => stringField(object, "outcome")!.toLowerCase() !== outcome))
+    return unreadable("several answers that disagree");
   return {
     allow: outcome === "allow",
-    risk: stringField(object, "risk_level") ?? "",
-    authorization: stringField(object, "user_authorization") ?? "",
-    rationale: stringField(object, "rationale") ?? "",
+    risk: stringField(first, "risk_level") ?? "",
+    authorization: stringField(first, "user_authorization") ?? "",
+    rationale: stringField(first, "rationale") ?? "",
   };
 };
 
