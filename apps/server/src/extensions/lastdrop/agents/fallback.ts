@@ -13,6 +13,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as EffectOutbox from "../../../orchestration-v2/EffectOutbox.ts";
@@ -35,6 +36,16 @@ type RunUpdated = Extract<OrchestrationV2DomainEvent, { type: "run.updated" }>;
 
 const TERMINAL = new Set(["completed", "failed", "interrupted", "cancelled"]);
 
+/**
+ * T3's own ids for a run's restart continuation (`RestartContinuation.continueRestartedRun`). Ours
+ * uses them too: whichever of the two dispatches second is the same command (T3 replays its
+ * receipt), and T3's worker skips a run whose continuation message exists, so a run never gets two.
+ */
+export const continuationCommandId = (runId: RunId) =>
+  CommandId.make(`command:restart-continuation:${runId}`);
+export const continuationMessageId = (runId: RunId) =>
+  MessageId.make(`message:restart-continuation:${runId}`);
+
 const continueAfter = Effect.fn("LastdropFallback.continueAfter")(function* (
   pending: PendingFallback,
   event: RunUpdated,
@@ -46,11 +57,22 @@ const continueAfter = Effect.fn("LastdropFallback.continueAfter")(function* (
     (thread) => thread.id === event.payload.providerThreadId,
   );
   if (providerThread?.providerSessionId != null) {
-    yield* sessions.release({
-      providerSessionId: providerThread.providerSessionId,
-      reason: "manual_shutdown",
-      detail: `lastdrop: ${pending.agent} leaves ${pending.from} at a usage limit.`,
-    });
+    // A session that stays open keeps the limited entry: the router lets its next limit fail as
+    // T3's own (an error row, T3's limit recovery), so the re-send below still goes out.
+    yield* sessions
+      .release({
+        providerSessionId: providerThread.providerSessionId,
+        reason: "manual_shutdown",
+        detail: `lastdrop: ${pending.agent} leaves ${pending.from} at a usage limit.`,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("lastdrop.fallback.release-failed", {
+            threadId: event.threadId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
   }
   yield* Effect.logInfo("lastdrop.fallback.continue", {
     threadId: event.threadId,
@@ -67,8 +89,8 @@ const continueAfter = Effect.fn("LastdropFallback.continueAfter")(function* (
   // A Stop that reached the run makes T3 decline this (accepted, no run): the run stays stopped.
   yield* orchestrator.dispatch({
     type: "message.dispatch",
-    commandId: CommandId.make(`lastdrop-fallback:${event.payload.id}`),
-    messageId: MessageId.make(`lastdrop-fallback:${event.payload.id}`),
+    commandId: continuationCommandId(event.payload.id),
+    messageId: continuationMessageId(event.payload.id),
     threadId: event.threadId,
     text: cutOff ? `${CONTINUE_TEXT}\n\n${INTERRUPTED_COMMAND_NOTE}` : CONTINUE_TEXT,
     attachments: [],
@@ -111,24 +133,27 @@ export const runFallbackReactor = Effect.fn("LastdropFallback.run")(function* (
       ),
   );
 
-  // The continuation exists (or was declined): waiters follow it now, not the marker. Any other
-  // pending continuation marker on this thread is older than this run, so stale for T3 too.
-  const settle = (threadId: ThreadId) =>
-    outbox
-      .cancelUnsettled({
-        threadId,
-        effectTypes: ["provider-runtime.continue"],
-        reason: "lastdrop: the run continued on the next entry",
-      })
-      .pipe(
-        Effect.flatMap((ids) => outbox.signalCancellations(ids)),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("lastdrop.fallback.settle-failed", {
-            threadId,
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
+  // The continuation exists (or was declined): waiters follow it, not the marker; older markers
+  // here are stale too. One T3's worker claimed (past `HOLD_GRACE_MS`) is left to it, which finds
+  // the continuation and settles it; cancelling could cut its dispatch short. Rows only (`layer.ts`).
+  const settle = (threadId: ThreadId, runId: RunId) =>
+    outbox.get(holdId(runId)).pipe(
+      Effect.flatMap((marker) =>
+        Option.exists(marker, (effect) => effect.status === "running")
+          ? Effect.void
+          : outbox.cancelUnsettled({
+              threadId,
+              effectTypes: ["provider-runtime.continue"],
+              reason: "lastdrop: the run continued on the next entry",
+            }),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("lastdrop.fallback.settle-failed", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
 
   const onSettled = Effect.fn("LastdropFallback.onSettled")(function* (event: RunUpdated) {
     const pending = yield* signals.take(event.threadId, event.payload.id);
@@ -143,7 +168,11 @@ export const runFallbackReactor = Effect.fn("LastdropFallback.run")(function* (
           }),
         ),
       );
-    yield* settle(event.threadId);
+    yield* settle(event.threadId, event.payload.id);
+    // As T3 after its own continuation: a delegated child's task finalization skipped the run
+    // while the marker was pending. With a continuation, that run settles the task; without one
+    // (a Stop declined it, the run ended interrupted, the re-send failed) this settles it now.
+    yield* orchestrator.recoverDelegatedTask(event.threadId, event.payload.id);
   });
 
   yield* signals.bindHold(hold);

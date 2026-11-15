@@ -58,8 +58,8 @@ export const layer = Layer.effectDiscard(
     });
     yield* Effect.addFinalizer(() => Shared.unbindTargets);
     yield* Shared.attachStore(yield* resolveLastdropDataDir);
-    // T3 keeps its outbox service inside the orchestration runtime; the reactor's own instance
-    // reads and writes the same table (its marker rows are what T3's waiters check).
+    // Out of this context, T3's outbox is rebuilt here; in production it is T3's own instance (the
+    // shared memo map), but the reactor only touches table rows, so it need not be.
     yield* runFallbackReactor(Shared.fallbacks).pipe(
       Effect.provide(EffectOutbox.layer),
       Effect.forkScoped,
