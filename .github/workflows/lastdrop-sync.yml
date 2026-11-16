@@ -57,13 +57,23 @@ jobs:
       PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
-      # No credentials in the checkout, so the Claude steps cannot push.
       - name: Checkout lastdrop
         uses: actions/checkout@v6
         with:
           ref: lastdrop
           fetch-depth: 0
-          persist-credentials: false
+
+      # No credentials in the checkout, so the Claude steps cannot push. (persist-credentials: false
+      # fails here: its cleanup walks submodules and trips on a nested gitlink under .repos/.)
+      - name: Remove checkout credentials
+        run: |
+          set -euo pipefail
+          git config --local --name-only --get-regexp '^(http\..*\.extraheader|includeif\..*|include\..*)$' | sort -u |
+            while read -r key; do git config --local --unset-all "$key"; done || true
+          if git config --get-regexp 'extraheader' > /dev/null; then
+            echo "::error::The checkout still carries credentials."
+            exit 1
+          fi
 
       # Upstream's workflows come along with every sync; on this fork they would fail or wait
       # forever for upstream's runners. Turn off every workflow that is not the fork's own.
@@ -321,7 +331,6 @@ jobs:
         with:
           ref: lastdrop-sync/${{ needs.sync.outputs.tag }}
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Push lastdrop and the release tag
         env:
