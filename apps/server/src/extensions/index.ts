@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 
 import * as LimitSourcesLive from "./lastdrop/limitSourcesLive.ts";
 import * as LastdropAccounts from "./lastdrop/accounts.ts";
+import * as LastdropCodexAccounts from "./lastdrop/codex/accounts.ts";
 import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
 import * as LastdropEndpointKeys from "./lastdrop/endpointKeys.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
@@ -18,6 +19,7 @@ import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
+import type { CodexAppServerClientFactory } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 
 /** Services the extension drivers need to create instances. */
 export type ExtensionDriversEnv = never;
@@ -59,6 +61,21 @@ export const wrapClaudeQueryRunner = <E, R>(
   );
 
 /**
+ * Wraps the layer that opens every Codex app-server process: lastdrop picks the Codex account per thread there by
+ * the account's shadow home (`lastdrop/codex/factory.ts`). Under vitest, or with no fork account signed in, T3's
+ * factory behaves unchanged.
+ */
+export const wrapCodexAppServerClientFactory = <E, R>(
+  factory: Layer.Layer<CodexAppServerClientFactory, E, R>,
+): Layer.Layer<CodexAppServerClientFactory, E, R> =>
+  // Loaded lazily, like the Claude wrapper: it imports the Codex adapter, which (through the drivers) imports this file.
+  Layer.unwrap(
+    Effect.promise(() => import("./lastdrop/codex/factoryLive.ts")).pipe(
+      Effect.map((live) => live.wrapLive(factory)),
+    ),
+  );
+
+/**
  * T3's usage limit sources with lastdrop's accounts, Z.ai and OpenRouter after T3's own; `server.ts` uses it in
  * place of T3's layer. Keep both imports static: a dynamic one splits a second `server-*.mjs` chunk and breaks the
  * desktop build (`scripts/lastdrop/check-server-bundle.ts`).
@@ -66,11 +83,12 @@ export const wrapClaudeQueryRunner = <E, R>(
 export const usageLimitSourcesLayer = LimitSourcesLive.wrap(UsageLimitSources.layer);
 
 /**
- * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the agents editor; the
+ * Long-lived services, merged into the server's core dependencies: Claude and Codex accounts and usage; the agents editor; the
  * agents' target lookup and fallback reactor; the move continuation; the Z.ai and OpenRouter instances and their usage.
  */
 const services = Layer.mergeAll(
   LastdropAccounts.layer,
+  LastdropCodexAccounts.layer,
   LastdropEndpointKeys.layer,
   AgentsEditor.layer,
   // Imported when the layer builds: it reaches T3's settings service, which imports this module's lists.
@@ -102,6 +120,7 @@ export const layer = LimitSourcesLive.publisher.pipe(Layer.provideMerge(services
  */
 export const routes = Layer.mergeAll(
   LastdropAccounts.routes,
+  LastdropCodexAccounts.routes,
   LastdropEndpointsView.routes,
   LastdropEndpointKeys.routes,
   AgentsEditorRoutes.routes,

@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { ProviderRegistry } from "../../provider/ProviderRegistry.ts";
 import { UsageLimitSources } from "../../usage/UsageLimitSources.ts";
 import { LastdropAccounts } from "./accounts.ts";
+import { LastdropCodexAccounts } from "./codex/accounts.ts";
 import { LastdropEndpoints } from "./endpointsView.ts";
 import {
   currentLastdropSources,
@@ -76,12 +77,13 @@ export const wrap = <E, R>(
   ).pipe(Layer.provide(inner));
 
 /**
- * Publishes lastdrop's source from the accounts and endpoints views. Off macOS and under vitest both are empty.
+ * Publishes lastdrop's source from the Claude and Codex accounts and the endpoints views. Off macOS and under vitest both are empty.
  * The feed's reading lives as long as this layer: emptied when it builds and when it closes.
  */
 export const publisher = Layer.effectDiscard(
   Effect.gen(function* () {
     const accounts = yield* LastdropAccounts;
+    const codex = yield* LastdropCodexAccounts;
     const endpoints = yield* LastdropEndpoints;
     const providers = yield* ProviderRegistry;
     yield* Effect.acquireRelease(Effect.sync(resetLastdropSources), () =>
@@ -95,6 +97,7 @@ export const publisher = Layer.effectDiscard(
       );
       const source = lastdropLimitSource({
         accounts: yield* accounts.view,
+        codex: yield* codex.view,
         endpoints: yield* endpoints.view,
         now: yield* Clock.currentTimeMillis,
         nativeEmails,

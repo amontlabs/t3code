@@ -31,3 +31,17 @@ export {
 } from "@t3tools/lastdrop-core";
 /** Usage shapes the server turns into T3's limit windows (`extensions/lastdrop/limitSources.ts`). */
 export type { LimitResets, UsageWindow } from "@t3tools/lastdrop-core";
+export * from "./codexAccounts.ts";
+/** The Codex accounts' rules the server's wrapper and accounts service apply (`extensions/lastdrop/codex/`). */
+export {
+  addCodexAccount,
+  chooseCodexAccount,
+  type CodexAccount,
+  type CodexAccountList,
+  codexAccountTitle,
+  type CodexRoom,
+  moveCodexAccount,
+  recordedCodexAccount,
+  removeCodexAccount,
+  renameCodexAccount,
+} from "@t3tools/lastdrop-core";

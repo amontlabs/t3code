@@ -224,6 +224,43 @@ describe("lastdropLimitSource", () => {
       "OpenRouter refused the key.",
     );
   });
+
+  it("adds each Codex account as a Codex driver row: its windows, or why it has none", () => {
+    const windows = [
+      { id: "primary", kind: "session", label: "Session", usedPercent: 10 },
+    ] as const;
+    const source = lastdropLimitSource({
+      accounts: undefined,
+      codex: {
+        accounts: [
+          {
+            key: "Work",
+            title: "Work",
+            signedIn: true,
+            email: "w@x.y",
+            usageLimits: { checkedAt: "2026-11-15T12:00:00.000Z", windows },
+          },
+          { key: "Home", title: "Home", signedIn: false },
+          { key: "New", title: "New", signedIn: true },
+        ],
+      },
+      endpoints: undefined,
+      now: NOW,
+    });
+    assert.deepStrictEqual(
+      source?.accounts.map((entry) => [
+        entry.id,
+        entry.driver,
+        entry.usageLimits.windows.length,
+        entry.usageLimits.unavailable?.message,
+      ]),
+      [
+        ["codex-Work", "codex", 1, undefined],
+        ["codex-Home", "codex", 0, "Signed out."],
+        ["codex-New", "codex", 0, "No reading yet."],
+      ],
+    );
+  });
 });
 
 const hub: UsageLimitSourceSnapshot = {

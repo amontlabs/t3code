@@ -131,14 +131,14 @@ const AccountChangeBody = Schema.Union([
 ]);
 const decodeAccountChange = Schema.decodeUnknownOption(Schema.fromJsonString(AccountChangeBody));
 
-const json = (body: unknown, status = 200) =>
+export const json = (body: unknown, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status, headers: { "cache-control": "no-store" } });
 
 /**
  * A session that may read the environment, and operate it for a change. A remote (DPoP) client may not change
  * accounts: their sign-ins live on the Mac that runs them, and the settings section shows none there.
  */
-const authorize = Effect.fn("LastdropAccounts.authorize")(function* (change: boolean) {
+export const authorize = Effect.fn("LastdropAccounts.authorize")(function* (change: boolean) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
