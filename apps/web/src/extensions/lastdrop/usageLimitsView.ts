@@ -124,6 +124,10 @@ export function limitGroups(input: {
       account.email ? [[emailKey(account.email), account] as const] : [],
     ),
   );
+  // A signed-out account has no e-mail; lastdrop's limit source ids its Claude rows by account key.
+  const namedByKey = new Map(
+    (input.lastdrop ?? []).map((account) => [account.key, account] as const),
+  );
   const codexByEmail = new Map(
     (input.lastdropCodex ?? []).flatMap((account) =>
       account.email ? [[emailKey(account.email), account.title] as const] : [],
@@ -149,7 +153,12 @@ export function limitGroups(input: {
     email: string | undefined,
     sourceId: string | undefined,
   ): Pick<AccountView, "name" | "plan" | "nextFor"> | undefined => {
-    if (driver === "claudeAgent") return named.get(emailKey(email));
+    if (driver === "claudeAgent") {
+      return (
+        named.get(emailKey(email)) ??
+        (sourceId === undefined ? undefined : namedByKey.get(sourceId))
+      );
+    }
     if (driver !== "codex") return undefined;
     const name =
       (sourceId === undefined ? undefined : codexById.get(sourceId)) ??

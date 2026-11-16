@@ -106,6 +106,7 @@ describe("the usage limits list", () => {
           signInEndsSoon: false,
           nextFor: ["Threads", "Subagents"],
         },
+        { key: "claude-3", name: "Max", signIn: "signedOut", signInEndsSoon: false, nextFor: [] },
       ],
       lastdropCodex: [
         { key: "c1", title: "Personal", email: "C@example.com" },
@@ -122,7 +123,7 @@ describe("the usage limits list", () => {
     expect(claudeGroup?.entries.map((entry) => entry.name)).toEqual([
       "a@example.com",
       "Work",
-      "claude-3",
+      "Max",
     ]);
     const work = claudeGroup?.entries[1];
     expect(work?.detail).toBe("b@example.com");
@@ -135,10 +136,11 @@ describe("the usage limits list", () => {
     expect(work?.more).toEqual([
       { id: "seven_day_fable", label: "Weekly · Fable", leftPercent: 40, resets: null },
     ]);
+    // A signed-out account has no e-mail: its name comes by its key.
     expect(claudeGroup?.entries[2]?.notice).toBe("Needs sign-in.");
     expect(limitsSummary(groups)).toBe(
       "claudeAgent: a@example.com: Weekly 50% left; Work (next for Threads, Subagents): Session 10% left, " +
-        "Weekly 75% left, Weekly · Fable 40% left; claude-3: Needs sign-in. codex: Personal: Session 80% left; " +
+        "Weekly 75% left, Weekly · Fable 40% left; Max: Needs sign-in. codex: Personal: Session 80% left; " +
         "Team: Needs sign-in. Z.ai: Z.ai: Session 96% left.",
     );
     expect(limitsSummary([])).toBe("No account reports limits yet.");
