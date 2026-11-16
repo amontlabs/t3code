@@ -7,6 +7,7 @@ What it adds:
 - **Several Claude accounts, used automatically.** Each conversation runs on the account with the most room left, and moves on to another account when one hits its limit.
 - **Your own agents.** Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus.
 - **Limits per account.** Hover over the usage icon to see what each account has left.
+- **Context and cache at a glance.** A ring by the send button shows how full the context is. Under the last message, a line warns when Claude's prompt cache is about to expire, and says clearly once it has.
 - **Uses your existing T3 Code data.** It opens the same projects, threads and settings as the official app (`~/.t3`) and keeps its own files in `~/.t3/lastdrop/`. Use one of the two apps at a time, and keep only one installed so sign-in links open the right one.
 
 **Uninstalling:** first remove lastdrop's `Z.ai` and `OpenRouter` providers in Settings → Providers. They keep working in the official app only while `~/.t3/lastdrop/` exists, and nothing updates them.

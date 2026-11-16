@@ -104,6 +104,14 @@
     "packages/client-runtime/src/state/threadShell.ts": {
       "budget": 6,
       "why": "a lastdrop agent's duplicate Claude subagent thread hidden from thread lists"
+    },
+    "apps/web/src/components/ChatView.tsx": {
+      "budget": 7,
+      "why": "context usage and prompt cache expiry under the last message"
+    },
+    "apps/web/src/components/chat/ChatComposer.tsx": {
+      "budget": 2,
+      "why": "context usage ring beside the send button"
     }
   }
 }

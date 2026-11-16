@@ -85,3 +85,9 @@ export { UsageLimitsByAccount } from "./lastdrop/UsageLimitsByAccount";
 
 /** Sidebar warning when a fork update is stuck (`SidebarChrome.tsx` seam). */
 export { LastdropSyncNotice } from "./lastdrop/SyncNotice";
+
+/** Context usage and prompt cache state under the last message (`ChatView.tsx` seam). */
+export { withConversationStatus } from "./lastdrop/ConversationStatusLine";
+
+/** Context usage ring beside the send button (`ChatComposer.tsx` seam). */
+export { ContextRing } from "./lastdrop/ContextRing";

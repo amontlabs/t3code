@@ -107,6 +107,20 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Must survive**: the call wrapping whatever driver kind the row's icon takes.
 - **Conflict**: take upstream's file, re-add the import and wrap the icon's `driverKind` again.
 
+### `apps/web/src/components/ChatView.tsx` (budget 7)
+
+- **Lines**: import `withConversationStatus` from `~/extensions` (after the `observeResize` import); the `MessagesTimeline` `footer` prop is `withConversationStatus(timelineFooter, activeThreadLiveTokenUsage, !isWorking)`.
+- **Why**: while the thread is idle, a line under the last message shows context usage and, for Claude, the prompt cache: from 15 minutes before it expires a countdown with the cached tokens, then "Cache expired" with the tokens the next message re-reads. All from the turn's `tokenUsage` (`promptCacheExpiresAt`), which T3 already sends; see `extensions/lastdrop/ConversationStatusLine.tsx`.
+- **Must survive**: the call wrapping whatever the timeline's footer is, with the active provider thread's latest token usage and whether a turn is running.
+- **Conflict**: take upstream's file, re-add the import and wrap the footer prop again. If upstream renames `activeThreadLiveTokenUsage` or `isWorking`, pass their replacements.
+
+### `apps/web/src/components/chat/ChatComposer.tsx` (budget 2)
+
+- **Lines**: import `ContextRing` from `~/extensions` (after the `ComposerFooterPrimaryActions` import); `<ContextRing threadRef={draftId === null ? routeThreadRef : null} />` as the first child of `<ComposerFooterPrimaryActions>`.
+- **Why**: a ring beside the send button shows how full the context is, with exact tokens, the auto-compact point and the prompt cache in its tooltip. The ring reads the thread itself (once its shell exists), so the seam passes only the thread.
+- **Must survive**: the element among the primary actions' children, with the route's thread ref and `null` on a draft.
+- **Conflict**: take upstream's file, re-add the import and the element before the send button's other children.
+
 ### `apps/server/src/orchestration-v2/IdleCompactionService.ts` (budget 6)
 
 - **Lines**: the `claudeInstance` check in `compactWhenDue` (40-44) also accepts driver kind and default instance id `lastdropAgents`.
