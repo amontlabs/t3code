@@ -31,7 +31,7 @@ export {
   userAuthOverride,
 } from "@t3tools/lastdrop-core";
 /** Usage shapes the server turns into T3's limit windows (`extensions/lastdrop/limitSources.ts`). */
-export type { LimitResets, UsageWindow } from "@t3tools/lastdrop-core";
+export type { LimitResets, ResetGrant, UsageWindow } from "@t3tools/lastdrop-core";
 export * from "./codexAccounts.ts";
 /** The Codex accounts' rules the server's wrapper and accounts service apply (`extensions/lastdrop/codex/`). */
 export {

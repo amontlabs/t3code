@@ -191,6 +191,55 @@ describe("the usage limits list", () => {
     ]);
   });
 
+  it("follows the viewer's order and shows OpenRouter's dollars and keys", () => {
+    const openRouter = ProviderDriverKind.make("OpenRouter");
+    const week = (usedPercent: number) => [
+      { id: "seven_day", kind: "weekly" as const, label: "Weekly", usedPercent },
+    ];
+    const key = { name: "agents", total: 3, today: 1, disabled: false };
+    const groups = limitGroups({
+      presentations: presentations([
+        reading("a", "a@example.com", week(10)),
+        reading("b", "b@example.com", week(20)),
+        reading("c", "c@example.com", week(30)),
+        {
+          ...reading(
+            "OpenRouter",
+            undefined,
+            [
+              {
+                id: "credits",
+                kind: "other",
+                label: "Credits",
+                usedPercent: 58,
+                detail: "$4.20 of $10.00 left",
+              },
+            ],
+            openRouter,
+          ),
+          keys: [key],
+        },
+      ]),
+      now: NOW,
+      driverLabel: () => undefined,
+      // A stale id is skipped; an account the order doesn't name keeps its place after the named ones.
+      order: {
+        providers: ["OpenRouter", "gone"],
+        accounts: { claudeAgent: ["c@example.com", "a@example.com"] },
+      },
+    });
+    expect(groups.map((group) => [group.label, group.entries.map((entry) => entry.name)])).toEqual([
+      ["OpenRouter", ["OpenRouter"]],
+      ["claudeAgent", ["c@example.com", "a@example.com", "b@example.com"]],
+    ]);
+    const credits = groups[0]?.entries[0];
+    expect(credits?.main[0]?.detail).toBe("$4.20 of $10.00 left");
+    expect(credits?.keys).toEqual([key]);
+    expect(limitsSummary(groups.slice(0, 1))).toBe(
+      "OpenRouter: OpenRouter: Credits $4.20 of $10.00 left.",
+    );
+  });
+
   it("shortens plan names", () => {
     expect(shortPlan("Claude Ultra Subscription")).toBe("Ultra");
     expect(shortPlan("ChatGPT Plus Subscription")).toBe("Plus");

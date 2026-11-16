@@ -525,6 +525,7 @@ export {
   type EndpointProvider,
   type EndpointUsage,
   type EndpointWindow,
+  type KeyUsage,
   endpointEnvironment,
   endpointInstance,
   endpointLimitReached,

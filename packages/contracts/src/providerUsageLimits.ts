@@ -17,6 +17,8 @@ export const ServerProviderUsageWindow = Schema.Struct({
   usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  /** What's left in words where a percentage says less ("$4.20 of $10.00 left"). */
+  detail: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
 
@@ -67,6 +69,18 @@ export const ProviderUsageLimitsUpdate = Schema.Struct({
 });
 export type ProviderUsageLimitsUpdate = typeof ProviderUsageLimitsUpdate.Type;
 
+/** Spend on one API key of a credit-based account (OpenRouter), in dollars. */
+export const UsageLimitSourceKey = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  total: Schema.Finite,
+  today: Schema.optional(Schema.Finite),
+  month: Schema.optional(Schema.Finite),
+  limit: Schema.optional(Schema.Finite),
+  limitRemaining: Schema.optional(Schema.Finite),
+  disabled: Schema.Boolean,
+});
+export type UsageLimitSourceKey = typeof UsageLimitSourceKey.Type;
+
 export const UsageLimitSourceAccount = Schema.Struct({
   id: TrimmedNonEmptyString,
   driver: ProviderDriverKind,
@@ -74,6 +88,7 @@ export const UsageLimitSourceAccount = Schema.Struct({
   plan: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
   usageLimits: ServerProviderUsageLimits,
+  keys: Schema.optional(ForwardCompatibleArray(UsageLimitSourceKey)),
 });
 export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
 

@@ -6,6 +6,7 @@
  */
 import {
   type ProviderConsumeResetCreditResult,
+  type ServerProviderResetCredits,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceAccount,
@@ -18,8 +19,11 @@ import * as DateTime from "effect/DateTime";
 import type * as Effect from "effect/Effect";
 import type {
   AccountsView,
+  AccountView,
   EndpointWindow,
+  KeyUsage,
   LimitResets,
+  ResetGrant,
   UsageWindow,
 } from "@t3tools/lastdrop-node";
 
@@ -66,7 +70,11 @@ export function toUsageWindow(
   if (window.usedPercent === undefined || !Number.isFinite(window.usedPercent)) return undefined;
   const usedPercent = Math.min(Math.max(window.usedPercent, 0), 100);
   const reset = iso(window.resetsAt);
-  const resetsAt = reset !== undefined ? { resetsAt: reset } : {};
+  const detail = "detail" in window ? window.detail?.trim() : undefined;
+  const resetsAt = {
+    ...(reset !== undefined ? { resetsAt: reset } : {}),
+    ...(detail ? { detail } : {}),
+  };
   if (window.label === "Session") {
     return {
       id: "five_hour",
@@ -103,16 +111,78 @@ export function toUsageWindow(
   return { id, kind: "other", label: window.label, usedPercent, ...resetsAt };
 }
 
+type ResetOption = NonNullable<ServerProviderResetCredits["options"]>[number];
+
+/** A model's week ("Fable Weekly") by name, as `placeGrants` matches a model-only grant to it. */
+const modelRowNames = (windows: ReadonlyArray<UsageWindow>) =>
+  windows.flatMap((window) =>
+    window.label !== "Weekly" && window.label.endsWith(" Weekly")
+      ? [window.label.slice(0, -" Weekly".length)]
+      : [],
+  );
+
 /**
- * Banked resets (Anthropic's grants), with the one Anthropic redeems next as the credit id: **Use reset** spends
- * it on this account's own sign-in (`limitSourcesLive.ts`), never Claude Code's own login.
+ * One option per kind of grant (T3's `claudeResetCredits.ts`): a weekly reset refills the account's week, a
+ * model-only one (Fable) only that model's. Each names the grant **Use** spends, so the two never mix.
+ */
+function resetOptions(
+  grants: ReadonlyArray<ResetGrant>,
+  windows: ReadonlyArray<UsageWindow>,
+  now: number,
+): ReadonlyArray<ResetOption> {
+  const models = modelRowNames(windows);
+  const kinds = new Map<string, { model: string | undefined; grants: ResetGrant[] }>();
+  for (const grant of grants) {
+    const expired = grant.expiries.length > 0 && grant.expiries.every((at) => at <= now);
+    if (grant.id === undefined || grant.count < 1 || expired) continue;
+    const label = grant.label.toLowerCase();
+    const model = grant.modelOnly
+      ? (models.find((name) => label.includes(name.toLowerCase())) ??
+        (models.length === 1 ? models[0] : "Model"))
+      : undefined;
+    const kind = model ?? "";
+    kinds.set(kind, { model, grants: [...(kinds.get(kind)?.grants ?? []), grant] });
+  }
+  return [...kinds.values()]
+    .toSorted((left, right) => Number(left.model !== undefined) - Number(right.model !== undefined))
+    .flatMap(({ model, grants: group }) => {
+      const expiries = group
+        .flatMap((grant) => grant.expiries)
+        .filter((at) => Number.isFinite(at) && at > now)
+        .toSorted((a, b) => a - b);
+      const soonest = (grant: ResetGrant) =>
+        grant.expiries.filter((at) => Number.isFinite(at)).toSorted((a, b) => a - b)[0] ??
+        Number.POSITIVE_INFINITY;
+      const chosen =
+        group.find((grant) => grant.next) ??
+        group.toSorted((left, right) => soonest(left) - soonest(right))[0];
+      const creditId = chosen?.id;
+      if (creditId === undefined) return [];
+      const expiresAt = iso(expiries[0]);
+      return [
+        {
+          creditId,
+          label: model === undefined ? "Weekly reset" : `${model} reset`,
+          description:
+            model === undefined
+              ? "Refills this account's weekly limit."
+              : `Refills this account's ${model} allowance. It doesn't reset the whole week.`,
+          availableCount: group.reduce((sum, grant) => sum + grant.count, 0),
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        },
+      ];
+    });
+}
+
+/**
+ * Banked resets (Anthropic's grants), with the one Anthropic redeems next as the credit id and, per kind, the
+ * grant to spend: **Use** redeems it on this account's own sign-in (`limitSourcesLive.ts`), never Claude Code's.
  */
 function resetCredits(
-  account: LimitResets | undefined,
-  windows: ReadonlyArray<UsageWindow>,
-  nextId: string | undefined,
+  account: Pick<AccountView, "resets" | "windows" | "nextResetId" | "grants">,
+  now: number,
 ): ServerProviderUsageLimits["resetCredits"] {
-  const all = [account, ...windows.map((window) => window.resets)].filter(
+  const all = [account.resets, ...account.windows.map((window) => window.resets)].filter(
     (resets): resets is LimitResets => resets !== undefined && resets.count > 0,
   );
   const availableCount = all.reduce((sum, resets) => sum + resets.count, 0);
@@ -123,10 +193,12 @@ function resetCredits(
       .filter(Number.isFinite)
       .toSorted((a, b) => a - b)[0],
   );
+  const options = resetOptions(account.grants ?? [], account.windows, now);
   return {
     availableCount,
     ...(next !== undefined ? { nextExpiresAt: next } : {}),
-    ...(nextId !== undefined ? { nextCreditId: nextId } : {}),
+    ...(account.nextResetId !== undefined ? { nextCreditId: account.nextResetId } : {}),
+    ...(options.length > 0 ? { options } : {}),
   };
 }
 
@@ -194,6 +266,17 @@ function codexAccount(
   };
 }
 
+/** OpenRouter's spend per key, for **Usage → Limits** on every client (lastdrop's own route is local-only). */
+function usageKeys(
+  keys: ReadonlyArray<KeyUsage> | undefined,
+): Pick<UsageLimitSourceAccount, "keys"> {
+  const shown = (keys ?? []).flatMap((key) => {
+    const name = key.name.trim();
+    return name === "" || !Number.isFinite(key.total) ? [] : [{ ...key, name }];
+  });
+  return shown.length === 0 ? {} : { keys: shown };
+}
+
 /** Each Claude account lastdrop knows, each Codex account, then each configured Z.ai/OpenRouter endpoint. */
 export function lastdropLimitSource(input: {
   readonly accounts: AccountsView | undefined;
@@ -217,7 +300,7 @@ export function lastdropLimitSource(input: {
           account.signIn === "ok"
             ? account.error
             : (account.signInDetail ?? SIGN_IN_PROBLEMS[account.signIn]),
-        resets: resetCredits(account.resets, account.windows, account.nextResetId),
+        resets: resetCredits(account, now),
       }),
     ),
   }));
@@ -227,6 +310,7 @@ export function lastdropLimitSource(input: {
       id: endpoint.title,
       driver: ENDPOINT_DRIVERS[endpoint.provider],
       ...(endpoint.usage?.plan ? { plan: endpoint.usage.plan } : {}),
+      ...usageKeys(endpoint.usage?.keys),
       usageLimits: safely(now, () =>
         limits({
           readAt: endpoint.readAt,

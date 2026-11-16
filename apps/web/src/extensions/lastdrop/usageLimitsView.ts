@@ -3,7 +3,11 @@
  * lastdrop's names and next-work badges, grouped by provider. Accounts and providers without a reading stay
  * listed with why, so nothing silently disappears.
  */
-import type { ServerProvider, ServerProviderUsageWindow } from "@t3tools/contracts";
+import type {
+  ServerProvider,
+  ServerProviderUsageWindow,
+  UsageLimitSourceKey,
+} from "@t3tools/contracts";
 import {
   collectLimitAccounts,
   formatResetsIn,
@@ -15,6 +19,7 @@ import {
 
 import { accountTitle, type AccountView } from "./accountsView";
 import type { CodexAccountView } from "./codexAccountsView";
+import { inOrder, type LimitOrder } from "./usageLimitsOrder";
 
 /** lastdrop's endpoint drivers, which have no provider client of their own. */
 const ENDPOINT_DRIVER_NAMES: Readonly<Record<string, string>> = {
@@ -33,10 +38,14 @@ export interface LimitMeter {
   readonly leftPercent: number;
   /** "Resets in 2h 30m", or null when unknown (or, on a model line, the same as the week's). */
   readonly resets: string | null;
+  /** What's left in words, shown in place of the percentage ("$4.20 of $10.00 left"). */
+  readonly detail?: string | undefined;
 }
 
 export interface LimitEntry {
   readonly key: string;
+  /** What the viewer's order names it by: the e-mail when known (stable across environments), else its key. */
+  readonly orderId: string;
   readonly name: string;
   /** The e-mail when the name is something else. */
   readonly detail: string | undefined;
@@ -51,6 +60,8 @@ export interface LimitEntry {
   readonly notice: string | undefined;
   /** T3's account, for redeeming banked resets. */
   readonly account: LimitAccount | undefined;
+  /** OpenRouter's spend per key, shown on the page only. */
+  readonly keys: ReadonlyArray<UsageLimitSourceKey>;
 }
 
 export interface LimitGroup {
@@ -76,6 +87,7 @@ const meter = (window: ServerProviderUsageWindow, now: number): LimitMeter => ({
   label: window.label,
   leftPercent: remainingPercent(window),
   resets: capitalized(formatResetsIn(window, now)),
+  ...(window.detail ? { detail: window.detail } : {}),
 });
 
 /** The first session and the plain week go side by side; model weeks and the rest follow on their own lines. */
@@ -117,6 +129,8 @@ export function limitGroups(input: {
   readonly lastdropCodex?:
     | ReadonlyArray<Pick<CodexAccountView, "key" | "title" | "email">>
     | undefined;
+  /** The viewer's order, from `usageLimitsOrder.ts`. */
+  readonly order?: LimitOrder | undefined;
 }): ReadonlyArray<LimitGroup> {
   const { presentations, now } = input;
   const lastdrop = (input.lastdrop ?? []).map((account) => ({
@@ -138,6 +152,18 @@ export function limitGroups(input: {
   // lastdrop's limit source ids its Codex rows `codex-<key>` (the server's `limitSources.ts`).
   const codexById = new Map<string, string>(
     (input.lastdropCodex ?? []).map((account) => [`codex-${account.key}`, account.title] as const),
+  );
+  // A source account's spend per key, by the key `collectLimitAccounts` gives its row.
+  const keysByAccount = new Map<string, ReadonlyArray<UsageLimitSourceKey>>(
+    [...presentations.values()].flatMap((presentation) =>
+      (presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) =>
+        source.accounts.flatMap((account) =>
+          account.keys && account.keys.length > 0
+            ? [[`${source.id}:${account.id}`, account.keys] as const]
+            : [],
+        ),
+      ),
+    ),
   );
   const groups = new Map<ServerProvider["driver"], LimitEntry[]>();
   const shown = new Set<string>();
@@ -182,10 +208,12 @@ export function limitGroups(input: {
     const name = known?.name ?? base.name;
     return {
       key: base.key,
+      orderId: emailKey(base.email) ?? base.key,
       name,
       detail: base.email && base.email !== name ? base.email : undefined,
       plan: shortPlan(base.plan ?? known?.plan),
       nextFor: known?.nextFor ?? [],
+      keys: keysByAccount.get(base.key) ?? [],
       ...rest,
     };
   };
@@ -265,17 +293,31 @@ export function limitGroups(input: {
     const index = DRIVER_ORDER.indexOf(driver);
     return index < 0 ? DRIVER_ORDER.length : index;
   };
-  return [...groups]
+  const sorted = [...groups]
     .toSorted(([left], [right]) => rank(left) - rank(right))
     .map(([driver, entries]) => ({
       driver,
       label: input.driverLabel(driver) ?? ENDPOINT_DRIVER_NAMES[driver] ?? String(driver),
-      entries: entries.toSorted(
-        (left, right) =>
-          Number(left.notice !== undefined) - Number(right.notice !== undefined) ||
-          left.name.localeCompare(right.name),
+      entries: inOrder(
+        uniqueOrderIds(entries).toSorted(
+          (left, right) =>
+            Number(left.notice !== undefined) - Number(right.notice !== undefined) ||
+            left.name.localeCompare(right.name),
+        ),
+        (entry) => entry.orderId,
+        input.order?.accounts[driver],
       ),
     }));
+  return inOrder(sorted, (group) => String(group.driver), input.order?.providers);
+}
+
+/** One e-mail signed in to two workspaces is two rows: those are ordered by their keys. */
+function uniqueOrderIds(entries: ReadonlyArray<LimitEntry>): ReadonlyArray<LimitEntry> {
+  const seen = new Map<string, number>();
+  for (const entry of entries) seen.set(entry.orderId, (seen.get(entry.orderId) ?? 0) + 1);
+  return entries.map((entry) =>
+    (seen.get(entry.orderId) ?? 0) > 1 ? { ...entry, orderId: entry.key } : entry,
+  );
 }
 
 /** Why an enabled provider that reads limits shows none, or null when it isn't worth a line. */
@@ -300,7 +342,7 @@ export function limitsSummary(groups: ReadonlyArray<LimitGroup>): string {
         const detail =
           entry.notice ??
           [...entry.main, ...entry.more]
-            .map((meter) => `${meter.label} ${meter.leftPercent}% left`)
+            .map((meter) => `${meter.label} ${meter.detail ?? `${meter.leftPercent}% left`}`)
             .join(", ");
         const next = entry.nextFor.length > 0 ? ` (next for ${entry.nextFor.join(", ")})` : "";
         return detail ? `${entry.name}${next}: ${detail}` : `${entry.name}${next}`;

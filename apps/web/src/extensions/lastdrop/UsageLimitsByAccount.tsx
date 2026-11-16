@@ -12,6 +12,7 @@ import { ensureLocalApi } from "~/localApi";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { useLimitNames } from "./lastdropRoute";
+import { useLimitOrder } from "./usageLimitsOrder";
 import { UsageLimitsList } from "./UsageLimitsList";
 import { limitGroups } from "./usageLimitsView";
 
@@ -22,12 +23,14 @@ export function UsageLimitsByAccount({
   readonly presentations: LimitPresentations;
   readonly now: number;
 }) {
+  const [order, setOrder] = useLimitOrder();
   const names = useLimitNames(usePrimaryEnvironmentId());
   const groups = limitGroups({
     presentations,
     now,
     driverLabel: (driver) => providerClients.get(driver)?.label,
     ...names,
+    order,
   });
   const links = collectExternalUsageLinks(presentations);
   return (
@@ -37,7 +40,7 @@ export function UsageLimitsByAccount({
           No provider on the selected environments reports subscription limits.
         </p>
       ) : null}
-      <UsageLimitsList groups={groups} variant="page" now={now} />
+      <UsageLimitsList groups={groups} variant="page" now={now} onReorder={setOrder} />
       {links.map((link) => (
         <section
           key={link.url}

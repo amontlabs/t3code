@@ -13,18 +13,21 @@ import { usePrimaryEnvironmentId } from "~/state/environments";
 import { environmentPresentations } from "~/state/presentation";
 
 import { useLimitNames } from "./lastdropRoute";
+import { useLimitOrder } from "./usageLimitsOrder";
 import { UsageLimitsList } from "./UsageLimitsList";
 import { limitGroups, limitsSummary } from "./usageLimitsView";
 
 /** Every account's limits, with lastdrop's names and next-work badges while `active` (read from the server). */
 function useLimitGroups(now: number, active: boolean) {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+  const [order] = useLimitOrder();
   const names = useLimitNames(usePrimaryEnvironmentId(), active);
   return limitGroups({
     presentations,
     now,
     driverLabel: (driver) => providerClients.get(driver)?.label,
     ...names,
+    order,
   });
 }
 

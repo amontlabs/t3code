@@ -84,6 +84,8 @@ export interface UsageSnapshot {
   readonly resets?: LimitResets | undefined;
   /** The banked reset Anthropic redeems next (any row's). */
   readonly nextResetId?: string | undefined;
+  /** Every usable grant, each redeemable by its id: a weekly reset and a model's (Fable) are different kinds. */
+  readonly grants?: ReadonlyArray<ResetGrant> | undefined;
   /** Where the numbers came from: Claude Code's copy, or Anthropic just now. */
   readonly source: "cache" | "endpoint";
   /** When the numbers were read (epoch ms). */
@@ -276,6 +278,7 @@ export class ClaudeUsage {
       resets: placed.account,
       plan,
       ...(nextResetId === undefined ? {} : { nextResetId }),
+      ...(grants === undefined || grants.length === 0 ? {} : { grants }),
     };
   }
 

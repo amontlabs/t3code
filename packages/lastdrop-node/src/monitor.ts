@@ -9,6 +9,7 @@ import {
   claudeView,
   endsSoon,
   type LimitResets,
+  type ResetGrant,
   pool,
   currentWindows,
   readingFromStatus,
@@ -60,6 +61,8 @@ export interface AccountView {
   readonly resets?: LimitResets | undefined;
   /** The banked reset "Use reset" redeems on this account. */
   readonly nextResetId?: string | undefined;
+  /** Each usable grant, so a weekly reset and a model's reset are offered apart. */
+  readonly grants?: ReadonlyArray<ResetGrant> | undefined;
   /** When the numbers were read (epoch ms), and where from. */
   readonly readAt?: number | undefined;
   readonly source?: "cache" | "endpoint" | undefined;
@@ -276,6 +279,7 @@ export class AccountsMonitor {
             : windowsFromStatus(status, now),
           resets: entry?.snapshot?.resets,
           nextResetId: entry?.snapshot?.nextResetId,
+          grants: entry?.snapshot?.grants,
           // A never-read account's status has `at: -Infinity`: no time, not an invalid one.
           readAt: finite(entry?.snapshot?.at ?? status?.at),
           source: entry?.snapshot?.source,

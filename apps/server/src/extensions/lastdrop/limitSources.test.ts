@@ -156,6 +156,44 @@ describe("lastdropLimitSource", () => {
     });
   });
 
+  it("offers a weekly reset and a Fable reset apart, each spending its own grant", () => {
+    const source = lastdropLimitSource({
+      accounts: accounts([
+        account({
+          windows: [
+            { label: "Weekly", usedPercent: 50 },
+            { label: "Fable Weekly", usedPercent: 90, resets: { count: 2, expiries: [] } },
+          ],
+          resets: { count: 1, expiries: [NOW + HOUR] },
+          nextResetId: "w1",
+          grants: [
+            {
+              id: "w1",
+              count: 1,
+              expiries: [NOW + HOUR],
+              label: "Weekly",
+              modelOnly: false,
+              next: true,
+            },
+            { id: "f1", count: 1, expiries: [], label: "Fable launch", modelOnly: true },
+            { id: "f2", count: 1, expiries: [NOW - HOUR], label: "Fable launch", modelOnly: true },
+          ],
+        }),
+      ]),
+      endpoints: undefined,
+      now: NOW,
+    });
+    const credits = source?.accounts[0]?.usageLimits.resetCredits;
+    assert.strictEqual(credits?.availableCount, 3);
+    assert.deepStrictEqual(
+      credits?.options?.map((option) => [option.label, option.availableCount, option.creditId]),
+      [
+        ["Weekly reset", 1, "w1"],
+        ["Fable reset", 1, "f1"],
+      ],
+    );
+  });
+
   it("an account whose read failed shows its error, not its last numbers", () => {
     const source = lastdropLimitSource({
       accounts: accounts([
@@ -218,6 +256,42 @@ describe("lastdropLimitSource", () => {
       source?.accounts[1]?.usageLimits.unavailable?.message,
       "OpenRouter refused the key.",
     );
+  });
+
+  it("sends OpenRouter's dollars and spend per key with the limits, so remote clients see them too", () => {
+    const key = {
+      name: "agents",
+      total: 3,
+      today: 1,
+      limit: 10,
+      limitRemaining: 7,
+      disabled: false,
+    };
+    const source = lastdropLimitSource({
+      accounts: undefined,
+      endpoints: {
+        updatedAt: NOW,
+        endpoints: [
+          {
+            provider: "openrouter",
+            title: "OpenRouter",
+            instanceId: "openrouter",
+            configured: true,
+            instance: "ours",
+            readAt: NOW,
+            usage: {
+              title: "OpenRouter",
+              windows: [{ label: "Credits", usedPercent: 58, detail: "$4.20 of $10.00 left" }],
+              keys: [key, { ...key, name: " " }],
+            },
+          },
+        ],
+      },
+      now: NOW,
+    });
+    const account = source?.accounts[0];
+    assert.strictEqual(account?.usageLimits.windows[0]?.detail, "$4.20 of $10.00 left");
+    assert.deepStrictEqual(account?.keys, [key]);
   });
 
   it("adds each Codex account as a Codex driver row: its windows, or why it has none", () => {

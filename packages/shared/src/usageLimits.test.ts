@@ -23,6 +23,7 @@ import {
   paceRemainingPercent,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
+  resetCreditChoices,
 } from "./usageLimits.ts";
 
 const now = Date.parse("2026-09-03T12:00:00.000Z");
@@ -533,6 +534,22 @@ describe("pools", () => {
         input: { sourceId: "hub", accountId: account.id, creditId: `${account.id}-credit` },
       })),
     );
+  });
+
+  it("offers each kind of hub reset apart, spending that kind's own credit", () => {
+    const options = [
+      { creditId: "weekly-1", label: "Weekly reset", description: "Week.", availableCount: 1 },
+      { creditId: "fable-1", label: "Fable reset", description: "Fable.", availableCount: 2 },
+    ];
+    const choices = resetCreditChoices(
+      { availableCount: 3, nextCreditId: "weekly-1", options },
+      { sourceId: UsageLimitSourceId.make("hub"), accountId: "a", creditId: "weekly-1" },
+      Date.parse(checkedAt),
+    );
+    expect(choices.map((choice) => [choice.availableCount, choice.input])).toEqual([
+      [1, { sourceId: "hub", accountId: "a", creditId: "weekly-1" }],
+      [2, { sourceId: "hub", accountId: "a", creditId: "fable-1" }],
+    ]);
   });
 
   it("does not give old credits the timestamp of a newer window-only read", () => {
