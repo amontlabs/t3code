@@ -20,7 +20,8 @@ run() {
 }
 
 run guard node scripts/lastdrop/check-fork-paths.ts --base "$base"
-run typecheck vp run typecheck
+# GitHub's standard runner (4 CPUs, 16 GB) runs out of memory with more typecheck tasks at once.
+run typecheck vp run --concurrency-limit 2 typecheck
 run test vp run -r test
 run build vp run build:desktop
 
