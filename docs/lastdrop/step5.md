@@ -4,7 +4,7 @@ The `lastdropAgents` driver (shown as "lastdrop agents") makes the user's agents
 
 ## What it does
 
-- **Models** (`catalog.ts`, `catalogSource.ts`): the list comes from the standalone lastdrop's `agent-catalog.json` and `agent-models.json` in `~/Library/Application Support/lastdrop`. They are read only, in the same format, with no migration, and polled every 2 s.
+- **Models** (`catalog.ts`, `catalogSource.ts`): the list comes from the fork's `~/.t3/lastdrop/agents.json` and `agent-models.json`, in the standalone app's catalog format (so the parser is the same), polled every 2 s. Settings edits it (`editor.ts`, `catalogEdit.ts`); a one-time import copies the app's files. A missing file is an empty list.
   - Claude's own models come first (fable, opus, sonnet, haiku), then each enabled agent.
   - Names follow the standalone ACP provider: "build · Antigravity Claude Sonnet 5.5".
   - `subProvider` is the first entry's backend.

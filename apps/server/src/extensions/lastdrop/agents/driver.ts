@@ -1,6 +1,6 @@
 /**
  * The lastdrop agents driver: one T3 provider whose models are Claude's own and the user's agents
- * (the standalone lastdrop's catalog, live), each session forwarded to a native T3 instance along
+ * (the fork's `agents.json`, live), each session forwarded to a native T3 instance along
  * the agent's chain (`router.ts`).
  */
 import { TextGenerationError, type ServerProvider } from "@t3tools/contracts";
@@ -22,7 +22,7 @@ import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapsh
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 
 import { agentModels } from "./catalog.ts";
-import { makeCatalogSource, standaloneCatalogFiles, type CatalogSource } from "./catalogSource.ts";
+import { boundCatalogFiles, makeCatalogSource, type CatalogSource } from "./catalogSource.ts";
 import { ALL_RUNTIME_MODES } from "./permissions.ts";
 import { makeRouterAdapter } from "./router.ts";
 import { LASTDROP_AGENTS_DRIVER, LastdropAgentsSettings } from "./settings.ts";
@@ -58,7 +58,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
 const CATALOG_POLL = "2 seconds";
 
 export const makeLastdropAgentsDriver = (
-  openSource: () => CatalogSource = () => makeCatalogSource({ files: standaloneCatalogFiles() }),
+  openSource: () => CatalogSource = () => makeCatalogSource({ files: boundCatalogFiles }),
 ): ProviderDriver<LastdropAgentsSettings> => ({
   driverKind: LASTDROP_AGENTS_DRIVER,
   metadata: { displayName: "lastdrop agents", supportsMultipleInstances: false },

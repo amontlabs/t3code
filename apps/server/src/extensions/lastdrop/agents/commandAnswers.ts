@@ -46,7 +46,7 @@ import type {
 import { isCutAntigravityToolText } from "../../../provider/acp/AntigravityProtocol.ts";
 import { rawToolCall, type RawToolCall } from "../../acpToolCalls.ts";
 import { stepLabel, type AgentDefinition, type AgentStep } from "./catalog.ts";
-import { standaloneCatalogFiles } from "./catalogSource.ts";
+import { boundCatalogFiles } from "./catalogSource.ts";
 import { lastdropAnswers } from "./permissions.ts";
 
 /** What the answers need from outside: seams for tests. */
@@ -75,19 +75,19 @@ const appendLog = (line: string) => {
 const JUDGE_CONCURRENCY = 3;
 const judgeLimit = makeJudgeLimit(JUDGE_CONCURRENCY);
 
-/** The standalone app's ways: settings files, the catalog's judge (read when each check runs), `agy`. */
+/** The fork's ways: settings files, the catalog's judge (read when each check runs), `agy`. */
 export const defaultCommandAnswerServices: CommandAnswerServices = {
   rules: (cwd) => loadPermissionRules({ cwd: cwd ?? NodeOS.homedir() }),
   judge: (prompt, signal) =>
     judgeLimit(() =>
       runCommandJudge(prompt, {
         executable: findAgy(),
-        judge: readCatalogJudge(standaloneCatalogFiles().catalog),
+        judge: readCatalogJudge(boundCatalogFiles()?.catalog ?? ""),
         signal,
       }),
     ),
   log: appendLog,
-  judgeModel: () => judgeSummary(readCatalogJudge(standaloneCatalogFiles().catalog)),
+  judgeModel: () => judgeSummary(readCatalogJudge(boundCatalogFiles()?.catalog ?? "")),
 };
 
 /** Swift keeps the latest 10 requests (`AntigravityBackend.run`). */

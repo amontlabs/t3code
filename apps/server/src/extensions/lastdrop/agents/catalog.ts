@@ -1,7 +1,7 @@
 /**
- * The user's agents from the standalone lastdrop's `agent-catalog.json` and `agent-models.json`
- * (read only, same format), as the lastdrop provider's models: Claude's own first, then each
- * enabled agent, named and given efforts as the standalone ACP provider does.
+ * The user's agents from the fork's `agents.json` and `agent-models.json` (the standalone app's
+ * catalog format), as the lastdrop provider's models: Claude's own first, then each enabled agent,
+ * named and given efforts as the standalone ACP provider does.
  */
 import {
   ProviderInstanceId,
@@ -14,7 +14,7 @@ import {
 /** Where an agent's entry runs, as the standalone app names it. */
 export type AgentProvider = "claude" | "codex" | "zai" | "openrouter" | "antigravity";
 
-const PROVIDERS: ReadonlyArray<AgentProvider> = [
+export const AGENT_PROVIDERS: ReadonlyArray<AgentProvider> = [
   "claude",
   "codex",
   "zai",
@@ -22,7 +22,7 @@ const PROVIDERS: ReadonlyArray<AgentProvider> = [
   "antigravity",
 ];
 
-const PROVIDER_LABEL: Record<AgentProvider, string> = {
+export const PROVIDER_LABEL: Record<AgentProvider, string> = {
   claude: "Claude",
   codex: "Codex",
   zai: "Z.ai",
@@ -34,7 +34,7 @@ const PROVIDER_LABEL: Record<AgentProvider, string> = {
  * The T3 instance each provider's entries run on. Z.ai and OpenRouter are Claude instances with
  * their endpoint in the instance's environment (step 6 makes them); while missing they are skipped.
  */
-const DEFAULT_INSTANCES: Record<AgentProvider, string> = {
+export const DEFAULT_INSTANCES: Record<AgentProvider, string> = {
   claude: "claudeAgent",
   codex: "codex",
   zai: "zai",
@@ -78,7 +78,7 @@ const CLAUDE_ALIASES: ReadonlyArray<readonly [alias: string, model: string]> = [
 ];
 
 /** Levels lowest first, for the closest one a model offers. */
-const EFFORT_RANK = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORT_RANK = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const EFFORT_LABEL: Record<string, string> = {
   minimal: "Minimal",
   low: "Low",
@@ -89,7 +89,7 @@ const EFFORT_LABEL: Record<string, string> = {
 };
 
 /** The efforts a caller may give without asking the provider (`AgentProvider.callerEfforts`). */
-const CALLER_EFFORTS: Record<AgentProvider, ReadonlyArray<string>> = {
+export const CALLER_EFFORTS: Record<AgentProvider, ReadonlyArray<string>> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "max"],
   openrouter: ["low", "medium", "high", "xhigh", "max"],
@@ -99,7 +99,8 @@ const CALLER_EFFORTS: Record<AgentProvider, ReadonlyArray<string>> = {
 
 /** Names Claude Code keeps for its own models; an agent under one is left out. */
 const RESERVED = new Set(["sonnet", "opus", "haiku", "fable", "inherit", "best", "opusplan"]);
-const isReserved = (name: string): boolean => RESERVED.has(name) || name.startsWith("claude-");
+export const isReserved = (name: string): boolean =>
+  RESERVED.has(name) || name.startsWith("claude-");
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -107,8 +108,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const stringOr = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
-const isProvider = (value: unknown): value is AgentProvider =>
-  typeof value === "string" && (PROVIDERS as ReadonlyArray<string>).includes(value);
+export const isProvider = (value: unknown): value is AgentProvider =>
+  typeof value === "string" && (AGENT_PROVIDERS as ReadonlyArray<string>).includes(value);
 
 export type InstanceMap = Partial<Record<AgentProvider, string>>;
 
@@ -327,10 +328,10 @@ export const agentModels = (
       } satisfies ServerProviderModel;
     });
 
-type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
+export type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
 
 /** The reasoning option of an inner model, from the instance's own published model list. */
-const reasoningDescriptor = (
+export const reasoningDescriptor = (
   innerModels: ReadonlyArray<ServerProviderModel> | undefined,
   model: string,
 ): SelectDescriptor | undefined => {

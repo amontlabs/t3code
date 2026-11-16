@@ -11,6 +11,7 @@ import {
 import type { ComponentType } from "react";
 
 import { AccountsSection } from "./lastdrop/AccountsSection";
+import { AgentsSection } from "./lastdrop/AgentsSection";
 
 export interface ExtensionInstanceSectionProps {
   readonly environmentId: EnvironmentId;
@@ -21,11 +22,12 @@ export interface ExtensionInstanceSectionProps {
 
 /**
  * Extra settings sections for a provider instance, by driver kind. lastdrop's Claude accounts show on T3's
- * own Claude provider (`claudeAgent`), whose queries lastdrop will route across them.
+ * own Claude provider (`claudeAgent`), whose queries lastdrop will route across them; the agents editor on
+ * lastdrop's own provider (`lastdropAgents`).
  */
 const extensionInstanceSections: Readonly<
   Record<string, ComponentType<ExtensionInstanceSectionProps>>
-> = { claudeAgent: AccountsSection };
+> = { claudeAgent: AccountsSection, lastdropAgents: AgentsSection };
 
 /** Renders the extension section for this instance's driver, if any. */
 export function ExtensionInstanceSection(props: {
