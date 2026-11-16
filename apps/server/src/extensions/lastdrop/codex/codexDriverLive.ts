@@ -8,7 +8,11 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import type * as Path from "effect/Path";
 
-import { checkCodexProviderStatus } from "../../../provider/CodexProvider.ts";
+import {
+  checkCodexProviderStatus,
+  probeCodexSkillsForCwd,
+} from "../../../provider/CodexProvider.ts";
+import { ProviderDriverError } from "../../../provider/Errors.ts";
 import { applyCodexModelCatalog } from "../../../provider/codexModelCatalog.ts";
 import { CodexDriver, type CodexDriverEnv } from "../../../provider/Drivers/CodexDriver.ts";
 import { makeCodexTextGeneration } from "../../../textGeneration/CodexTextGeneration.ts";
@@ -49,6 +53,30 @@ export const create: ProviderDriver<
       ).pipe(
         Effect.provideContext(context),
         Effect.orElseSucceed(() => undefined),
+      );
+    },
+    skills: (home, cwd) => {
+      if (!config.enabled) return Effect.undefined;
+      const account = onAccountHome(config, processEnv, home);
+      return probeCodexSkillsForCwd({
+        binaryPath: account.settings.binaryPath,
+        homePath: account.settings.homePath,
+        launchArgs: account.settings.launchArgs,
+        cwd,
+        environment: account.environment,
+      }).pipe(
+        Effect.scoped,
+        Effect.timeout("20 seconds"),
+        Effect.provideContext(context),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: CodexDriver.driverKind,
+              instanceId: input.instanceId,
+              detail: `Failed to probe Codex skills for '${cwd}'`,
+              cause,
+            }),
+        ),
       );
     },
     textGeneration: (home, models) => {

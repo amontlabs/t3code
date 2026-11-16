@@ -75,7 +75,7 @@ export interface Reading {
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-/** A reading routes for this long. With the app running it is never this old: resets are projected. */
+/** A reading routes for this long; the monitor reads every 5 minutes, and resets are projected. */
 export const READING_VALID_MS = 2 * HOUR;
 /** The agents pool trusts a reading this long, or `READING_VALID_MS` while the account is rate limited. */
 export const POOL_READING_VALID_MS = 30 * MINUTE;
@@ -381,7 +381,7 @@ export function currentWindows(
 }
 
 /**
- * An account's windows from its `usage.json` entry at `now`, for a reading the standalone app made (it keeps numbers
+ * An account's windows from its `usage.json` entry at `now`, for a reading this process didn't make (it keeps numbers
  * and resets, not rows). Session unless the plan has no 5-hour window (Ultra); then Weekly, then one weekly row per
  * model ("Fable Weekly"). Old entries and passed resets go through `currentWindows`.
  */

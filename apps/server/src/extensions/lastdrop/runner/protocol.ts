@@ -170,16 +170,15 @@ const agentsList = (catalog: ReadonlyArray<AgentDefinition>, extras: CatalogExtr
     2,
   );
 
-/** The standalone app's command, which still edits the list the fork reads. */
-const STANDALONE_COMMAND = "/Applications/lastdrop.app/Contents/MacOS/lastdrop";
+/** Where the user edits the fork's agents (`AgentsSection`). */
+const AGENTS_SETTINGS = "T3 Code lastdrop's Settings → Providers → lastdrop agents";
 
 const AGENTS_HELP = `Lists the agents lastdrop adds to Claude Code's Agent tool in T3 Code lastdrop. Use it only when the user asks for a change.
 
 lastdrop --agents list                  Every agent, as JSON
 
-T3 Code lastdrop reads the lastdrop app's list (~/Library/Application Support/lastdrop/agent-catalog.json)
-and doesn't change it. Changes apply from the next prompt. To add, change or remove an agent, use the
-lastdrop app's Settings → Agents, or its command: ${STANDALONE_COMMAND} --agents --help.
+This command doesn't change the list. Changes apply from the next prompt. To add, change or remove an
+agent, the user uses ${AGENTS_SETTINGS}.
 
 Prints JSON and exits 0, or prints the reason and exits 1.`;
 
@@ -198,7 +197,7 @@ export const agentsCommand = (
   }
   if (["models", "set", "remove", "saving", "judge"].includes(verb)) {
     return {
-      output: `T3 Code lastdrop reads lastdrop's agents and doesn't change them. Run ${STANDALONE_COMMAND} --agents ${args.join(" ")} (the lastdrop app), or use its Settings → Agents.`,
+      output: `This command doesn't change lastdrop's agents (--agents ${args.join(" ")}). The user changes them in ${AGENTS_SETTINGS}.`,
       failed: true,
     };
   }

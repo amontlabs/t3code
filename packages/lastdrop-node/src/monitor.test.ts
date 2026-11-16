@@ -186,4 +186,82 @@ describe("the accounts monitor", () => {
     expect(old?.readAt).toBe(at - 3 * 3_600_000);
     expect(old?.windows).toEqual([]);
   });
+
+  it("redeems a banked reset on the account's own sign-in, then reads it again", async () => {
+    t.write(
+      accountsFile(t.paths),
+      encodeAccountsConfig(append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 0 })),
+    );
+    const folder = claudeFolder(t.paths, "Pro")!;
+    t.write(`${folder}/.claude.json`, {
+      oauthAccount: { accountUuid: proUUID, organizationUuid: "org-pro" },
+    });
+    t.setKeychain(keychainService(folder), blob(at + 3_600_000, "pro"));
+    // Claude Code's own login, a different account: never the one redeemed on.
+    t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
+    t.write(t.paths.sharedConfig, {
+      oauthAccount: { accountUuid: mainUUID, organizationUuid: "org-terminal" },
+    });
+    let banked = true;
+    const claims: string[] = [];
+    let answer: { status: number; body: unknown } = { status: 200, body: { result: "reset" } };
+    const claim = (status: number, body: unknown) => {
+      answer = { status, body };
+    };
+    const fetch: FetchLike = async (url, init) => {
+      const path = new URL(url).pathname;
+      let reply: { status: number; body: unknown } = { status: 200, body: {} };
+      if (init.method === "POST") {
+        claims.push(`${init.headers["Authorization"]} ${path} ${init.body}`);
+        reply = answer;
+        if (answer.status === 200) banked = false;
+      } else if (url.includes("cedar_ember")) {
+        reply.body = {
+          cedar_ember: {
+            eligible: true,
+            next_grant_id: banked ? "g1" : null,
+            grants: banked ? [{ id: "g1", resets_left: 1, clears: ["five_hour"] }] : [],
+          },
+        };
+      } else if (!url.endsWith("/profile")) {
+        reply.body = { five_hour: { utilization: banked ? 100 : 0 } };
+      }
+      return {
+        status: reply.status,
+        headers: { get: () => "application/json" },
+        text: async () => JSON.stringify(reply.body),
+      };
+    };
+    const monitor = new AccountsMonitor({
+      paths: t.paths,
+      env: {},
+      fetch,
+      sessionId: "s",
+      now: () => at,
+      renew: async () => false,
+    });
+    const [before] = (await monitor.view()).accounts;
+    expect([before?.nextResetId, before?.session]).toEqual(["g1", 100]);
+
+    at += 1_000;
+    expect(await monitor.redeemReset("Pro", "g1", "req-1")).toBe("reset");
+    expect(claims).toEqual([
+      'Bearer tok-pro /api/organizations/org-pro/reset_rate_limits {"program":"cedar_ember","grant_id":"g1","request_id":"req-1"}',
+    ]);
+    const [after] = (await monitor.view()).accounts;
+    expect([after?.nextResetId, after?.session]).toEqual([undefined, 0]);
+
+    // Anthropic's refusals: a rate limit is an answer (a new claim next time); no answer keeps the claim.
+    claim(429, {});
+    await expect(monitor.redeemReset("Pro", "g1", "req-2")).rejects.toMatchObject({
+      settled: true,
+    });
+    claim(200, { result: "unavailable" });
+    await expect(monitor.redeemReset("Pro", "g1", "req-3")).rejects.toMatchObject({
+      settled: false,
+    });
+    await expect(monitor.redeemReset("main", "g1", "req-4")).rejects.toThrow(
+      "There's no Claude account main.",
+    );
+  });
 });

@@ -59,6 +59,12 @@ const textGenerationOn = (home: string): ProviderTextGeneration =>
     generateThreadTitle: () => Effect.succeed({ title: home }),
   }) as unknown as ProviderTextGeneration;
 
+const skill = (name: string): ServerProvider["skills"][number] => ({
+  name,
+  path: `${name}/SKILL.md`,
+  enabled: true,
+});
+
 const instanceWith = (snapshot: ServerProvider): ProviderInstance =>
   ({
     instanceId: snapshot.instanceId,
@@ -67,6 +73,9 @@ const instanceWith = (snapshot: ServerProvider): ProviderInstance =>
       refresh: Effect.succeed(snapshot),
       streamChanges: Stream.make(snapshot),
     },
+    // T3's read runs an app-server in `~/.codex`.
+    snapshotForCwd: (cwd: string) =>
+      Effect.succeed({ ...snapshot, skills: [skill(`~/.codex:${cwd}`)] }),
     textGeneration: textGenerationOn("~/.codex"),
   }) as unknown as ProviderInstance;
 
@@ -99,38 +108,48 @@ describe("T3's Codex driver as lastdrop runs it", () => {
     assert.strictEqual(accountSnapshot(missing, accountDraft), missing);
   });
 
-  it.effect("probes the picked account once per T3 check and runs text generation there", () =>
-    Effect.gen(function* () {
-      const probed: string[] = [];
-      let account: { account: string; home: string } | undefined = { account: "A", home: "/a" };
-      const instance = insulateCodex(instanceWith(signedOut), {
-        pick: Effect.sync(() => account),
-        probe: (home) =>
-          Effect.sync(() => {
-            probed.push(home);
-            return accountDraft;
-          }),
-        textGeneration: (home) => Effect.succeed(textGenerationOn(home)),
-      });
-      const generate = instance.textGeneration.generateThreadTitle as (
-        input: unknown,
-      ) => Effect.Effect<{ readonly title: string }>;
-      assert.strictEqual((yield* instance.snapshot.getSnapshot).status, "ready");
-      assert.strictEqual((yield* instance.snapshot.refresh).status, "ready");
-      assert.deepStrictEqual(probed, ["/a"]);
-      assert.strictEqual((yield* generate({})).title, "/a");
+  it.effect(
+    "probes the picked account once per T3 check and runs text generation and skills there",
+    () =>
+      Effect.gen(function* () {
+        const probed: string[] = [];
+        let account: { account: string; home: string } | undefined = { account: "A", home: "/a" };
+        const instance = insulateCodex(instanceWith(signedOut), {
+          pick: Effect.sync(() => account),
+          probe: (home) =>
+            Effect.sync(() => {
+              probed.push(home);
+              return accountDraft;
+            }),
+          skills: (home, cwd) => Effect.succeed([skill(`${home}:${cwd}`)]),
+          textGeneration: (home) => Effect.succeed(textGenerationOn(home)),
+        });
+        const generate = instance.textGeneration.generateThreadTitle as (
+          input: unknown,
+        ) => Effect.Effect<{ readonly title: string }>;
+        assert.strictEqual((yield* instance.snapshot.getSnapshot).status, "ready");
+        assert.strictEqual((yield* instance.snapshot.refresh).status, "ready");
+        assert.deepStrictEqual(probed, ["/a"]);
+        assert.strictEqual((yield* generate({})).title, "/a");
+        const workspace = yield* instance.snapshotForCwd!("/repo");
+        assert.deepStrictEqual(workspace.skills, [skill("/a:/repo")]);
+        assert.strictEqual(workspace.status, "ready");
 
-      // With no fork account signed in, T3's own login: its snapshot and its text generation.
-      account = undefined;
-      const plain = insulateCodex(instanceWith(signedOut), {
-        pick: Effect.sync(() => account),
-        probe: () => Effect.die("no account to probe"),
-        textGeneration: () => Effect.die("no account to run on"),
-      });
-      assert.strictEqual(yield* plain.snapshot.getSnapshot, signedOut);
-      const plainGenerate = plain.textGeneration.generateThreadTitle as typeof generate;
-      assert.strictEqual((yield* plainGenerate({})).title, "~/.codex");
-    }),
+        // With no fork account signed in, T3's own login: its snapshot, text generation and skills.
+        account = undefined;
+        const plain = insulateCodex(instanceWith(signedOut), {
+          pick: Effect.sync(() => account),
+          probe: () => Effect.die("no account to probe"),
+          skills: () => Effect.die("no account to probe"),
+          textGeneration: () => Effect.die("no account to run on"),
+        });
+        assert.strictEqual(yield* plain.snapshot.getSnapshot, signedOut);
+        const plainGenerate = plain.textGeneration.generateThreadTitle as typeof generate;
+        assert.strictEqual((yield* plainGenerate({})).title, "~/.codex");
+        assert.deepStrictEqual((yield* plain.snapshotForCwd!("/repo")).skills, [
+          skill("~/.codex:/repo"),
+        ]);
+      }),
   );
 
   // The fork's driver replaces T3's without a seam of its own: it comes last in the server's driver list, and the

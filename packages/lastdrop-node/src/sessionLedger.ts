@@ -269,7 +269,7 @@ export function lineageIn(store: LedgerStore, thread: string): ReadonlyArray<str
 /**
  * The account a transcript in a conversations folder counts for: the ledger's account of its session (a
  * subagent's transcript, `<session>/subagents/agent-<id>.jsonl`, counts as its session's), main when the
- * ledger doesn't know it; one in an account's own old folder (`~/.claude-accounts/<key>/projects`) is that
+ * ledger doesn't know it; one in an account's own folder (`<claudeFolders>/<key>/projects`) is that
  * account's. Port of headroom's `UsageFiles`/`UsageLedger` attribution (SharedConversationsTests).
  */
 export function transcriptAccount(

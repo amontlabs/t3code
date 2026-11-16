@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - The real home folder, the standalone's catalog and lastdrop's own small file.
+// @effect-diagnostics nodeBuiltinImport:off - The real home folder, the fork's agent catalog and lastdrop's own small file.
 /**
  * Z.ai and OpenRouter as T3 Claude instances `zai`/`openrouter` (the agents' targets), made and kept through
  * T3's `ServerSettingsService.updateProviderInstance`, in lastdrop's own profile with the endpoint's env and a
@@ -335,7 +335,7 @@ export function wantFor(input: {
   return { kind: "present", spec: input.build(facts, input.listed ?? []).instance };
 }
 
-/** The standalone's catalog: read, definitely absent, or unreadable right now (keep the last good facts). */
+/** The fork's `agents.json`: read, definitely absent, or unreadable now (keep the last good facts). */
 export function readCatalogFile(
   file: string,
 ): { readonly state: "ok"; readonly json: unknown } | { readonly state: "missing" | "unreadable" } {

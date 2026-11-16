@@ -7,7 +7,12 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  type ProviderConsumeResetCreditOutcome,
+  UsageLimitSourceError,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   type AccountChange,
@@ -18,6 +23,7 @@ import {
   fileLogger,
   lastdropPaths,
   nodeFetch,
+  ResetRedeemError,
 } from "@t3tools/lastdrop-node";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -28,6 +34,7 @@ import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as EnvironmentAuth from "../../auth/EnvironmentAuth.ts";
+import { ResetCreditCoordinator } from "../../provider/resetCreditCoordinator.ts";
 import { resolveLastdropDataDir } from "../dataDir.ts";
 
 const ACCOUNTS_ROUTE = "/api/lastdrop/accounts";
@@ -47,6 +54,11 @@ export class LastdropAccounts extends Context.Service<
       { readonly view: ClaudeAccountsView; readonly signInUrl?: string },
       AccountsChangeRefused | AccountsRefreshError
     >;
+    /** Spends one banked reset (`creditId`, Anthropic's grant id) on the account's own sign-in. */
+    readonly redeemReset: (
+      key: string,
+      creditId: string,
+    ) => Effect.Effect<ProviderConsumeResetCreditOutcome, UsageLimitSourceError>;
   }
 >()("t3/extensions/lastdrop/accounts/LastdropAccounts") {}
 
@@ -80,8 +92,12 @@ export const layer = Layer.effect(
         change: Effect.fn("LastdropAccounts.change")(function* () {
           return yield* unavailable;
         }),
+        redeemReset: Effect.fn("LastdropAccounts.redeemReset")(function* () {
+          return yield* new UsageLimitSourceError({ detail: unavailable.message });
+        }),
       });
     }
+    const coordinator = yield* ResetCreditCoordinator;
     const dataDir = yield* resolveLastdropDataDir;
     const paths = lastdropPaths({ home: NodeOS.homedir(), dataDir });
     const log = fileLogger(`${dataDir}/lastdrop.log`);
@@ -114,6 +130,32 @@ export const layer = Layer.effect(
               : new AccountsRefreshError({ cause }),
         });
       }),
+      // T3's rule for its own instances: one claim at a time per account, its request id kept until answered.
+      redeemReset: Effect.fn("LastdropAccounts.redeemReset")(
+        function* (key: string, creditId: string) {
+          return yield* coordinator.redeem(
+            `lastdrop-claude:${key}`,
+            (requestId) =>
+              Effect.tryPromise({
+                try: () => monitor.redeemReset(key, creditId, requestId),
+                catch: (cause) =>
+                  cause instanceof ResetRedeemError
+                    ? cause
+                    : new ResetRedeemError("Claude could not redeem the reset.", false),
+              }),
+            (error) => error.settled,
+          );
+        },
+        Effect.mapError(
+          (error) =>
+            new UsageLimitSourceError({
+              detail:
+                error instanceof ResetRedeemError
+                  ? error.message
+                  : "Claude could not redeem the reset.",
+            }),
+        ),
+      ),
     });
   }),
 );

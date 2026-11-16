@@ -1,14 +1,17 @@
 /**
- * lastdrop's Codex accounts: the list, signing in (`codex login --device-auth` in the account's shadow home), and
- * each signed-in account's usage read every few minutes through an app-server in its home. Routes
+ * lastdrop's Codex accounts: the list, signing in (`codex login --device-auth` in the account's shadow home),
+ * each signed-in account's usage read every few minutes through an app-server in its home, and redeeming its
+ * banked resets there. Routes
  * `GET /api/lastdrop/codex-accounts` and `POST` (one change per request) for the settings section.
  */
 import {
   CodexSettings,
+  type ProviderConsumeResetCreditOutcome,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
   type ServerProviderUsageLimits,
   type ServerSettings,
+  UsageLimitSourceError,
 } from "@t3tools/contracts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
@@ -47,6 +50,7 @@ import {
   resolveCodexHomeLayout,
 } from "../../../provider/Drivers/CodexHomeLayout.ts";
 import { codexRateLimitsFailureMessage } from "../../../provider/codexUsageLimits.ts";
+import { ResetCreditCoordinator } from "../../../provider/resetCreditCoordinator.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
 import { authorize, json } from "../accounts.ts";
 import { isRoutable } from "./factory.ts";
@@ -104,10 +108,16 @@ export class LastdropCodexAccounts extends Context.Service<
     readonly change: (
       change: CodexAccountChange,
     ) => Effect.Effect<CodexAccountsView, CodexAccountsRefused | CodexAccountsError>;
+    /** Spends one banked reset on the account, in its own home, then reads its usage again. */
+    readonly redeemReset: (
+      key: string,
+      creditId: string,
+    ) => Effect.Effect<ProviderConsumeResetCreditOutcome, UsageLimitSourceError>;
   }
 >()("t3/extensions/lastdrop/codex/accounts/LastdropCodexAccounts") {}
 
 const decodeSettings = Schema.decodeSync(CodexSettings);
+const isUsageLimitSourceError = Schema.is(UsageLimitSourceError);
 const decodeInstanceSettings = Schema.decodeUnknownOption(CodexSettings);
 const DEFAULT_CODEX_INSTANCE = ProviderInstanceId.make("codex");
 
@@ -180,6 +190,9 @@ const inertLayer = Layer.succeed(
     view: Effect.undefined,
     change: Effect.fn("LastdropCodexAccounts.change")(function* () {
       return yield* CodexAccountsRefused.make({ message: "Codex accounts aren't kept here." });
+    }),
+    redeemReset: Effect.fn("LastdropCodexAccounts.redeemReset")(function* () {
+      return yield* new UsageLimitSourceError({ detail: "Codex accounts aren't kept here." });
     }),
   }),
 );
@@ -269,6 +282,7 @@ const make = Effect.gen(function* () {
           ...(chatgpt?.email ? { email: chatgpt.email } : {}),
           ...(plan ? { plan } : {}),
           limits: limits.rateLimitsByLimitId?.["codex"] ?? limits.rateLimits,
+          ...(limits.rateLimitResetCredits ? { resetCredits: limits.rateLimitResetCredits } : {}),
         };
       }),
     );
@@ -368,6 +382,45 @@ const make = Effect.gen(function* () {
     return yield* view;
   });
 
+  // T3's rule for its own instances: one claim at a time per home, its idempotency key kept until answered.
+  const coordinator = yield* ResetCreditCoordinator;
+  const redeemReset = Effect.fn("LastdropCodexAccounts.redeemReset")(
+    function* (key: string, creditId: string) {
+      if (!(yield* io(() => files.signedIn(key)))) {
+        return yield* new UsageLimitSourceError({
+          detail: "Sign in to this account again to redeem resets.",
+        });
+      }
+      const binaryPath = yield* codexBinary;
+      const outcome = yield* coordinator.redeem(files.home(key), (idempotencyKey) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* withCodexAppServerClient({
+              binaryPath,
+              homePath: files.home(key),
+              launchArgs: CODEX_FILE_STORE_LAUNCH_ARGS,
+              cwd: helper,
+              environment,
+            });
+            const response = yield* client.request("account/rateLimitResetCredit/consume", {
+              idempotencyKey,
+              creditId,
+            });
+            return response.outcome;
+          }),
+        ).pipe(Effect.timeout("20 seconds"), Effect.provide(services)),
+      );
+      log(`codex: redeemed a reset on ${key}: ${outcome}`);
+      yield* readUsage(key).pipe(Effect.ignore);
+      return outcome;
+    },
+    Effect.mapError((error) =>
+      isUsageLimitSourceError(error)
+        ? error
+        : new UsageLimitSourceError({ detail: "Codex could not redeem the reset credit." }),
+    ),
+  );
+
   // One change at a time: the list's own writes are serial, but a change reads before it writes.
   const lock = yield* Semaphore.make(1);
   return LastdropCodexAccounts.of({
@@ -379,6 +432,7 @@ const make = Effect.gen(function* () {
     change: Effect.fn("LastdropCodexAccounts.change")(function* (change: CodexAccountChange) {
       return yield* lock.withPermits(1)(apply(change));
     }),
+    redeemReset,
   });
 });
 

@@ -51,6 +51,12 @@ server itself never refuses a turn. `extensions/lastdrop/claudeDriver*.ts` wraps
 as `ready` (auth label "lastdrop accounts"), and text generation runs on the roomiest account
 (`ThreadRouter.oneOffEnvironment`). The snapshot follows a sign-in at T3's next provider refresh.
 
+Banked resets: each lastdrop row on **Usage → Limits** carries Anthropic's `next_grant_id` as its credit id, and
+its **Use reset** goes to lastdrop's limit source, which claims it with that account's own token and organization
+(`ClaudeUsage.redeemReset`, behind T3's `ResetCreditCoordinator`), then reads the account again. T3's own row for
+the instance redeems on Claude Code's login, as in T3 (on macOS T3 reads no resets there: its token is in the
+keychain).
+
 ## Moving
 
 The rules are headroom's (docs/claude-accounts.md, "T3 Code threads"):

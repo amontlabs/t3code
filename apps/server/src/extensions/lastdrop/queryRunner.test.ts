@@ -1,5 +1,5 @@
 // Replays of the query-runner wrapper with a fake runner (scripted SDK messages, no Claude Code) and the real
-// lastdrop-node router over a temporary home: never the real ~/.claude, ~/.claude-accounts, ~/.t3 or keychain.
+// lastdrop-node router over a temporary home: never the real ~/.claude, ~/.t3 or keychain.
 // @effect-diagnostics nodeBuiltinImport:off - checks the temporary home's files.
 import * as NodeFS from "node:fs";
 

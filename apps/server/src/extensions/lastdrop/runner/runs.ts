@@ -175,7 +175,7 @@ const isRunnerChild = (deps: RunnerDeps, thread: string): Effect.Effect<boolean>
 
 const notEnabled = (name: string): RunnerLine => ({
   type: "error",
-  text: `No agent ${name} is enabled in lastdrop (Settings → Agents).`,
+  text: `No agent ${name} is enabled in lastdrop (Settings → Providers → lastdrop agents).`,
 });
 
 const nested = (name: string): RunnerLine => ({

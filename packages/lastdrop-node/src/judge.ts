@@ -1,6 +1,6 @@
 /**
  * The command judge's I/O (headroom `PermissionRules.load`, `CommandJudge.judge`,
- * `AntigravityBackend.executable`): the user's Claude Code settings files, the standalone catalog's
+ * `AntigravityBackend.executable`): the user's Claude Code settings files, the fork's agent catalog's
  * judge setting (read only), and one `agy -p … --mode plan` per check from an empty folder.
  */
 import * as NodeChildProcess from "node:child_process";
@@ -120,7 +120,7 @@ export const loadPermissionRules = (
   return rules;
 };
 
-/** The Antigravity judge the user chose in the standalone app (`agent-catalog.json` `judges`), read only. */
+/** The Antigravity judge the user chose (`judges` in the fork's `agents.json`), read only. */
 export const readCatalogJudge = (catalogFile: string): AgentJudge => {
   try {
     return catalogJudge(JSON.parse(NodeFS.readFileSync(catalogFile, "utf8")));

@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import { addCodexAccount, CodexAccountFiles } from "@t3tools/lastdrop-node";
 
-import { codexRoom, makeCodexRouting } from "./routing.ts";
+import { codexLimits, codexRoom, makeCodexRouting } from "./routing.ts";
 
 const NOW = Date.UTC(2026, 10, 16, 12);
 const MIN = 60_000;
@@ -44,6 +44,31 @@ describe("an account's room from its reading", () => {
       codexRoom("a", true, reached, NOW).fullUntil,
       seconds(NOW + 30 * MIN) * 1000,
     );
+  });
+});
+
+describe("an account's limits", () => {
+  it("name the available reset that expires first, so Use reset redeems it on this account", () => {
+    const credit = (id: string, status: string, expiresAt: number) => ({ id, status, expiresAt });
+    const record = {
+      readAt: NOW,
+      limits: { primary: { usedPercent: 100, windowDurationMins: 300 } },
+      resetCredits: {
+        availableCount: 2,
+        credits: [
+          credit("later", "available", seconds(NOW + 60 * MIN)),
+          credit("used", "redeemed", seconds(NOW + MIN)),
+          credit("soon", "available", seconds(NOW + 10 * MIN)),
+        ],
+      },
+    };
+    assert.deepStrictEqual(codexLimits(record)?.resetCredits, {
+      availableCount: 2,
+      nextExpiresAt: "2026-11-16T12:10:00.000Z",
+      nextCreditId: "soon",
+    });
+    const none = { ...record, resetCredits: { availableCount: 0, credits: [] } };
+    assert.isUndefined(codexLimits(none)?.resetCredits?.nextCreditId);
   });
 });
 

@@ -219,7 +219,7 @@ const bindLayer = (deps: RunnerDeps) =>
       if (!script.startsWith("/")) {
         return yield* Effect.logWarning("lastdrop runner script not written", script);
       }
-      // Without it the app's own copy of the plugin (if installed) answers, as before.
+      // Without it, queries keep the user's own Claude Code plugins as they are.
       const plugin = yield* Effect.tryPromise({
         try: () => installPlugin(dataDir),
         catch: (cause) => String(cause),

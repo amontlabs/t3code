@@ -19,6 +19,7 @@ import {
   isSignedIn,
   keychainService,
   newestCachedUsage,
+  nextGrantId,
   parseCredentials,
   placeGrants,
   planDisplayNameFromProfile,
@@ -158,6 +159,9 @@ describe("limit resets", () => {
     const r = placeGrants(resetGrants(block, at), []).account;
     expect(r?.count).toBe(2);
     expect(r?.expiries.length).toBe(2);
+    // The grant a "Use reset" redeems; none when Anthropic's next one is no longer usable.
+    expect(nextGrantId(resetGrants(block, at))).toBe("g1");
+    expect(nextGrantId(resetGrants({ ...block, next_grant_id: "old" }, at))).toBeUndefined();
     expect(resetGrants(null, at)).toBeUndefined();
     expect(resetGrants({ eligible: false, grants: block.grants }, at)?.length).toBe(0);
     expect(resetGrants({ eligible: true, grants: [{ id: "x" }] }, at)).toBeUndefined(); // malformed

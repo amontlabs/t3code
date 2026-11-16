@@ -202,6 +202,10 @@ Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, pri
 - **Updater cache**: shared. Each app checks a cached download against its own update's hash, so neither installs the other's update; at worst one deletes the other's pending download and it downloads again.
 - **Other shared state**: scheduled tasks, worktrees, the environment id and the server's runtime files are T3's own and belong to whichever app is running. Electron-profile state (window layout, Chromium storage) is per app.
 
+### The standalone lastdrop app
+
+Nothing is shared with it: the fork never reads, writes or runs the app's folder, account folders, keychain items or binary, and works with the app absent. The only readers are the one-time "Import from the lastdrop app" buttons (`appImport.ts`, `catalogEdit.ts`, `importFromApp.ts`), which copy and never write. The vendored plugin, unchanged, can still fall back to the app's runner when the fork's fails. Claude Code's and Codex's own terminal logins are used only while no fork account is signed in (docs/lastdrop/independence.md).
+
 **Data the fork stores**: its own files under `~/.t3/lastdrop/`, later also settings in provider instance `config`.
 
 - `accounts.json`: the Claude accounts in priority order and the routing thresholds (the standalone lastdrop's `accounts.json` format); `accounts/<key>/`: each account's sign-in folder and profile (Main's too).

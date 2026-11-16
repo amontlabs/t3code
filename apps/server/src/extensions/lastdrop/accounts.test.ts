@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { ServerConfig } from "../../config.ts";
+import * as ResetCreditCoordinator from "../../provider/resetCreditCoordinator.ts";
 import { LastdropAccounts, layer } from "./accounts.ts";
 
 // T3's own server tests start this layer too: under vitest it must never read the real keychain, the
@@ -16,8 +17,11 @@ it.effect("stays off under the test runner", () =>
     Effect.provide(
       layer.pipe(
         Layer.provide(
-          ServerConfig.layerTest(process.cwd(), { prefix: "lastdrop-accounts-" }).pipe(
-            Layer.provide(NodeServices.layer),
+          Layer.merge(
+            ServerConfig.layerTest(process.cwd(), { prefix: "lastdrop-accounts-" }).pipe(
+              Layer.provide(NodeServices.layer),
+            ),
+            ResetCreditCoordinator.layerTest,
           ),
         ),
       ),

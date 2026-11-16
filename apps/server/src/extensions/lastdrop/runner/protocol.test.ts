@@ -47,7 +47,7 @@ describe("lines", () => {
 
 describe("--agents", () => {
   const read = fakeCatalog();
-  it("help, list; changes go to the lastdrop app", () => {
+  it("help, list; changes go to the fork's Settings, never the lastdrop app", () => {
     assert.isFalse(agentsCommand(["--help"], read.agents, read.extras).failed);
     assert.match(agentsCommand([], read.agents, read.extras).output, /--agents list/);
     const list = JSON.parse(agentsCommand(["list"], read.agents, read.extras).output) as {
@@ -64,7 +64,11 @@ describe("--agents", () => {
     );
     const set = agentsCommand(["remove", "review"], read.agents, read.extras);
     assert.isTrue(set.failed);
-    assert.match(set.output, /lastdrop\.app.*--agents remove review/);
+    assert.match(set.output, /--agents remove review.*Settings → Providers → lastdrop agents/);
+    assert.notMatch(
+      agentsCommand([], read.agents, read.extras).output,
+      /Application Support|\.app/,
+    );
     assert.isTrue(agentsCommand(["nope"], read.agents, read.extras).failed);
   });
 });
