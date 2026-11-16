@@ -6,18 +6,59 @@ import type { ServerProviderUsageLimits } from "@t3tools/contracts";
 import {
   chooseCodexAccount,
   type CodexAccountFiles,
+  codexAccountFiles,
   type CodexRoom,
   type CodexUsageRecord,
+  fileLogger,
   recordedCodexAccount,
 } from "@t3tools/lastdrop-node";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import { ServerConfig } from "../../../config.ts";
 import {
   codexRateLimitsToLimits,
   codexUsageLimitResetAt,
   mergeCodexRateLimits,
 } from "../../../provider/codexUsageLimits.ts";
+import { lastdropDataDir } from "../../dataDir.ts";
 import type { CodexRouting } from "./factory.ts";
+
+const setting = (name: string) =>
+  Config.String(name).pipe(Config.option, Effect.orElseSucceed(Option.none));
+
+/**
+ * The routing over this server's lastdrop files and the shared `~/.codex` it routes away from, shared by the
+ * client-factory wrapper and the Codex driver wrapper. Undefined under vitest (T3's tests build both), with
+ * `LASTDROP_CODEX_ROUTING=0`, or without T3's server config.
+ */
+export const lastdropCodexRouting: Effect.Effect<
+  { readonly routing: LastdropCodexRouting; readonly sharedHome: string } | undefined
+> = Effect.gen(function* () {
+  const underTest = yield* setting("VITEST");
+  const off = yield* setting("LASTDROP_CODEX_ROUTING");
+  const config = yield* Effect.serviceOption(ServerConfig);
+  if (
+    underTest._tag === "Some" ||
+    (off._tag === "Some" && off.value === "0") ||
+    Option.isNone(config)
+  ) {
+    return undefined;
+  }
+  const dataDir = lastdropDataDir(config.value);
+  const home = yield* HostProcess.HomeDirectory;
+  return {
+    routing: makeCodexRouting({
+      files: codexAccountFiles(dataDir),
+      now: Date.now,
+      log: fileLogger(`${dataDir}/lastdrop.log`),
+    }),
+    sharedHome: `${home}/.codex`,
+  };
+});
 
 /** A reading older than this says nothing about the account's room now. */
 const CODEX_READING_VALID_MS = 2 * 60 * 60_000;
@@ -86,11 +127,16 @@ async function codexRooms(files: CodexAccountFiles, now: number): Promise<CodexR
   );
 }
 
+export interface LastdropCodexRouting extends CodexRouting {
+  /** The account a new thread would open on now (the roomiest), or undefined while none is signed in. */
+  readonly pick: () => Promise<{ readonly account: string; readonly home: string } | undefined>;
+}
+
 export function makeCodexRouting(options: {
   readonly files: CodexAccountFiles;
   readonly now: () => number;
   readonly log: (line: string) => void;
-}): CodexRouting {
+}): LastdropCodexRouting {
   const { files, now, log } = options;
   return {
     route: async (threadId) => {
@@ -104,6 +150,13 @@ export function makeCodexRouting(options: {
       if (choice === undefined) return undefined;
       log(`codex: thread ${threadId} opens on ${choice.key} (${choice.why})`);
       return { account: choice.key, home: files.home(choice.key) };
+    },
+    pick: async () => {
+      const at = now();
+      const choice = chooseCodexAccount({ rooms: await codexRooms(files, at), now: at });
+      return choice === undefined
+        ? undefined
+        : { account: choice.key, home: files.home(choice.key) };
     },
     recordThread: (account, threadId, nativeThreadId) =>
       files.recordThread(nativeThreadId, { account, threadId, at: now() }),

@@ -54,17 +54,25 @@ export function isRoutable(
   return withoutTrailingSlash(home) === withoutTrailingSlash(sharedHome);
 }
 
-/** The input with the account's home, and Codex told to keep its sign-in in that home's `auth.json`. */
-export function withAccountHome(input: CodexOpenInput, home: string): CodexOpenInput {
+/** Settings and environment on the account's home, with Codex told to keep its sign-in in that home's `auth.json`. */
+export function onAccountHome<S extends CodexSettings>(
+  settings: S,
+  environment: NodeJS.ProcessEnv,
+  home: string,
+): { readonly settings: S; readonly environment: NodeJS.ProcessEnv } {
   const launchArgs =
-    `${resolveCodexLaunchArgs(input.settings.launchArgs, input.environment)} ${CODEX_FILE_STORE_LAUNCH_ARGS}`.trim();
-  const environment: NodeJS.ProcessEnv = { ...input.environment, CODEX_HOME: home };
-  if (environment[LAUNCH_ARGS_ENV]?.trim()) environment[LAUNCH_ARGS_ENV] = launchArgs;
+    `${resolveCodexLaunchArgs(settings.launchArgs, environment)} ${CODEX_FILE_STORE_LAUNCH_ARGS}`.trim();
+  const accountEnvironment: NodeJS.ProcessEnv = { ...environment, CODEX_HOME: home };
+  if (accountEnvironment[LAUNCH_ARGS_ENV]?.trim()) accountEnvironment[LAUNCH_ARGS_ENV] = launchArgs;
   return {
-    ...input,
-    settings: { ...input.settings, homePath: home, launchArgs },
-    environment,
+    settings: { ...settings, homePath: home, launchArgs },
+    environment: accountEnvironment,
   };
+}
+
+/** The open input on the account's home (`onAccountHome`). */
+export function withAccountHome(input: CodexOpenInput, home: string): CodexOpenInput {
+  return { ...input, ...onAccountHome(input.settings, input.environment, home) };
 }
 
 const nativeThreadOf = (method: string, response: unknown): string | undefined => {

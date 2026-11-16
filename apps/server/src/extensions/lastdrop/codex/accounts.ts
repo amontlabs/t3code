@@ -3,7 +3,15 @@
  * each signed-in account's usage read every few minutes through an app-server in its home. Routes
  * `GET /api/lastdrop/codex-accounts` and `POST` (one change per request) for the settings section.
  */
-import { CodexSettings, type ServerProviderUsageLimits } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderInstanceId,
+  resolveProviderInstanceEnabled,
+  type ServerProviderUsageLimits,
+  type ServerSettings,
+} from "@t3tools/contracts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   addCodexAccount,
   CODEX_FILE_STORE_LAUNCH_ARGS,
@@ -41,6 +49,7 @@ import {
 import { codexRateLimitsFailureMessage } from "../../../provider/codexUsageLimits.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
 import { authorize, json } from "../accounts.ts";
+import { isRoutable } from "./factory.ts";
 import { codexLimits, codexRoom } from "./routing.ts";
 
 const ROUTE = "/api/lastdrop/codex-accounts";
@@ -99,6 +108,36 @@ export class LastdropCodexAccounts extends Context.Service<
 >()("t3/extensions/lastdrop/codex/accounts/LastdropCodexAccounts") {}
 
 const decodeSettings = Schema.decodeSync(CodexSettings);
+const decodeInstanceSettings = Schema.decodeUnknownOption(CodexSettings);
+const DEFAULT_CODEX_INSTANCE = ProviderInstanceId.make("codex");
+
+/**
+ * The binary of T3's Codex instance whose sessions lastdrop routes (enabled, on the shared `~/.codex`; the default
+ * instance first), so usage reads and sign-ins run the Codex the user configured; `codex` from `PATH` without one.
+ */
+export const routedCodexBinary = Effect.fn("LastdropCodexAccounts.codexBinary")(function* (
+  instances: ServerSettings["providerInstances"],
+  environment: NodeJS.ProcessEnv,
+  sharedHome: string,
+) {
+  const entries = Object.entries(instances).toSorted(
+    ([left], [right]) =>
+      Number(right === DEFAULT_CODEX_INSTANCE) - Number(left === DEFAULT_CODEX_INSTANCE),
+  );
+  for (const [, instance] of entries) {
+    if (instance.driver !== "codex" || !resolveProviderInstanceEnabled(instance)) continue;
+    const settings = decodeInstanceSettings(instance.config ?? {});
+    if (settings._tag === "None") continue;
+    const instanceEnvironment = yield* mergeProviderInstanceEnvironment(
+      instance.environment,
+      environment,
+    );
+    if (!isRoutable(settings.value, instanceEnvironment, sharedHome)) continue;
+    const binary = settings.value.binaryPath.trim();
+    return binary === "" ? "codex" : expandHomePath(binary, yield* HostProcess.HomeDirectory);
+  }
+  return "codex";
+});
 
 /** The view from the files; `logins` adds waiting sign-ins. */
 async function codexAccountsView(
@@ -176,12 +215,26 @@ const make = Effect.gen(function* () {
       Effect.provide(services),
     );
 
+  // Imported here: T3's settings service imports the extension lists this module is part of.
+  const { ServerSettingsService } = yield* Effect.promise(
+    () => import("../../../serverSettings.ts"),
+  );
+  const settings = yield* ServerSettingsService;
+  const sharedHome = `${yield* HostProcess.HomeDirectory}/.codex`;
+  const codexBinary = settings.getSettings.pipe(
+    Effect.flatMap((current) =>
+      routedCodexBinary(current.providerInstances, environment, sharedHome),
+    ),
+    Effect.orElseSucceed(() => "codex"),
+  );
+
   const readUsage = Effect.fn("LastdropCodexAccounts.readUsage")(function* (key: string) {
     yield* prepareHome(key);
+    const binaryPath = yield* codexBinary;
     const read = Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* withCodexAppServerClient({
-          binaryPath: "codex",
+          binaryPath,
           homePath: files.home(key),
           launchArgs: CODEX_FILE_STORE_LAUNCH_ARGS,
           cwd: helper,
@@ -299,8 +352,9 @@ const make = Effect.gen(function* () {
         yield* prepareHome(change.key).pipe(
           Effect.mapError((cause) => new CodexAccountsError({ cause })),
         );
+        const binary = yield* codexBinary;
         yield* Effect.tryPromise({
-          try: () => logins.start(change.key),
+          try: () => logins.start(change.key, binary),
           catch: (cause) =>
             cause instanceof CodexSignInError
               ? CodexAccountsRefused.make({ message: cause.message })

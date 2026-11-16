@@ -126,5 +126,9 @@ describe("signing a Codex account in", () => {
     await expect(logins(`${t.root}/nothing`).start("Work")).rejects.toThrow(
       "Codex (`codex`) wasn't found.",
     );
+    // The sign-in's own executable (the Codex instance's binary path) wins over the options' one.
+    await expect(logins(fakeCodex()).start("Work", `${t.root}/nothing`)).rejects.toThrow(
+      "Codex (`codex`) wasn't found.",
+    );
   });
 });

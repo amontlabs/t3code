@@ -12,24 +12,19 @@ import { SidebarMenuButton, SidebarMenuItem } from "~/components/ui/sidebar";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { environmentPresentations } from "~/state/presentation";
 
-import type { AccountsResponse } from "./accountsView";
-import { ACCOUNTS_ROUTE, useRoute } from "./lastdropRoute";
+import { useLimitNames } from "./lastdropRoute";
 import { UsageLimitsList } from "./UsageLimitsList";
 import { limitGroups, limitsSummary } from "./usageLimitsView";
 
 /** Every account's limits, with lastdrop's names and next-work badges while `active` (read from the server). */
 function useLimitGroups(now: number, active: boolean) {
   const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
-  const accounts = useRoute<AccountsResponse>(usePrimaryEnvironmentId(), ACCOUNTS_ROUTE, active);
-  const lastdrop =
-    accounts.state === "loaded" && !("unavailable" in accounts.response)
-      ? accounts.response.accounts
-      : undefined;
+  const names = useLimitNames(usePrimaryEnvironmentId(), active);
   return limitGroups({
     presentations,
     now,
     driverLabel: (driver) => providerClients.get(driver)?.label,
-    lastdrop,
+    ...names,
   });
 }
 

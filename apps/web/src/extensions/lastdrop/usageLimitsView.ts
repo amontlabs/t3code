@@ -14,6 +14,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 
 import type { AccountView } from "./accountsView";
+import type { CodexAccountView } from "./codexAccountsView";
 
 /** lastdrop's endpoint drivers, which have no provider client of their own. */
 const ENDPOINT_DRIVER_NAMES: Readonly<Record<string, string>> = {
@@ -112,12 +113,25 @@ export function limitGroups(input: {
   readonly driverLabel: (driver: ServerProvider["driver"]) => string | undefined;
   /** lastdrop's Claude accounts (`GET /api/lastdrop/accounts`), when this client can read them. */
   readonly lastdrop?: ReadonlyArray<AccountView> | undefined;
+  /** lastdrop's Codex accounts (`GET /api/lastdrop/codex-accounts`), whose titles name their rows. */
+  readonly lastdropCodex?:
+    | ReadonlyArray<Pick<CodexAccountView, "key" | "title" | "email">>
+    | undefined;
 }): ReadonlyArray<LimitGroup> {
   const { presentations, now } = input;
   const named = new Map(
     (input.lastdrop ?? []).flatMap((account) =>
       account.email ? [[emailKey(account.email), account] as const] : [],
     ),
+  );
+  const codexByEmail = new Map(
+    (input.lastdropCodex ?? []).flatMap((account) =>
+      account.email ? [[emailKey(account.email), account.title] as const] : [],
+    ),
+  );
+  // lastdrop's limit source ids its Codex rows `codex-<key>` (the server's `limitSources.ts`).
+  const codexById = new Map<string, string>(
+    (input.lastdropCodex ?? []).map((account) => [`codex-${account.key}`, account.title] as const),
   );
   const groups = new Map<ServerProvider["driver"], LimitEntry[]>();
   const shown = new Set<string>();
@@ -130,14 +144,30 @@ export function limitGroups(input: {
     const key = emailKey(email);
     return key !== undefined && shown.has(`${driver}:${key}`);
   };
-  const lastdropOf = (driver: ServerProvider["driver"], email: string | undefined) =>
-    driver === "claudeAgent" ? named.get(emailKey(email)) : undefined;
+  const lastdropOf = (
+    driver: ServerProvider["driver"],
+    email: string | undefined,
+    sourceId: string | undefined,
+  ): Pick<AccountView, "name" | "plan" | "nextFor"> | undefined => {
+    if (driver === "claudeAgent") return named.get(emailKey(email));
+    if (driver !== "codex") return undefined;
+    const name =
+      (sourceId === undefined ? undefined : codexById.get(sourceId)) ??
+      codexByEmail.get(emailKey(email));
+    return name === undefined ? undefined : { name };
+  };
   const entry = (
     driver: ServerProvider["driver"],
-    base: { key: string; name: string; email: string | undefined; plan: string | undefined },
+    base: {
+      key: string;
+      name: string;
+      email: string | undefined;
+      plan: string | undefined;
+      sourceId?: string;
+    },
     rest: Pick<LimitEntry, "main" | "more" | "notice" | "account">,
   ): LimitEntry => {
-    const known = lastdropOf(driver, base.email);
+    const known = lastdropOf(driver, base.email, base.sourceId);
     const name = known?.name ?? base.name;
     return {
       key: base.key,
@@ -182,6 +212,7 @@ export function limitGroups(input: {
               name: account.email ?? account.id,
               email: account.email,
               plan: account.plan,
+              sourceId: account.id,
             },
             { main: [], more: [], notice, account: undefined },
           ),

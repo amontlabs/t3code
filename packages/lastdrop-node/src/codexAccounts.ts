@@ -257,9 +257,10 @@ export class CodexLogins {
 
   /**
    * Starts a sign-in in the account's home and returns its page and code. A running one is replaced. The caller
-   * prepares the home first (T3's shadow home, so the sign-in's Codex reads the shared config).
+   * prepares the home first (T3's shadow home, so the sign-in's Codex reads the shared config). `codex` is the
+   * executable for this sign-in (the Codex instance's binary path), else the options' one.
    */
-  async start(key: string): Promise<CodexDeviceCode> {
+  async start(key: string, codex = this.options.codex ?? "codex"): Promise<CodexDeviceCode> {
     const { files } = this.options;
     this.cancel(key);
     this.failures.delete(key);
@@ -272,7 +273,7 @@ export class CodexLogins {
     env["BROWSER"] = "true";
     delete env["OPENAI_API_KEY"];
     const child = NodeChildProcess.spawn(
-      this.options.codex ?? "codex",
+      codex,
       ["login", "--device-auth", "-c", CODEX_FILE_STORE_CONFIG],
       { env, cwd: this.options.cwd, stdio: ["ignore", "pipe", "pipe"] },
     );
