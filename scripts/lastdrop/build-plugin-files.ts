@@ -7,7 +7,6 @@
 import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A small build script over a folder.
 import * as NodePath from "node:path";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - A small build script over a folder.
 import * as NodeURL from "node:url";
 
 const repoRoot = NodePath.resolve(

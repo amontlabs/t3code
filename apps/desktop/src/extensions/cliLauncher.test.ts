@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The launcher path is checked under both POSIX and Windows path rules.
 import { assert, it } from "@effect/vitest";
 import * as NodePath from "node:path";
 
