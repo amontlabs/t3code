@@ -1,0 +1,3 @@
+# lastdrop: refuse a push with changes outside the fork's folders and seams (FORK.md rule 2).
+# CI runs the guard itself, and the sync job must still push a stuck branch for its PR.
+[ -n "${CI:-}" ] || node scripts/lastdrop/check-fork-paths.ts

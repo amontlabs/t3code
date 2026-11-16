@@ -7,7 +7,7 @@ This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3c
 ## Rules
 
 1. **Share as little code with T3 as possible.** Fork code lives only in the fork's folders (below). T3 files change only at the seams listed here, a few lines each, and never in large files such as `ClaudeAdapterV2.ts` or `OrchestratorMcpService.ts`.
-2. **The guard enforces it.** `node scripts/lastdrop/check-fork-paths.ts` compares `HEAD` with the upstream tag it is based on and fails on any changed path outside the fork's folders, or on a seam whose changed lines (added + deleted) exceed its budget in `scripts/lastdrop/seams.json`. `pnpm-lock.yaml` is exempt (regenerate it, never hand-merge it).
+2. **The guard enforces it.** `node scripts/lastdrop/check-fork-paths.ts` compares `HEAD` with the upstream tag it is based on and fails on any changed path outside the fork's folders, or on a seam whose changed lines (added + deleted) exceed its budget in `scripts/lastdrop/seams.json`. It runs in CI and before every local push (`.vite-hooks/pre-push`, skipped in CI). `pnpm-lock.yaml` is exempt (regenerate it, never hand-merge it).
 3. **A new seam needs an entry in `seams.json` and a section here**, in the same PR. A change to a seam updates its section.
 4. **Upstream tests stay untouched and green.** Where the fork changes behaviour that T3's tests pin (the app identity), the change is switched on at runtime by the fork's entry point, not by editing T3's defaults or tests.
 5. **The README changes only in its top section, and keeps it current.** Fork changes to `README.md` go only in the "T3 Code + lastdrop" section above upstream's README (on a conflict, take upstream's README and put the section back on top). When a change adds something users notice, update its "What it adds" list in the same PR. Keep it concise, impactful and simple: what the user gets, not how it works.
@@ -189,6 +189,19 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Why**: the fork's bundle id (`com.amontlabs.t3code-lastdrop`); and signing with the fork's self-signed certificate when `LASTDROP_MAC_SIGN_IDENTITY` is set (unset: T3's ad-hoc signing).
 - **Must survive**: `DESKTOP_APP_ID` itself is left alone (T3's passkey signing tests pin it; the fork never builds `--signed`). The staged package `name` stays T3's `"t3code"`: Electron names its safe-storage keychain item after it (`t3code Safe Storage`, account `t3code Key`), and the fork must read the secrets the official app encrypted in `~/.t3`.
 - **Conflict**: take upstream's file, re-apply the two edits.
+
+### `packages/contracts/src/providerUsageLimits.ts` (budget 15)
+
+- **Lines**: optional `detail` on `ServerProviderUsageWindow`; the `UsageLimitSourceKey` struct; optional `keys` on `UsageLimitSourceAccount`.
+- **Why**: Usage shows what a credit-based account has left in words ("$4.20 of $10.00 left") and OpenRouter's spend per API key on every client. Both fields are optional, so T3's clients and servers ignore them.
+- **Must survive**: the three additions with their field names; the fork's usage views read them.
+- **Conflict**: take upstream's file and re-add the three. If upstream adds its own field for either, use theirs and drop ours.
+
+### `packages/shared/src/usageLimits.ts` (budget 2)
+
+- **Lines**: in `resetCreditChoices`, the per-option branch is taken when `credits.options` is non-empty (upstream: only for an `instanceId` input).
+- **Why**: a hub's reset credits (Claude's weekly and Fable resets) are offered one choice per kind, each spending its own credit. `apps/web/src/extensions/lastdrop/resetCreditChoices.test.ts` pins it.
+- **Conflict**: take upstream's file and re-apply the condition; if the test fails after a sync, adapt the condition, not the test.
 
 ### `CLAUDE.md` (budget 2)
 

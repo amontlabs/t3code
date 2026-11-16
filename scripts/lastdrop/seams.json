@@ -9,10 +9,19 @@
     "docs/lastdrop/**",
     ".github/workflows/lastdrop-*",
     "FORK.md",
-    "README.md"
+    "README.md",
+    ".vite-hooks/pre-push"
   ],
   "exempt": ["pnpm-lock.yaml"],
   "seams": {
+    "packages/contracts/src/providerUsageLimits.ts": {
+      "budget": 15,
+      "why": "usage windows in words and per-key spend (OpenRouter)"
+    },
+    "packages/shared/src/usageLimits.ts": {
+      "budget": 2,
+      "why": "a hub's reset credits offered per kind"
+    },
     "CLAUDE.md": {
       "budget": 2,
       "why": "points agents to FORK.md"
