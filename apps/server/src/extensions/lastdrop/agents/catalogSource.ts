@@ -1,12 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off - Reads and watches two small files of the standalone app.
+// @effect-diagnostics nodeBuiltinImport:off - Reads and watches two small files of lastdrop's own folder.
 /**
- * The catalog as the standalone lastdrop keeps it, read-only: `agent-catalog.json` and
- * `agent-models.json` in `~/Library/Application Support/lastdrop`. The driver polls it every 2 s
- * (as the standalone ACP provider does), so an edit in the standalone app shows in T3's model
- * list without a restart. A catalog that does not parse keeps the last good reading.
+ * The catalog the fork keeps: `agents.json` (the standalone app's `agent-catalog.json` format) and
+ * `agent-models.json` in `~/.t3/lastdrop/`. The driver polls it every 2 s, so an edit in Settings
+ * (or by hand) shows in T3's model list without a restart. A catalog that does not parse keeps the
+ * last good reading; one that does not exist yet is an empty list.
  */
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
@@ -23,13 +22,21 @@ export interface CatalogFiles {
   readonly models: string;
 }
 
-export const standaloneCatalogFiles = (home: string = NodeOS.homedir()): CatalogFiles => {
-  const support = NodePath.join(home, "Library", "Application Support", "lastdrop");
-  return {
-    catalog: NodePath.join(support, "agent-catalog.json"),
-    models: NodePath.join(support, "agent-models.json"),
-  };
+export const agentCatalogFiles = (dataDir: string): CatalogFiles => ({
+  catalog: NodePath.join(dataDir, "agents.json"),
+  models: NodePath.join(dataDir, "agent-models.json"),
+});
+
+let boundDir: string | undefined;
+
+/** Called once by `Extensions.layer` with lastdrop's folder; the driver may open before it runs. */
+export const bindCatalogDir = (dataDir: string | undefined): void => {
+  boundDir = dataDir;
 };
+
+/** The server's catalog files; undefined until `Extensions.layer` bound the folder. */
+export const boundCatalogFiles = (): CatalogFiles | undefined =>
+  boundDir === undefined ? undefined : agentCatalogFiles(boundDir);
 
 export interface CatalogReading {
   /** Claude's own models first, then the catalog's enabled agents. */
@@ -39,12 +46,14 @@ export interface CatalogReading {
   readonly problem?: string;
 }
 
+/** A file that does not exist reads as an empty object: no agents yet is not a problem. */
 const readJson = (file: string): { readonly value?: unknown; readonly problem?: string } => {
   try {
     return { value: JSON.parse(NodeFS.readFileSync(file, "utf8")) };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return { problem: code === "ENOENT" ? `${file} does not exist.` : `${file}: ${String(error)}` };
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? { value: {} }
+      : { problem: `${file}: ${String(error)}` };
   }
 };
 
@@ -64,26 +73,30 @@ export interface CatalogSource {
 }
 
 export const makeCatalogSource = (input: {
-  readonly files: CatalogFiles;
+  /** A function is read at each check, for a folder that is bound after the source opened. */
+  readonly files: CatalogFiles | (() => CatalogFiles | undefined);
   readonly instances?: InstanceMap;
 }): CatalogSource => {
+  const filesNow = () => (typeof input.files === "function" ? input.files() : input.files);
   let catalog: ReadonlyArray<AgentDefinition> = [];
   let efforts: ModelEfforts = {};
   let problem: string | undefined;
   let stamps = "";
 
   const reload = (): boolean => {
-    const next = `${stamp(input.files.catalog)}|${stamp(input.files.models)}`;
+    const files = filesNow();
+    if (files === undefined) return false;
+    const next = `${files.catalog}|${stamp(files.catalog)}|${stamp(files.models)}`;
     if (next === stamps) return false;
     stamps = next;
-    const read = readJson(input.files.catalog);
+    const read = readJson(files.catalog);
     if (read.problem === undefined) {
       catalog = parseCatalog(read.value, input.instances);
       problem = undefined;
     } else {
       problem = read.problem;
     }
-    const models = readJson(input.files.models);
+    const models = readJson(files.models);
     if (models.problem === undefined) efforts = parseModelEfforts(models.value);
     return true;
   };

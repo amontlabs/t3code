@@ -12,6 +12,8 @@ import * as LastdropAccounts from "./lastdrop/accounts.ts";
 import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
 import * as LastdropEndpointKeys from "./lastdrop/endpointKeys.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
+import * as AgentsEditor from "./lastdrop/agents/editor.ts";
+import * as AgentsEditorRoutes from "./lastdrop/agents/editorRoutes.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
@@ -64,12 +66,13 @@ export const wrapClaudeQueryRunner = <E, R>(
 export const usageLimitSourcesLayer = LimitSourcesLive.wrap(UsageLimitSources.layer);
 
 /**
- * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the
+ * Long-lived services, merged into the server's core dependencies: Claude accounts and usage; the agents editor; the
  * agents' target lookup and fallback reactor; the move continuation; the Z.ai and OpenRouter instances and their usage.
  */
 const services = Layer.mergeAll(
   LastdropAccounts.layer,
   LastdropEndpointKeys.layer,
+  AgentsEditor.layer,
   // Imported when the layer builds: it reaches T3's settings service, which imports this module's lists.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/endpoints.ts")).pipe(
@@ -101,6 +104,7 @@ export const routes = Layer.mergeAll(
   LastdropAccounts.routes,
   LastdropEndpointsView.routes,
   LastdropEndpointKeys.routes,
+  AgentsEditorRoutes.routes,
   // Imported when the layer builds: it reaches T3's orchestrator, which imports this module's lists.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/runner/routes.ts")).pipe(

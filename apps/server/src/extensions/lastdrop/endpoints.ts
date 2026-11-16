@@ -48,7 +48,7 @@ import * as Schema from "effect/Schema";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { resolveLastdropDataDir } from "../dataDir.ts";
 import { parseCatalog } from "./agents/catalog.ts";
-import { standaloneCatalogFiles } from "./agents/catalogSource.ts";
+import { agentCatalogFiles } from "./agents/catalogSource.ts";
 import * as EndpointRoom from "./endpointRoom.ts";
 import { type EndpointView, LastdropEndpoints } from "./endpointsView.ts";
 
@@ -378,7 +378,7 @@ export const layer = Layer.effect(
     const home = NodeOS.homedir();
     const paths = lastdropPaths({ home, dataDir });
     const log = fileLogger(`${dataDir}/lastdrop.log`);
-    const catalogFile = standaloneCatalogFiles(home).catalog;
+    const catalogFile = agentCatalogFiles(dataDir).catalog;
     const monitor = new EndpointMonitor({ paths, fetch: nodeFetch, env: process.env, log });
     const placement = new Map<EndpointProvider, EndpointView["instance"]>();
     const told = new Set<string>();

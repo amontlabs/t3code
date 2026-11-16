@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Reads the standalone app's agent catalog files.
+// @effect-diagnostics nodeBuiltinImport:off - Reads the fork's agent catalog files.
 /**
  * The runner's port onto T3: a run is T3's own delegated task (`OrchestratorMcpService`, the service
  * behind `delegate_task`) of the calling thread on the `lastdropAgents` instance, read back from T3's
@@ -30,7 +30,7 @@ import {
   type AgentDefinition,
   type AgentStep,
 } from "../agents/catalog.ts";
-import { standaloneCatalogFiles, type CatalogFiles } from "../agents/catalogSource.ts";
+import { boundCatalogFiles, type CatalogFiles } from "../agents/catalogSource.ts";
 import { LASTDROP_AGENTS_DRIVER } from "../agents/settings.ts";
 import * as Shared from "../agents/shared.ts";
 import { catalogExtras, type StepItem } from "./protocol.ts";
@@ -47,12 +47,12 @@ const readJson = (file: string): unknown => {
   }
 };
 
-/** The standalone app's list as it reads now (the plugin reads it at each prompt). */
-const readCatalog = (files: CatalogFiles = standaloneCatalogFiles()): CatalogRead => {
-  const json = readJson(files.catalog);
+/** The fork's list as it reads now (the plugin reads it at each prompt). */
+const readCatalog = (files: CatalogFiles | undefined = boundCatalogFiles()): CatalogRead => {
+  const json = files === undefined ? undefined : readJson(files.catalog);
   return {
     agents: parseCatalog(json),
-    efforts: parseModelEfforts(readJson(files.models)),
+    efforts: parseModelEfforts(files === undefined ? undefined : readJson(files.models)),
     extras: catalogExtras(json),
   };
 };

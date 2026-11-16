@@ -246,7 +246,7 @@ describe("lastdrop agent catalog", () => {
     try {
       const source = makeCatalogSource({ files });
       assert.equal(source.current().agents.length, 4);
-      assert.include(source.current().problem ?? "", "does not exist");
+      assert.isUndefined(source.current().problem);
       write({ revision: 1, agents: [CATALOG.agents[0]] });
       assert.isTrue(source.reloadIfChanged());
       assert.deepEqual(
