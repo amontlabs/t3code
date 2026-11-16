@@ -193,14 +193,18 @@ export interface ResetGrant {
   readonly label: string;
   /** Clears one model's weekly limit, not the account's. */
   readonly modelOnly: boolean;
+  readonly id?: string | undefined;
+  /** Anthropic's `next_grant_id`: the grant Claude Code's `/usage` redeems next. */
+  readonly next?: boolean | undefined;
 }
 
 /**
- * `{"eligible": true, "grants": [{"id", "label", "resets_left", "ends_at", "clears"}]}`. Undefined for a
- * missing or `null` block, or a malformed grant. An ineligible account has no usable resets.
+ * `{"eligible": true, "next_grant_id", "grants": [{"id", "label", "resets_left", "ends_at", "clears"}]}`.
+ * Undefined for a missing or `null` block, or a malformed grant. An ineligible account has no usable resets.
  */
 export function resetGrants(value: unknown, now: number): ResetGrant[] | undefined {
   if (!isRecord(value)) return undefined;
+  const nextId = str(value, "next_grant_id");
   const grants: ResetGrant[] = [];
   for (const grant of Array.isArray(value["grants"]) ? value["grants"] : []) {
     const left = dbl(grant, "resets_left");
@@ -211,15 +215,22 @@ export function resetGrants(value: unknown, now: number): ResetGrant[] | undefin
       ? grant["clears"].filter((c): c is string => typeof c === "string")
       : [];
     const count = Math.trunc(left);
+    const id = str(grant, "id");
     grants.push({
       count,
       expiries: ends === undefined ? [] : Array.from({ length: count }, () => ends),
       label: str(grant, "label") ?? "",
       modelOnly: isModelOnly(clears),
+      ...(id === undefined ? {} : { id }),
+      ...(id !== undefined && id === nextId ? { next: true } : {}),
     });
   }
   return grants;
 }
+
+/** The usable grant Anthropic redeems next; undefined when it isn't among the usable ones. */
+export const nextGrantId = (grants: ReadonlyArray<ResetGrant> | undefined): string | undefined =>
+  grants?.find((grant) => grant.next)?.id;
 
 /** A grant that clears a weekly limit other than `seven_day`, and not `seven_day` itself. */
 export const isModelOnly = (clears: ReadonlyArray<string>): boolean =>

@@ -62,27 +62,6 @@ export function slug(name: string): string {
     .join("-");
 }
 
-/** The folder a CLI keeps a non-main account's login in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). */
-export function accountFolder(
-  account: Pick<Account, "provider" | "key">,
-  home: string,
-  claudeFolders = `${home}/.claude-accounts`,
-): string | undefined {
-  if (isMain(account)) return undefined;
-  switch (account.provider) {
-    case "claude":
-      return `${claudeFolders}/${account.key}`;
-    case "codex":
-      return `${home}/.codex-accounts/${account.key}`;
-    default:
-      return undefined;
-  }
-}
-
-/** The keychain account for one of lastdrop's own items ("zai-api-key"), kept apart per account. */
-export const keychainItem = (account: Pick<Account, "key">, base: string): string =>
-  isMain(account) ? base : `${base}.${account.key}`;
-
 /** Every provider's main account but Claude's, and the default thresholds. */
 export const emptyConfig = (): AccountsConfig =>
   normalize({

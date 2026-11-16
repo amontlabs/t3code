@@ -39,7 +39,7 @@ describe("route", () => {
       });
       assert.deepStrictEqual(yield* routeLine(deps, PARENT, request({ agent: "old" })), {
         type: "error",
-        text: "No agent old is enabled in lastdrop (Settings → Agents).",
+        text: "No agent old is enabled in lastdrop (Settings → Providers → lastdrop agents).",
       });
       // A reserved name never becomes a type.
       assert.strictEqual(

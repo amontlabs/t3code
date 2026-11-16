@@ -11,18 +11,20 @@ import * as PubSub from "effect/PubSub";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
-import { ProviderRegistry } from "../../provider/ProviderRegistry.ts";
 import { UsageLimitSources } from "../../usage/UsageLimitSources.ts";
 import { LastdropAccounts } from "./accounts.ts";
 import { LastdropCodexAccounts } from "./codex/accounts.ts";
 import { LastdropEndpoints } from "./endpointsView.ts";
 import {
+  CODEX_ROW,
   currentLastdropSources,
   LASTDROP_SOURCE_ID,
   lastdropLimitSource,
+  lastdropRedeemer,
   onLastdropSources,
   publishLastdropSources,
   resetLastdropSources,
+  setLastdropRedeemer,
 } from "./limitSources.ts";
 
 /** How often the publisher looks at the accounts and endpoints views (both are in memory or cheap reads). */
@@ -63,9 +65,13 @@ export const wrap = <E, R>(
         refresh: base.refresh,
         consumeResetCredit: Effect.fn("LastdropLimitSources.consumeResetCredit")(function* (input) {
           if (input.sourceId !== LASTDROP_SOURCE_ID) return yield* base.consumeResetCredit(input);
-          return yield* new UsageLimitSourceError({
-            detail: "lastdrop does not spend Claude's banked resets; use Claude Code's /usage.",
-          });
+          const redeem = lastdropRedeemer();
+          if (redeem === undefined) {
+            return yield* new UsageLimitSourceError({
+              detail: "lastdrop's accounts aren't running on this server.",
+            });
+          }
+          return yield* redeem(input.accountId, input.creditId);
         }),
         get streamChanges() {
           return Stream.zipLatestWith(base.streamChanges, ours, (theirs, mine) =>
@@ -78,32 +84,42 @@ export const wrap = <E, R>(
 
 /**
  * Publishes lastdrop's source from the Claude and Codex accounts and the endpoints views. Off macOS and under vitest both are empty.
- * The feed's reading lives as long as this layer: emptied when it builds and when it closes.
+ * The feed's reading and the redeemer live as long as this layer: emptied when it builds and when it closes.
  */
 export const publisher = Layer.effectDiscard(
   Effect.gen(function* () {
     const accounts = yield* LastdropAccounts;
     const codex = yield* LastdropCodexAccounts;
     const endpoints = yield* LastdropEndpoints;
-    const providers = yield* ProviderRegistry;
     yield* Effect.acquireRelease(Effect.sync(resetLastdropSources), () =>
       Effect.sync(resetLastdropSources),
     );
     const publish = Effect.gen(function* () {
-      const nativeEmails = new Set(
-        (yield* providers.getProviders).flatMap((provider) =>
-          provider.enabled && provider.auth.email ? [provider.auth.email] : [],
-        ),
-      );
       const source = lastdropLimitSource({
         accounts: yield* accounts.view,
         codex: yield* codex.view,
         endpoints: yield* endpoints.view,
         now: yield* Clock.currentTimeMillis,
-        nativeEmails,
       });
       publishLastdropSources(source ? [source] : []);
     }).pipe(Effect.catchCause((cause) => Effect.logWarning("lastdrop limit source failed", cause)));
+    const redeem = Effect.fn("LastdropLimitSources.redeem")(function* (
+      accountId: string,
+      creditId: string,
+    ) {
+      const claude = (yield* accounts.view)?.accounts.some((account) => account.key === accountId);
+      const outcome = claude
+        ? yield* accounts.redeemReset(accountId, creditId)
+        : accountId.startsWith(CODEX_ROW)
+          ? yield* codex.redeemReset(accountId.slice(CODEX_ROW.length), creditId)
+          : yield* new UsageLimitSourceError({ detail: "This account has no resets to redeem." });
+      yield* publish;
+      return { outcome };
+    });
+    yield* Effect.acquireRelease(
+      Effect.sync(() => setLastdropRedeemer(redeem)),
+      (unset) => Effect.sync(unset),
+    );
     yield* publish.pipe(Effect.repeat(Schedule.spaced(PUBLISH_EVERY)), Effect.forkScoped);
   }),
 );

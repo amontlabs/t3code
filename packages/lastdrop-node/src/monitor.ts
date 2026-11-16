@@ -20,7 +20,13 @@ import {
   type UsageWindow,
 } from "@t3tools/lastdrop-core";
 
-import { ClaudeUsage, type FetchLike, type UsageSnapshot } from "./claudeUsage.ts";
+import {
+  ClaudeUsage,
+  type FetchLike,
+  ResetRedeemError,
+  type ResetOutcome,
+  type UsageSnapshot,
+} from "./claudeUsage.ts";
 import {
   installedClaudeCodeVersion,
   loadAccounts,
@@ -52,6 +58,8 @@ export interface AccountView {
   readonly weekly?: number | undefined;
   readonly windows: ReadonlyArray<UsageWindow>;
   readonly resets?: LimitResets | undefined;
+  /** The banked reset "Use reset" redeems on this account. */
+  readonly nextResetId?: string | undefined;
   /** When the numbers were read (epoch ms), and where from. */
   readonly readAt?: number | undefined;
   readonly source?: "cache" | "endpoint" | undefined;
@@ -88,6 +96,8 @@ interface UsageEntry {
   snapshot?: UsageSnapshot | undefined;
   error?: string | undefined;
   due: boolean;
+  /** Ask Anthropic, not Claude Code's saved copy (a reset just changed the numbers). */
+  fresh?: boolean;
 }
 
 export class AccountsMonitor {
@@ -147,6 +157,27 @@ export class AccountsMonitor {
     return this.lastView!;
   }
 
+  /**
+   * Redeems a banked reset on one of the fork's accounts (`ClaudeUsage.redeemReset`), then reads that account
+   * again from Anthropic, whatever the answer.
+   */
+  async redeemReset(key: string, grantId: string, requestId: string): Promise<ResetOutcome> {
+    const config = await loadAccounts(this.options.paths, this.now());
+    if (!pool(config, "claude").some((account) => account.key === key)) {
+      throw new ResetRedeemError(`There's no Claude account ${key}.`, true);
+    }
+    try {
+      return await this.usage.redeemReset(key, grantId, requestId);
+    } finally {
+      const entry = this.entries.get(key);
+      if (entry) {
+        entry.due = true;
+        entry.fresh = true;
+      }
+      await this.refresh().catch(() => {});
+    }
+  }
+
   /** The last pass's view; runs a pass first when there was none. */
   async view(): Promise<AccountsView> {
     if (!this.lastView) await this.tick();
@@ -165,8 +196,10 @@ export class AccountsMonitor {
       if (!entry.due && now - entry.attemptedAt < USAGE_REFRESH_MS) continue;
       entry.attemptedAt = now;
       entry.due = false;
+      const fresh = entry.fresh === true;
+      entry.fresh = false;
       try {
-        entry.snapshot = await this.usage.fetch(key);
+        entry.snapshot = await this.usage.fetch(key, { fresh });
         entry.error = undefined;
       } catch (error) {
         entry.error = (error as Error).message;
@@ -242,6 +275,7 @@ export class AccountsMonitor {
             ? currentWindows(entry.snapshot.windows, entry.snapshot.at, now)
             : windowsFromStatus(status, now),
           resets: entry?.snapshot?.resets,
+          nextResetId: entry?.snapshot?.nextResetId,
           // A never-read account's status has `at: -Infinity`: no time, not an invalid one.
           readAt: finite(entry?.snapshot?.at ?? status?.at),
           source: entry?.snapshot?.source,

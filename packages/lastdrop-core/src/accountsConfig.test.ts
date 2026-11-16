@@ -6,7 +6,6 @@ import {
   type ProviderId,
   DEFAULT_THRESHOLD,
   PROVIDERS,
-  accountFolder,
   accountId,
   add,
   append,
@@ -16,7 +15,6 @@ import {
   emptyConfig,
   encodeAccountsConfig,
   findAccount,
-  keychainItem,
   loadAccountsConfig,
   mainAccount,
   migrateClaudeAccounts,
@@ -30,7 +28,6 @@ import {
 } from "./accountsConfig.ts";
 
 const keys = (c: AccountsConfig, p: ProviderId) => pool(c, p).map((a) => a.key);
-const home = "/Users/x";
 const now = 1_800_000_000_000;
 
 const added = (c: AccountsConfig, p: ProviderId, name: string) => {
@@ -45,19 +42,8 @@ describe("accounts", () => {
     for (const p of PROVIDERS) expect(keys(config, p)).toEqual(p === "claude" ? [] : ["main"]);
   });
 
-  it("where each account keeps its login", () => {
-    for (const p of PROVIDERS) {
-      expect(accountFolder(mainAccount(p), home)).toBeUndefined();
-      expect(keychainItem(mainAccount(p), "zai-api-key")).toBe("zai-api-key");
-    }
-    expect(accountFolder({ provider: "claude", key: "Pro" }, home)).toBe(
-      "/Users/x/.claude-accounts/Pro",
-    );
-    expect(accountFolder({ provider: "codex", key: "work" }, home)).toBe(
-      "/Users/x/.codex-accounts/work",
-    );
-    expect(accountFolder({ provider: "zai", key: "work" }, home)).toBeUndefined();
-    expect(keychainItem({ key: "work" }, "zai-api-key")).toBe("zai-api-key.work");
+  it("an account's id", () => {
+    expect(accountId(mainAccount("zai"))).toBe("zai.main");
     expect(accountId({ provider: "codex", key: "work" })).toBe("codex.work");
   });
 
@@ -200,13 +186,6 @@ describe("accounts", () => {
 });
 
 describe("Claude accounts", () => {
-  it("folders", () => {
-    expect(accountFolder({ provider: "claude", key: "main" }, home)).toBeUndefined();
-    expect(
-      accountFolder({ provider: "claude", key: "Pro" }, home)?.endsWith("/.claude-accounts/Pro"),
-    ).toBe(true);
-  });
-
   it("slug", () => {
     expect(slug("Pro")).toBe("Pro");
     expect(slug("  my work/acct ")).toBe("my-work-acct");

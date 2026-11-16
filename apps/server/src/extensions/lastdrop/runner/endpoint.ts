@@ -150,7 +150,7 @@ export const runnerEnvironment = (
 
 /**
  * The variables a thread's Claude query gains now: none while lastdrop's agents can't run here (their
- * instance off or absent), so the plugin answers its Agent types through the lastdrop app as before.
+ * instance off or absent).
  */
 export const runnerVariables = (
   threadId: string,

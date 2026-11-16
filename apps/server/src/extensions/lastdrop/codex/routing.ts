@@ -67,12 +67,25 @@ const FULL_WITHOUT_RESET_MS = 60 * 60_000;
 
 const isoOf = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-/** T3's limit windows for a reading (Codex's main allowance), or undefined without one. */
+/**
+ * T3's limit windows for a reading (Codex's main allowance), or undefined without one. Banked resets name the
+ * available credit that expires first, so **Use reset** redeems that one on this account.
+ */
 export function codexLimits(
   record: CodexUsageRecord | undefined,
 ): ServerProviderUsageLimits | undefined {
   if (record?.limits === undefined) return undefined;
-  return codexRateLimitsToLimits({ snapshot: record.limits, checkedAt: isoOf(record.readAt) });
+  const limits = codexRateLimitsToLimits({
+    snapshot: record.limits,
+    resetCredits: record.resetCredits,
+    checkedAt: isoOf(record.readAt),
+  });
+  const next = (record.resetCredits?.credits ?? [])
+    .filter((credit) => credit.status === "available")
+    .toSorted((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity))[0];
+  return limits.resetCredits && next && limits.resetCredits.availableCount > 0
+    ? { ...limits, resetCredits: { ...limits.resetCredits, nextCreditId: next.id } }
+    : limits;
 }
 
 /** What picking knows of an account's room from its reading: unknown without a recent one. */

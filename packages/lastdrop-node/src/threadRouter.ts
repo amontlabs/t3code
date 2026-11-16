@@ -76,7 +76,7 @@ const NOTHING = async () => {};
 export interface RouterOptions {
   readonly paths: LastdropPaths;
   readonly ledger: SessionLedger;
-  /** The readings routing uses (the fork's `usage.json`, or the standalone app's while it runs). */
+  /** The readings routing uses (the fork's `usage.json`). */
   readonly statuses: () => Promise<Record<string, AccountStatus>>;
   readonly now?: () => number;
   readonly newSessionId: () => string;

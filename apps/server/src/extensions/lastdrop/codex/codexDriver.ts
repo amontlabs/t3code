@@ -10,6 +10,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
+import type { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import * as Clock from "effect/Clock";
@@ -55,18 +56,26 @@ export function accountSnapshot(
   };
 }
 
-/** What the insulated instance asks of lastdrop: the account, its probe and its text generation. */
+/** What the insulated instance asks of lastdrop: the account, its probe, its skills and its text generation. */
 export interface CodexAccountRunner {
   readonly pick: Effect.Effect<{ readonly account: string; readonly home: string } | undefined>;
   /** T3's provider check run in the account's home; undefined when it could not run. */
   readonly probe: (home: string) => Effect.Effect<ServerProviderDraft | undefined>;
+  /** T3's skills probe for a folder, run in the account's home; undefined keeps T3's own read. */
+  readonly skills: (
+    home: string,
+    cwd: string,
+  ) => Effect.Effect<ServerProvider["skills"] | undefined, ProviderDriverError>;
   readonly textGeneration: (
     home: string,
     models: Effect.Effect<ReadonlyArray<ServerProviderModel>>,
   ) => Effect.Effect<ProviderTextGeneration>;
 }
 
-/** T3's instance with its snapshot read from the roomiest fork account while Codex's own login is out, and its text generation run there. */
+/**
+ * T3's instance with its snapshot read from the roomiest fork account while Codex's own login is out, and its
+ * text generation and per-folder skills run there.
+ */
 export function insulateCodex(
   instance: ProviderInstance,
   runner: CodexAccountRunner,
@@ -123,14 +132,15 @@ export function insulateCodex(
     ...(snapshotForCwd === undefined
       ? {}
       : {
-          // The workspace's skills are T3's read for that folder; the rest follows the account.
           snapshotForCwd: (cwd: string) =>
-            Effect.flatMap(snapshotForCwd(cwd), (workspace) =>
-              Effect.map(insulated(workspace), (current) => ({
-                ...workspace,
-                ...current,
-                skills: workspace.skills,
-              })),
+            Effect.flatMap(pick, (account) =>
+              account === undefined
+                ? snapshotForCwd(cwd)
+                : Effect.flatMap(runner.skills(account.home, cwd), (skills) =>
+                    skills === undefined
+                      ? snapshotForCwd(cwd)
+                      : Effect.map(getSnapshot, (current) => ({ ...current, skills })),
+                  ),
             ),
         }),
     textGeneration: {

@@ -15,6 +15,7 @@ import {
   onLastdropSources,
   publishLastdropSources,
   resetLastdropSources,
+  setLastdropRedeemer,
   toUsageWindow,
 } from "./limitSources.ts";
 import { wrap } from "./limitSourcesLive.ts";
@@ -134,28 +135,25 @@ describe("lastdropLimitSource", () => {
     assert.strictEqual(main?.usageLimits.windows[0]?.usedPercent, 7);
   });
 
-  it("sends no reset count for an account a T3 provider reports, so its Use reset stays", () => {
+  it("names the grant Anthropic redeems next, so Use reset spends it on that account", () => {
     const resets = { count: 2, expiries: [NOW + HOUR] };
     const source = lastdropLimitSource({
       accounts: accounts([
         account({
-          email: "Own@Example.com",
+          email: "own@example.com",
           windows: [{ label: "Weekly", usedPercent: 1 }],
           resets,
-        }),
-        account({
-          key: "other",
-          email: "other@example.com",
-          windows: [{ label: "Weekly", usedPercent: 1 }],
-          resets,
+          nextResetId: "g1",
         }),
       ]),
       endpoints: undefined,
       now: NOW,
-      nativeEmails: new Set(["own@example.com"]),
     });
-    assert.isUndefined(source?.accounts[0]?.usageLimits.resetCredits);
-    assert.strictEqual(source?.accounts[1]?.usageLimits.resetCredits?.availableCount, 2);
+    assert.deepStrictEqual(source?.accounts[0]?.usageLimits.resetCredits, {
+      availableCount: 2,
+      nextExpiresAt: "2026-11-15T13:00:00.000Z",
+      nextCreditId: "g1",
+    });
   });
 
   it("an account whose read failed shows its error, not its last numbers", () => {
@@ -307,7 +305,7 @@ const fakeSources = Layer.succeed(
 );
 
 describe("wrap", () => {
-  it.effect("adds lastdrop's source after T3's and refuses to spend its resets", () =>
+  it.effect("adds lastdrop's source after T3's and redeems its resets through lastdrop", () =>
     Effect.gen(function* () {
       const sources = yield* UsageLimitSources;
       publishLastdropSources([]);
@@ -331,10 +329,19 @@ describe("wrap", () => {
         [...first].flatMap((list) => list.map((entry) => entry.id)),
         ["hub", "lastdrop"],
       );
-      const refused = yield* sources
-        .consumeResetCredit({ sourceId: LASTDROP_SOURCE_ID, accountId: "main", creditId: "x" })
-        .pipe(Effect.exit);
-      assert.isTrue(Exit.isFailure(refused));
+      const ours = { sourceId: LASTDROP_SOURCE_ID, accountId: "main", creditId: "g1" };
+      // Without lastdrop's accounts running (no redeemer), refused rather than sent to T3's sources.
+      assert.isTrue(Exit.isFailure(yield* sources.consumeResetCredit(ours).pipe(Effect.exit)));
+      const redeemed: string[] = [];
+      const unset = setLastdropRedeemer((accountId, creditId) =>
+        Effect.sync(() => {
+          redeemed.push(`${accountId}:${creditId}`);
+          return { outcome: "nothingToReset" as const };
+        }),
+      );
+      assert.strictEqual((yield* sources.consumeResetCredit(ours)).outcome, "nothingToReset");
+      assert.deepStrictEqual(redeemed, ["main:g1"]);
+      unset();
       const passed = yield* sources.consumeResetCredit({
         sourceId: hub.id,
         accountId: "a",

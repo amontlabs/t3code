@@ -1,17 +1,21 @@
 /**
  * lastdrop's accounts as one of T3's usage limit sources (the snapshots hubs report), so Usage → Limits pools
- * every Claude account, Z.ai and OpenRouter. Pure conversion plus a process-wide feed the publisher writes and
- * the `UsageLimitSources` wrapper reads (`limitSourcesLive.ts`); with nothing published it adds nothing.
+ * every Claude account, Z.ai and OpenRouter. Pure conversion plus a process-wide feed (and the reset redeemer)
+ * the publisher sets and the `UsageLimitSources` wrapper reads (`limitSourcesLive.ts`); with nothing published it
+ * adds nothing.
  */
 import {
+  type ProviderConsumeResetCreditResult,
   type ServerProviderUsageLimits,
   type ServerProviderUsageWindow,
   type UsageLimitSourceAccount,
+  type UsageLimitSourceError,
   type UsageLimitSourceSnapshot,
   ProviderDriverKind,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import type * as Effect from "effect/Effect";
 import type {
   AccountsView,
   EndpointWindow,
@@ -22,7 +26,7 @@ import type {
 import type { CodexAccountsView } from "./codex/accounts.ts";
 import type { EndpointsView } from "./endpointsView.ts";
 
-/** The source's id; reset credits are never redeemed through it. */
+/** The source's id; a reset redeemed through it is spent on the row's own fork account. */
 export const LASTDROP_SOURCE_ID = UsageLimitSourceId.make("lastdrop");
 const SOURCE_LABEL = "lastdrop";
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
@@ -100,13 +104,13 @@ export function toUsageWindow(
 }
 
 /**
- * Banked resets (Anthropic's grants) as a count only: lastdrop spends none from T3, so no credit id. Not sent for
- * an account a T3 provider also reports (`nativeEmails`): T3 takes the fresher count's source as the one to redeem
- * through, and ours has no credit id, so its **Use reset** would disappear.
+ * Banked resets (Anthropic's grants), with the one Anthropic redeems next as the credit id: **Use reset** spends
+ * it on this account's own sign-in (`limitSourcesLive.ts`), never Claude Code's own login.
  */
 function resetCredits(
   account: LimitResets | undefined,
   windows: ReadonlyArray<UsageWindow>,
+  nextId: string | undefined,
 ): ServerProviderUsageLimits["resetCredits"] {
   const all = [account, ...windows.map((window) => window.resets)].filter(
     (resets): resets is LimitResets => resets !== undefined && resets.count > 0,
@@ -119,7 +123,11 @@ function resetCredits(
       .filter(Number.isFinite)
       .toSorted((a, b) => a - b)[0],
   );
-  return { availableCount, ...(next !== undefined ? { nextExpiresAt: next } : {}) };
+  return {
+    availableCount,
+    ...(next !== undefined ? { nextExpiresAt: next } : {}),
+    ...(nextId !== undefined ? { nextCreditId: nextId } : {}),
+  };
 }
 
 function limits(input: {
@@ -158,7 +166,8 @@ const safely = (now: number, make: () => ServerProviderUsageLimits): ServerProvi
   }
 };
 
-const emailKey = (email: string): string => email.trim().toLowerCase();
+/** A Codex account's row id is this and its key; a Claude account's is its key. */
+export const CODEX_ROW = "codex-";
 
 /** One of lastdrop's Codex accounts: T3's own windows for its last reading (`codex/routing.ts`). */
 function codexAccount(
@@ -170,7 +179,7 @@ function codexAccount(
     : (account.error ?? (account.usageLimits === undefined ? "No reading yet." : undefined));
   return {
     // Unique within the source, beside the Claude accounts' keys.
-    id: `codex-${account.key}`,
+    id: `${CODEX_ROW}${account.key}`,
     driver: CODEX_DRIVER,
     ...(account.email ? { email: account.email } : {}),
     ...(account.plan ? { plan: account.plan } : {}),
@@ -191,11 +200,8 @@ export function lastdropLimitSource(input: {
   readonly codex?: CodexAccountsView | undefined;
   readonly endpoints: EndpointsView | undefined;
   readonly now: number;
-  /** E-mails T3's own providers report (any case): their accounts get no reset count from us. */
-  readonly nativeEmails?: ReadonlySet<string>;
 }): UsageLimitSourceSnapshot | undefined {
   const { now } = input;
-  const native = new Set([...(input.nativeEmails ?? [])].map(emailKey));
   const claude = (input.accounts?.accounts ?? []).map((account): UsageLimitSourceAccount => ({
     id: account.key,
     driver: CLAUDE_DRIVER,
@@ -211,9 +217,7 @@ export function lastdropLimitSource(input: {
           account.signIn === "ok"
             ? account.error
             : (account.signInDetail ?? SIGN_IN_PROBLEMS[account.signIn]),
-        ...(account.email && native.has(emailKey(account.email))
-          ? {}
-          : { resets: resetCredits(account.resets, account.windows) }),
+        resets: resetCredits(account.resets, account.windows, account.nextResetId),
       }),
     ),
   }));
@@ -305,3 +309,21 @@ export const onLastdropSources = feed.subscribe;
 export const resetLastdropSources = (): void => {
   feed.publish([]);
 };
+
+/** Spends one banked reset on the account a row of this source names (its `id`). */
+export type LastdropRedeemer = (
+  accountId: string,
+  creditId: string,
+) => Effect.Effect<ProviderConsumeResetCreditResult, UsageLimitSourceError>;
+
+let redeemer: LastdropRedeemer | undefined;
+
+/** Set by the publisher layer for its lifetime, like the feed; the returned function unsets it. */
+export const setLastdropRedeemer = (next: LastdropRedeemer): (() => void) => {
+  redeemer = next;
+  return () => {
+    if (redeemer === next) redeemer = undefined;
+  };
+};
+
+export const lastdropRedeemer = (): LastdropRedeemer | undefined => redeemer;

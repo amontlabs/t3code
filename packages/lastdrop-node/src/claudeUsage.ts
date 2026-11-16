@@ -15,6 +15,7 @@ import {
   isCloudflarePage,
   type LimitResets,
   newestCachedUsage,
+  nextGrantId,
   parseCredentials,
   placeGrants,
   planDisplayNameFromProfile,
@@ -32,6 +33,30 @@ import type { StatusStore } from "./statusStore.ts";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+const resetUrl = (organization: string) =>
+  `https://api.anthropic.com/api/organizations/${encodeURIComponent(organization)}/reset_rate_limits`;
+// T3's `claudeResetCredits.ts` checks the same shapes before claiming.
+const GRANT_ID = /^[a-z0-9_-]{1,40}$/;
+const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** What redeeming one banked reset did (T3's `ProviderConsumeResetCreditOutcome`). */
+export type ResetOutcome = "reset" | "nothingToReset" | "alreadyRedeemed" | "noCredit";
+
+const CLAIM_OUTCOMES: Readonly<Record<string, ResetOutcome>> = {
+  reset: "reset",
+  not_limited: "nothingToReset",
+  already_used: "alreadyRedeemed",
+  ineligible: "noCredit",
+};
+
+/** A reset that wasn't redeemed. `settled`: Anthropic answered, so a retry is a new claim (new request id). */
+export class ResetRedeemError extends Error {
+  readonly settled: boolean;
+  constructor(message: string, settled: boolean) {
+    super(message);
+    this.settled = settled;
+  }
+}
 
 export type UsageErrorKind =
   | "notConfigured"
@@ -57,6 +82,8 @@ export interface UsageSnapshot {
   readonly credits?: ExtraCredits | undefined;
   /** The account's own resets (not a model row's). */
   readonly resets?: LimitResets | undefined;
+  /** The banked reset Anthropic redeems next (any row's). */
+  readonly nextResetId?: string | undefined;
   /** Where the numbers came from: Claude Code's copy, or Anthropic just now. */
   readonly source: "cache" | "endpoint";
   /** When the numbers were read (epoch ms). */
@@ -87,11 +114,20 @@ export class HourlyCache<V> {
     this.entries.set(key, { checked: now, value });
     return value;
   }
+
+  forget(key: string): void {
+    this.entries.delete(key);
+  }
 }
 
 export type FetchLike = (
   url: string,
-  init: { readonly headers: Record<string, string>; readonly signal?: AbortSignal },
+  init: {
+    readonly headers: Record<string, string>;
+    readonly signal?: AbortSignal;
+    readonly method?: "POST";
+    readonly body?: string;
+  },
 ) => Promise<{
   readonly status: number;
   readonly headers: { get(name: string): string | null };
@@ -233,7 +269,80 @@ export class ClaudeUsage {
       plan = shown ?? creds.plan;
     }
     const placed = placeGrants(grants, base.windows);
-    return { ...base, windows: placed.windows, resets: placed.account, plan };
+    const nextResetId = nextGrantId(grants);
+    return {
+      ...base,
+      windows: placed.windows,
+      resets: placed.account,
+      plan,
+      ...(nextResetId === undefined ? {} : { nextResetId }),
+    };
+  }
+
+  /**
+   * Redeems a banked reset on the account's own sign-in (its folder's keychain item and organization), as Claude
+   * Code's `/usage` does. `requestId` makes a retry of an unanswered claim the same claim.
+   */
+  async redeemReset(key: string, grantId: string, requestId: string): Promise<ResetOutcome> {
+    if (!GRANT_ID.test(grantId) || !REQUEST_ID.test(requestId)) {
+      throw new ResetRedeemError("Claude returned a malformed reset credit.", true);
+    }
+    const signedOut = new ResetRedeemError("Sign in to this account again to redeem resets.", true);
+    const folder = claudeFolder(this.options.paths, key);
+    if (folder === undefined) throw signedOut;
+    const raw = await storedCredentials(this.options.paths, folder);
+    const creds = raw === undefined ? undefined : parseCredentials(raw);
+    const config = await readJsonObject(`${folder}/.claude.json`);
+    const account = config?.["oauthAccount"];
+    const organization =
+      typeof account === "object" && account !== null
+        ? (account as Record<string, unknown>)["organizationUuid"]
+        : undefined;
+    if (!creds || !credentialsUsable(creds, this.now()) || typeof organization !== "string") {
+      throw signedOut;
+    }
+    const failed = new ResetRedeemError("Claude could not redeem the reset.", false);
+    let status: number;
+    let text: string;
+    try {
+      const response = await this.options.fetch(resetUrl(organization), {
+        method: "POST",
+        headers: claudeCodeOAuthHeaders(
+          creds.accessToken,
+          await this.options.version(),
+          this.options.sessionId,
+        ),
+        body: JSON.stringify({ program: "cedar_ember", grant_id: grantId, request_id: requestId }),
+        signal: AbortSignal.timeout(25_000),
+      });
+      status = response.status;
+      text = await response.text();
+    } catch {
+      throw failed;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    this.grantCache.forget(key);
+    this.log(`anthropic: redeeming a reset on ${key} answered ${status}`);
+    if (status === 429) {
+      throw new ResetRedeemError("Claude is rate limiting resets. Try again soon.", true);
+    }
+    if (status === 401 || status === 403) throw signedOut;
+    const result =
+      status >= 200 && status < 300 && typeof body === "object" && body !== null
+        ? (body as Record<string, unknown>)["result"]
+        : undefined;
+    if (result === "cooldown") {
+      throw new ResetRedeemError("Claude resets are cooling down. Try again later.", true);
+    }
+    // "unavailable" and anything unknown keep the request id, so a retry addresses the same claim.
+    const outcome = typeof result === "string" ? CLAIM_OUTCOMES[result] : undefined;
+    if (outcome === undefined) throw failed;
+    return outcome;
   }
 
   private async request(url: string, token: string, what: string) {

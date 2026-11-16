@@ -1,6 +1,6 @@
 /**
  * Test support: a temporary home with a fake `security` tool, so tests never read or write the real
- * `~/.claude`, `~/.claude-accounts`, `~/.t3` or the keychain.
+ * `~/.claude`, `~/.t3` or the keychain.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

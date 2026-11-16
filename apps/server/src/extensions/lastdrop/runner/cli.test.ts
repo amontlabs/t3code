@@ -194,7 +194,7 @@ describe("the runner script", () => {
     const remove = await run(["--agents", "remove", "review"]);
     // As the lastdrop app: 1, not curl's 22.
     expect(remove.code).toBe(1);
-    expect(remove.stdout).toMatch(/doesn't change them/);
+    expect(remove.stdout).toMatch(/doesn't change lastdrop's agents/);
   });
 
   it("the other flags answer plainly", async () => {

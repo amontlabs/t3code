@@ -51,6 +51,16 @@ export interface CodexLimitSnapshot {
   } | null;
 }
 
+/** The account's banked resets, as `account/rateLimits/read` reports them (`rateLimitResetCredits`). */
+export interface CodexResetCredits {
+  readonly availableCount: number;
+  readonly credits?: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly expiresAt?: number | null;
+  }> | null;
+}
+
 /** An account's last reading. */
 export interface CodexUsageRecord {
   /** Epoch ms of the reading (or of the failed read). */
@@ -58,6 +68,7 @@ export interface CodexUsageRecord {
   readonly email?: string | undefined;
   readonly plan?: string | undefined;
   readonly limits?: CodexLimitSnapshot | undefined;
+  readonly resetCredits?: CodexResetCredits | undefined;
   /** The last read failed; the limits are the last good ones. */
   readonly error?: string | undefined;
 }
@@ -71,13 +82,16 @@ function parseUsage(value: Record<string, unknown> | undefined): CodexUsageRecor
   const records: Record<string, CodexUsageRecord> = {};
   for (const [key, entry] of Object.entries(value ?? {})) {
     if (!isRecord(entry) || typeof entry["readAt"] !== "number") continue;
-    const { readAt, email, plan, limits, error } = entry;
+    const { readAt, email, plan, limits, resetCredits, error } = entry;
     records[key] = {
       readAt,
       ...(typeof email === "string" ? { email } : {}),
       ...(typeof plan === "string" ? { plan } : {}),
       // Our own file: the snapshot is stored as Codex reported it.
       ...(isRecord(limits) ? { limits: limits as CodexLimitSnapshot } : {}),
+      ...(isRecord(resetCredits) && typeof resetCredits["availableCount"] === "number"
+        ? { resetCredits: resetCredits as unknown as CodexResetCredits }
+        : {}),
       ...(typeof error === "string" ? { error } : {}),
     };
   }
