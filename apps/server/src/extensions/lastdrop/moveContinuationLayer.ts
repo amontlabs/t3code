@@ -60,7 +60,7 @@ const continueAfter = Effect.fn("LastdropMoveContinuation.continueAfter")(functi
     yield* sessions.release({
       providerSessionId: providerThread.providerSessionId,
       reason: "manual_shutdown",
-      detail: `lastdrop: Claude account ${pending.from} reached its usage limit; the thread continues on ${pending.to}.`,
+      detail: `lastdrop: account ${pending.from} reached its usage limit; the thread continues on ${pending.to}.`,
     });
   }
   yield* Effect.logInfo("lastdrop.move.continue", {

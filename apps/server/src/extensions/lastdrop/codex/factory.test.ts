@@ -49,7 +49,10 @@ function fakeClient(responses: Record<string, unknown>) {
   return { client: client as unknown as Client, handlers };
 }
 
-function fakeRouting(route: { account: string; home: string } | undefined) {
+function fakeRouting(
+  route: { account: string; home: string } | undefined,
+  next: string | undefined = undefined,
+) {
   const threads: Array<[string, string, string]> = [];
   const limits: Array<[string, CodexLimitSnapshot]> = [];
   const routing: CodexRouting = {
@@ -60,6 +63,7 @@ function fakeRouting(route: { account: string; home: string } | undefined) {
     observeLimits: async (...entry) => {
       limits.push(entry);
     },
+    atLimit: async () => next,
     log: () => {},
   };
   return { routing, threads, limits };
@@ -161,5 +165,67 @@ describe("the wrapped factory", () => {
       ]);
       assert.deepStrictEqual(limits, [["Work", snapshot]]);
     }),
+  );
+
+  it.effect(
+    "words a turn's limit failure once, from Codex's error or, without one, its completion",
+    () =>
+      Effect.gen(function* () {
+        const { client, handlers } = fakeClient({});
+        const moves: unknown[] = [];
+        const wrapped = wrapCodexClientFactory(
+          { open: () => Effect.succeed(client) },
+          {
+            routing: fakeRouting({ account: "Work", home: "/d/codex/Work" }, "Home").routing,
+            sharedHome: HOME,
+            onLimitMove: (move) => moves.push(move),
+          },
+        );
+        const routed = yield* Effect.scoped(wrapped.open(openInput()));
+        const seen: unknown[] = [];
+        for (const method of ["error", "turn/completed"] as const)
+          yield* routed.handleServerNotification(method, (payload) =>
+            Effect.sync(() => void seen.push(payload)),
+          );
+        const limit = {
+          message: "You've hit your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+        };
+        const notice =
+          "lastdrop: Codex account Work reached its usage limit; the thread continues on Home.";
+        const failed = (id: string) => ({
+          threadId: "n",
+          turn: { id, status: "failed", error: limit },
+        });
+        // Ended by its completion alone: the completion carries the notice.
+        yield* handlers.get("turn/completed")!(failed("t1"));
+        // Error first: its details carry the notice, and the completion after it stays Codex's.
+        yield* handlers.get("error")!({
+          threadId: "n",
+          turnId: "t2",
+          willRetry: false,
+          error: limit,
+        });
+        yield* handlers.get("turn/completed")!(failed("t2"));
+        // Codex retries this one: not the turn's end.
+        const retried = { threadId: "n", turnId: "t3", willRetry: true, error: limit };
+        yield* handlers.get("error")!(retried);
+        assert.deepStrictEqual(seen, [
+          {
+            threadId: "n",
+            turn: { id: "t1", status: "failed", error: { ...limit, message: notice } },
+          },
+          {
+            threadId: "n",
+            turnId: "t2",
+            willRetry: false,
+            error: { ...limit, additionalDetails: notice },
+          },
+          failed("t2"),
+          retried,
+        ]);
+        const move = { threadId: "thread-1", from: "Work", to: "Home" };
+        assert.deepStrictEqual(moves, [move, move]);
+      }),
   );
 });

@@ -112,7 +112,7 @@ const services = Layer.mergeAll(
       Effect.map((agents) => agents.layer),
     ),
   ),
-  // The continuation after a Claude thread moved at a usage limit; it too reaches T3's orchestrator.
+  // The continuation after a Claude or Codex thread moved at a usage limit; it too reaches T3's orchestrator.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/moveContinuationLayer.ts")).pipe(
       Effect.map((move) => move.layer),

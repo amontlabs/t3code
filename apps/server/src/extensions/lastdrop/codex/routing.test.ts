@@ -80,6 +80,12 @@ describe("routing over lastdrop's files", () => {
       assert.strictEqual((await routing.route("thread-1"))?.account, "B");
       await routing.observeLimits("B", { primary: { usedPercent: 100 } });
       assert.strictEqual((await routing.route("thread-1"))?.account, "A");
+      // A turn that ends at A's limit marks it full before any reading says so; with B full too, none has room.
+      await routing.recordThread("A", "thread-1", "native-1");
+      assert.strictEqual(await routing.atLimit("A", "thread-1"), undefined);
+      await routing.observeLimits("B", { primary: { usedPercent: 10 } });
+      assert.strictEqual(await routing.atLimit("A", "thread-1"), "B");
+      assert.strictEqual((await routing.route("thread-1"))?.account, "B");
     } finally {
       NodeFS.rmSync(dataDir, { recursive: true, force: true });
     }

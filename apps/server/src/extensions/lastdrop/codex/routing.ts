@@ -117,13 +117,26 @@ export function codexRoom(
   };
 }
 
-/** Every account's room, in the list's order. */
-async function codexRooms(files: CodexAccountFiles, now: number): Promise<CodexRoom[]> {
+/** Every account's room, in the list's order; `fullUntil` holds the accounts seen at a limit (epoch ms). */
+async function codexRooms(
+  files: CodexAccountFiles,
+  now: number,
+  fullUntil: ReadonlyMap<string, number>,
+): Promise<CodexRoom[]> {
   const [list, usage] = await Promise.all([files.list(), files.usage()]);
   return Promise.all(
-    list.accounts.map(async (account) =>
-      codexRoom(account.key, await files.signedIn(account.key), usage[account.key], now),
-    ),
+    list.accounts.map(async (account) => {
+      const room = codexRoom(
+        account.key,
+        await files.signedIn(account.key),
+        usage[account.key],
+        now,
+      );
+      const marked = fullUntil.get(account.key);
+      return marked === undefined || marked <= now || (room.fullUntil ?? 0) >= marked
+        ? room
+        : { ...room, fullUntil: marked };
+    }),
   );
 }
 
@@ -138,10 +151,16 @@ export function makeCodexRouting(options: {
   readonly log: (line: string) => void;
 }): LastdropCodexRouting {
   const { files, now, log } = options;
+  // A turn that ended at a limit marks its account here (the server's memory), so the reopen leaves it even
+  // before Codex's own update reaches the reading.
+  const fullUntil = new Map<string, number>();
   return {
     route: async (threadId) => {
       const at = now();
-      const [rooms, threads] = await Promise.all([codexRooms(files, at), files.threads()]);
+      const [rooms, threads] = await Promise.all([
+        codexRooms(files, at, fullUntil),
+        files.threads(),
+      ]);
       const choice = chooseCodexAccount({
         rooms,
         recorded: recordedCodexAccount(threads, threadId),
@@ -153,7 +172,7 @@ export function makeCodexRouting(options: {
     },
     pick: async () => {
       const at = now();
-      const choice = chooseCodexAccount({ rooms: await codexRooms(files, at), now: at });
+      const choice = chooseCodexAccount({ rooms: await codexRooms(files, at, fullUntil), now: at });
       return choice === undefined
         ? undefined
         : { account: choice.key, home: files.home(choice.key) };
@@ -167,6 +186,16 @@ export function makeCodexRouting(options: {
         const { error: _, ...rest } = current ?? { readAt: now() };
         return { ...rest, readAt: now(), limits };
       }),
+    atLimit: async (account) => {
+      const at = now();
+      const reset = codexUsageLimitResetAt((await files.usage())[account]?.limits);
+      const resetMs = reset === null ? Number.NaN : Date.parse(reset);
+      fullUntil.set(account, resetMs > at ? resetMs : at + FULL_WITHOUT_RESET_MS);
+      const choice = chooseCodexAccount({ rooms: await codexRooms(files, at, fullUntil), now: at });
+      return choice === undefined || choice.why === "allFull" || choice.key === account
+        ? undefined
+        : choice.key;
+    },
     log,
   };
 }
