@@ -5,8 +5,7 @@ name: lastdrop release
 # with the files electron-updater reads (latest-mac.yml, zip, blockmap). See FORK.md, "Releases".
 #
 # Runs on a tag pushed by a person or by lastdrop-sync.yml (with its own token, so the push starts
-# workflows). A failed release opens an issue labelled lastdrop-sync, which the app warns about; the
-# next good release closes it.
+# workflows). The app warns while the latest finished run of this workflow failed (SyncNotice.tsx).
 
 on:
   push:
@@ -139,36 +138,3 @@ jobs:
         run: |
           keychain="$RUNNER_TEMP/lastdrop-signing.keychain-db"
           if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
-
-  report:
-    name: Report the outcome
-    needs: release
-    if: always() && (needs.release.result == 'success' || needs.release.result == 'failure')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.ref_name }}
-      RESULT: ${{ needs.release.result }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    steps:
-      - name: Open or close the release issue
-        shell: bash
-        run: |
-          set -euo pipefail
-          open="$(gh issue list --repo "$GITHUB_REPOSITORY" --label lastdrop-sync --state open \
-            --json number,title --jq '.[] | select(.title | startswith("Release ")) | "\(.number)\t\(.title)"')"
-          if [[ "$RESULT" == success ]]; then
-            while IFS=$'\t' read -r number _; do
-              [[ -n "$number" ]] && gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Released $TAG."
-            done <<< "$open"
-            exit 0
-          fi
-          title="Release $TAG failed"
-          if grep -qF "$title" <<< "$open"; then exit 0; fi
-          gh label create lastdrop-sync --repo "$GITHUB_REPOSITORY" --color D93F0B \
-            --description "A fork update that needs attention (the app warns while one is open)" --force
-          gh issue create --repo "$GITHUB_REPOSITORY" --label lastdrop-sync --title "$title" \
-            --body "Building or publishing \`$TAG\` failed, so no update reached the app. Run: $RUN_URL. Fix the cause, then delete the tag and push it again, or push the next \`-ld.<n>\` tag. The next good release closes this issue."

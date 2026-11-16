@@ -1,6 +1,6 @@
 /**
- * Sidebar warning when a fork update is stuck: an upstream sync Claude could not finish, or a release
- * that failed to build. Electron's updater only sees published releases, so without this a stuck sync
+ * Sidebar warning when a fork update is stuck: an upstream sync Claude could not finish (an open PR), or a
+ * release run that failed. Electron's updater only sees published releases, so without this a stuck sync
  * looks the same as being up to date. Reads the repository's public API, no sign-in.
  */
 import { TriangleAlertIcon } from "lucide-react";
@@ -10,10 +10,10 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { isElectron } from "~/env";
 import { readLocalApi } from "~/localApi";
 
-import { type SyncNotice, syncIssuesUrl, syncNoticeFromIssues } from "./syncNoticeView";
+import { type SyncNotice, releaseRunsUrl, syncNotice, syncPullsUrl } from "./syncNoticeView";
 
 const REPOSITORY = import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
-// Unauthenticated GitHub API calls are limited to 60 an hour per address.
+// Unauthenticated GitHub API calls are limited to 60 an hour per address; this makes two per poll.
 const POLL_MS = 30 * 60 * 1000;
 
 export function LastdropSyncNotice() {
@@ -26,15 +26,17 @@ function SyncNoticeContent({ repository }: { readonly repository: string }) {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- polls GitHub, outside React
   useEffect(() => {
     const controller = new AbortController();
-    const check = () =>
-      fetch(syncIssuesUrl(repository), {
+    const read = (url: string) =>
+      fetch(url, {
         signal: controller.signal,
         headers: { Accept: "application/vnd.github+json" },
-      })
-        .then((response) => (response.ok ? response.json() : undefined))
-        .then((body: unknown) => {
-          if (body !== undefined) setNotice(syncNoticeFromIssues(body));
-        })
+      }).then((response) =>
+        response.ok ? (response.json() as Promise<unknown>) : Promise.reject(response),
+      );
+    // Either call failing (rate limit, offline) keeps the last answer rather than clearing it.
+    const check = () =>
+      Promise.all([read(syncPullsUrl(repository)), read(releaseRunsUrl(repository))])
+        .then(([pulls, runs]) => setNotice(syncNotice(pulls, runs)))
         .catch(() => {});
     void check();
     const timer = window.setInterval(check, POLL_MS);

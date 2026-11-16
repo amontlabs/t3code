@@ -13,7 +13,7 @@ What it adds:
 
 Download it from [Releases](https://github.com/amontlabs/t3code/releases) (Apple Silicon Macs). The first time, open it from System Settings → Privacy & Security.
 
-**Updates:** within a few hours of each stable T3 Code release, the fork merges it in, checks it and publishes an update, which the app offers like any other. When that gets stuck (a conflict Claude could not resolve, failing checks, a failed build), the sidebar shows a warning linking to the pull request or issue. How it works: [FORK.md](./FORK.md#sync).
+**Updates:** within a few hours of each stable T3 Code release, the fork merges it in, checks it and publishes an update, which the app offers like any other. When that gets stuck (a conflict Claude could not resolve, failing checks, a failed build), the sidebar shows a warning linking to the pull request or the failed release run. How it works: [FORK.md](./FORK.md#sync).
 
 ---
 
