@@ -1,7 +1,7 @@
 // Ported from headroom Tests/LastDropTests/SubagentTests.swift, "Choosing an account" (see PORTING.md).
 import { describe, expect, it } from "vite-plus/test";
 
-import { type Candidate, ownAccountUuid, pick, pickForThread } from "./accounts.ts";
+import { type Candidate, ownAccountUuid, pick, pickForThread, routingBadges } from "./accounts.ts";
 import { planName, planSize } from "./planSize.ts";
 import { readingFromWindows, usedForModel } from "./usage.ts";
 
@@ -97,6 +97,26 @@ describe("choosing an account", () => {
     const ultra = candidate("Ultra", 0, 0);
     expect(pick([max, ultra], ceiling(0.9, 0.9))?.name).toBe("Ultra");
     expect(pick([max], ceiling(0.9, 0.9))).toBeUndefined();
+  });
+
+  it("badges name where threads, subagents and each model's subagents go", () => {
+    const reading = (session: number, weekly: number, models: Record<string, number> = {}) => ({
+      session,
+      weekly,
+      models,
+      usable: true,
+    });
+    // Ultra has the most room in Pro-sized windows (threads); Max 5x is the smallest plan with room
+    // (subagents) but is out of Fable, so Fable subagents go to Ultra.
+    const badges = routingBadges(
+      [
+        { id: "main", plan: "Ultra", reading: reading(0, 50, { Fable: 40 }) },
+        { id: "claude-2", plan: "Max 5x", reading: reading(10, 60, { Fable: 100 }) },
+        { id: "signed-out", reading: { ...reading(0, 0), usable: false } },
+      ],
+      ceiling(0.95, 1),
+    );
+    expect(badges).toEqual({ main: ["Threads", "Fable"], "claude-2": ["Subagents"] });
   });
 
   it("the session's own account takes subagents up to the ceiling", () => {

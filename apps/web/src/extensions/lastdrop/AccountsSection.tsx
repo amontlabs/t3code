@@ -3,13 +3,9 @@
  * the server's `GET /api/lastdrop/accounts`; then Z.ai and OpenRouter (`GET /api/lastdrop/endpoints`). Shown on
  * every Claude-driver card; on lastdrop's own Z.ai or OpenRouter instance, only that provider.
  */
-import * as Option from "effect/Option";
-import { useEffect, useState } from "react";
-
 import { Badge } from "~/components/ui/badge";
 import { SettingsSection } from "~/components/settings/settingsLayout";
 import { cn } from "~/lib/utils";
-import { usePreparedConnection } from "~/state/session";
 
 import type { ExtensionInstanceSectionProps } from "../index";
 import type {
@@ -25,65 +21,7 @@ import {
   signInLabel,
   usedLabel,
 } from "./accountsView";
-
-const ACCOUNTS_ROUTE = "/api/lastdrop/accounts";
-const ENDPOINTS_ROUTE = "/api/lastdrop/endpoints";
-const REFRESH_MS = 30_000;
-
-type Load<T = AccountsResponse> =
-  | { readonly state: "loading" }
-  | { readonly state: "failed"; readonly message: string }
-  | { readonly state: "loaded"; readonly response: T };
-
-/** One read of a lastdrop route; never throws. */
-async function readRoute<T>(
-  route: string,
-  baseUrl: string,
-  bearer: string | undefined,
-): Promise<Load<T>> {
-  const response = await fetch(new URL(route, baseUrl), {
-    credentials: bearer === undefined ? "include" : "omit",
-    headers: bearer === undefined ? {} : { authorization: `Bearer ${bearer}` },
-  }).catch(() => undefined);
-  if (response === undefined)
-    return { state: "failed", message: "The server couldn't be reached." };
-  if (!response.ok) return { state: "failed", message: `The server answered ${response.status}.` };
-  const body = (await response.json().catch(() => undefined)) as T | undefined;
-  return body === undefined
-    ? { state: "failed", message: "The server's answer wasn't accounts." }
-    : { state: "loaded", response: body };
-}
-
-function useRoute<T>(
-  environmentId: ExtensionInstanceSectionProps["environmentId"],
-  route: string,
-): Load<T> {
-  const prepared = usePreparedConnection(environmentId);
-  const connection = Option.getOrUndefined(prepared);
-  const baseUrl = connection?.httpBaseUrl;
-  const authorization = connection?.httpAuthorization ?? null;
-  const bearer = authorization?._tag === "Bearer" ? authorization.token : undefined;
-  const remote = authorization?._tag === "Dpop";
-  const [load, setLoad] = useState<Load<T>>({ state: "loading" });
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Polls the server's accounts route on a timer while mounted.
-  useEffect(() => {
-    if (baseUrl === undefined || remote) return;
-    let stopped = false;
-    const read = () =>
-      void readRoute<T>(route, baseUrl, bearer).then((next) => {
-        if (!stopped) setLoad(next);
-      });
-    read();
-    const timer = setInterval(read, REFRESH_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [route, baseUrl, bearer, remote]);
-
-  return remote ? { state: "failed", message: "Accounts show on the Mac that runs them." } : load;
-}
+import { ACCOUNTS_ROUTE, ENDPOINTS_ROUTE, useRoute } from "./lastdropRoute";
 
 function Meter(props: {
   readonly label: string;
@@ -214,7 +152,7 @@ export function AccountsSection(props: ExtensionInstanceSectionProps) {
   const weeklyThreshold = view?.weeklyThreshold ?? 0.9;
   if (own !== undefined) {
     return (
-      <SettingsSection title="Usage (lastdrop)">
+      <SettingsSection title="Usage">
         <ul className="divide-y divide-border text-sm">
           <EndpointRow
             endpoint={own}

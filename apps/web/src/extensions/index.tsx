@@ -72,5 +72,8 @@ export function modelIconDriver(
 /** The sidebar's Usage button, with each account's limits on hover (`SidebarChrome.tsx` seam). */
 export { UsageSidebarItem } from "./lastdrop/UsageSidebarItem";
 
+/** **Usage → Limits** with one bar per account (`UsageLimits.tsx` seam). */
+export { UsageLimitsByAccount } from "./lastdrop/UsageLimitsByAccount";
+
 /** Sidebar warning when a fork update is stuck (`SidebarChrome.tsx` seam). */
 export { LastdropSyncNotice } from "./lastdrop/SyncNotice";

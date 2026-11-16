@@ -98,6 +98,9 @@ jobs:
           node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 \
             --build-version "$VERSION" --output-dir release --verbose
 
+      - name: Check the server bundle has one entry
+        run: node scripts/lastdrop/check-server-bundle.ts apps/server/dist
+
       - name: Check the signature
         shell: bash
         run: |

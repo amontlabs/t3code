@@ -13,6 +13,7 @@ import {
   pool,
   currentWindows,
   readingFromStatus,
+  routingBadges,
   windowsFromStatus,
   type SignInState,
   statusWithReading,
@@ -61,6 +62,8 @@ export interface AccountView {
   /** Why the last read failed, if it did. */
   readonly error?: string | undefined;
   readonly rateLimitedUntil?: number | undefined;
+  /** Where new work goes now: "Threads", "Subagents", or a model's subagents ("Fable"). */
+  readonly nextFor?: ReadonlyArray<string> | undefined;
 }
 
 export interface AccountsView {
@@ -232,6 +235,7 @@ export class AccountsMonitor {
     standalone: boolean,
   ): Promise<AccountsView> {
     const views: AccountView[] = [];
+    const readings: Array<Parameters<typeof routingBadges>[0][number]> = [];
     for (const account of accounts) {
       const key = account.key;
       const entry = standalone ? undefined : this.entries.get(key);
@@ -242,14 +246,17 @@ export class AccountsMonitor {
         this.options.paths,
         claudeFolder(this.options.paths, key),
       );
+      const plan = entry?.snapshot?.plan ?? status?.plan ?? signIn?.plan;
+      const signInState = signIn?.state ?? (standalone ? (status?.signIn ?? "ok") : "signedOut");
+      readings.push({ id: key, plan, reading: { ...reading, usable: signInState === "ok" } });
       views.push(
         dropUndefined({
           key,
           name: account.name,
           isMain: isMain(account),
           email,
-          plan: entry?.snapshot?.plan ?? status?.plan ?? signIn?.plan,
-          signIn: signIn?.state ?? (standalone ? (status?.signIn ?? "ok") : "signedOut"),
+          plan,
+          signIn: signInState,
           signInDetail: signIn?.detail ?? (standalone ? status?.signInDetail : undefined),
           signInEndsSoon: signIn ? endsSoon(signIn, now) : false,
           signInEndsAt: signIn?.endsAt ?? (standalone ? status?.signInEndsAt : undefined),
@@ -273,11 +280,14 @@ export class AccountsMonitor {
       );
     }
     const claude = claudeView(config);
+    const badges = routingBadges(readings, claude);
     return {
       updatedAt: now,
       sessionThreshold: claude.sessionThreshold,
       weeklyThreshold: claude.weeklyThreshold,
-      accounts: views,
+      accounts: views.map((view) =>
+        badges[view.key] ? { ...view, nextFor: badges[view.key] } : view,
+      ),
       ...(standalone ? { readBy: "standalone" as const } : {}),
     };
   }

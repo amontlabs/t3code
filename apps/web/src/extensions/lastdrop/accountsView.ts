@@ -18,6 +18,8 @@ export interface AccountView {
   readonly readAt?: number;
   readonly error?: string;
   readonly rateLimitedUntil?: number;
+  /** Where new work goes now: "Threads", "Subagents", or a model's subagents ("Fable"). */
+  readonly nextFor?: ReadonlyArray<string>;
 }
 
 export interface AccountsView {

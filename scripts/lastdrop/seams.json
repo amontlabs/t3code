@@ -75,6 +75,10 @@
       "budget": 4,
       "why": "Usage button with each account's limits on hover; stuck-update warning"
     },
+    "apps/web/src/components/usage/UsageLimits.tsx": {
+      "budget": 2,
+      "why": "Usage → Limits shows one bar per account instead of pooled bars"
+    },
     "apps/web/src/components/chat/ModelListRow.tsx": {
       "budget": 3,
       "why": "model row icon from the agent's backend"

@@ -114,9 +114,9 @@ export const ENDPOINT_INSTANCE_IDS: Readonly<Record<EndpointProvider, string>> =
   openrouter: "openrouter",
 };
 
-/** Marks the instance as lastdrop's in T3's provider list. */
+/** The instance's name in T3's provider list and model picker: the provider's own. */
 export const endpointInstanceName = (provider: EndpointProvider): string =>
-  `${ENDPOINT_TITLES[provider]} (lastdrop)`;
+  ENDPOINT_TITLES[provider];
 
 export interface EndpointModel {
   readonly id: string;

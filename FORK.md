@@ -81,9 +81,16 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 ### `apps/web/src/components/sidebar/SidebarChrome.tsx` (budget 4)
 
 - **Lines**: import `LastdropSyncNotice` and `UsageSidebarItem` from `~/extensions` (after the `observeResize` import); the Usage button in `SidebarUtilityMenu` is `<UsageSidebarItem` instead of `<SidebarUtilityItem`, same three props; `<LastdropSyncNotice />` in `SidebarChromeFooter`, after `<SidebarUpdateArchitectureWarning />`.
-- **Why**: hovering the Usage icon shows each account's limits (every account Limits pools, lastdrop's included), in place of the plain "Usage" tooltip. Clicking still opens Usage. The notice warns when a fork update is stuck (see Sync).
+- **Why**: hovering the Usage icon shows each account's limits, one bar each, with where new Claude threads and subagents go (every account Limits shows, lastdrop's included), in place of the plain "Usage" tooltip. Clicking still opens Usage. The notice warns when a fork update is stuck (see Sync).
 - **Must survive**: the element for the Usage button with `icon`, `label` and `onClick`; the footer's update warnings.
 - **Conflict**: take upstream's file, re-add the import, swap the Usage button's component and put the notice back after upstream's update warnings. If upstream gives the button a hover of its own, drop the seam and check that theirs lists each account.
+
+### `apps/web/src/components/usage/UsageLimits.tsx` (budget 2)
+
+- **Lines**: the `UsageLimitsPooled` import comes from `~/extensions` as `UsageLimitsByAccount as UsageLimitsPooled` instead of `./UsageLimitsPooled`.
+- **Why**: **Usage → Limits** shows one bar per account and window (each with its reset, lastdrop's names and next-work badges), the same list as the Usage button's hover. T3's pooled bar merges several Claude accounts into one, which hides the separate limits lastdrop routes between.
+- **Must survive**: `UsageLimitsSection` rendering the imported component with `presentations` and `now`.
+- **Conflict**: take upstream's file and swap the import again. If upstream changes the pooled component's props, match them in `UsageLimitsByAccount`.
 
 ### `apps/web/src/components/chat/ModelListRow.tsx` (budget 3)
 
@@ -208,7 +215,7 @@ Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, pri
 - `endpoint-instances.json`: which provider instance ids lastdrop made (claimed on disk before T3's `create`), and the user's switch and colour on one lastdrop removed, put back if it is made again.
 - `endpoints/<provider>/`: the Z.ai/OpenRouter Claude Code profiles (key helper settings, onboarding, links into `~/.claude`); `endpoints/key-helper` prints the key from the keychain at launch.
 - T3's own `settings.json` gets `providerInstances.lastdropAgents: { driver, enabled: true }` whenever it has no such entry (at start, and after "Reset to defaults") (`agents/defaultOn.ts`), so "lastdrop agents" is on in a fresh home as its switch shows. It is the entry the switch writes, and an existing entry is never changed. The official app shows it as an unknown driver, read-only.
-- T3's own `settings.json` gets the `zai`/`openrouter` instances through `ServerSettingsService.updateProviderInstance` (labelled `(lastdrop)`, no key in them, the endpoint env inline in `--settings`). Each carries the marker `LASTDROP_ENDPOINT=<provider>` in its environment and `lastdropEndpoint` in its config; lastdrop changes only marked instances whose id it recorded, and only its own fields of them.
+- T3's own `settings.json` gets the `zai`/`openrouter` instances through `ServerSettingsService.updateProviderInstance` (labelled `Z.ai` and `OpenRouter`, no key in them, the endpoint env inline in `--settings`). Each carries the marker `LASTDROP_ENDPOINT=<provider>` in its environment and `lastdropEndpoint` in its config; lastdrop changes only marked instances whose id it recorded, and only its own fields of them.
 
 ### Rules other fork code must keep
 
@@ -217,7 +224,7 @@ Nothing in `~/.t3` depends on the bundle id; the id keeps macOS preferences, pri
 
 ### These instances in the official app, and uninstalling
 
-The official app reads the same `settings.json`, so it shows and runs the `(lastdrop)` instances too: they work there while `~/.t3/lastdrop/endpoints/` exists (Claude Code needs the profile and its key helper), but nothing updates them. If that folder is deleted, every thread on them fails at launch with Claude Code's `apiKeyHelper` error. The official app can't tell the fork is gone, so nothing disables them automatically. To uninstall: remove `Z.ai (lastdrop)` and `OpenRouter (lastdrop)` in Settings → Providers first (or delete the `zai` and `openrouter` entries of `providerInstances` in `~/.t3/userdata/settings.json` with both apps closed), then `~/.t3/lastdrop/`.
+The official app reads the same `settings.json`, so it shows and runs lastdrop's `zai` and `openrouter` instances too: they work there while `~/.t3/lastdrop/endpoints/` exists (Claude Code needs the profile and its key helper), but nothing updates them. If that folder is deleted, every thread on them fails at launch with Claude Code's `apiKeyHelper` error. The official app can't tell the fork is gone, so nothing disables them automatically. To uninstall: remove lastdrop's `Z.ai` and `OpenRouter` in Settings → Providers first (or delete the `zai` and `openrouter` entries of `providerInstances` in `~/.t3/userdata/settings.json` with both apps closed), then `~/.t3/lastdrop/`.
 
 **Data the fork reads and shares with the standalone lastdrop** (never rewritten by the fork): the agent catalog `agent-catalog.json` and the agents' model efforts `agent-models.json` (same folder, polled every 2 s); the account list `~/Library/Application Support/lastdrop/accounts.json` (or the older `claude-accounts.json`), each account's sign-in folder `~/.claude-accounts/<key>` and its Claude Code keychain item. The fork does write each account's profile, `~/.claude-accounts/<key>/profile/` (links into `~/.claude` and a `.claude.json` rebuilt from Main's), exactly as the standalone app does before a run; renewing a sign-in starts `claude -p` in the account's folder, which renews its keychain item. The service runs only on macOS, and not under vitest (T3's own server tests start the layer). While the standalone app runs (its `app.heartbeat` under a minute old), the fork reads its `usage.json` instead of asking Anthropic or renewing sign-ins itself.
 

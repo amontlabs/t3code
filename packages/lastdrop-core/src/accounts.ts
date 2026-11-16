@@ -3,7 +3,8 @@
  * plan under the ceiling (thresholds are the only limit); threads take the most room in Pro-sized windows.
  * Port of headroom's `SubagentAccounts`; rules in docs/claude-accounts.md ("Best account for a thread").
  */
-import { PRO_SIZE, type PlanSize } from "./planSize.ts";
+import { PRO_SIZE, type PlanSize, planSize } from "./planSize.ts";
+import { type Reading, usedForModel } from "./usage.ts";
 
 export interface Candidate {
   /** The account's id ("main", "claude-2"). */
@@ -110,6 +111,42 @@ export function pickForThread<C extends Candidate>(candidates: ReadonlyArray<C>)
       (c.modelUsed ?? 0) < THREAD_WEEKLY_FLOOR,
   );
   return best(roomy) ?? best(candidates.filter(hasRoom)) ?? unknown(candidates);
+}
+
+/**
+ * Where new work goes now, as badges per account id: "Threads" (a new T3 thread), "Subagents" (a delegated
+ * Claude run), and each model with its own weekly limit ("Fable": a subagent on that model). Port of headroom's
+ * `AppModel.routingBadges`. Accounts that can't run (`usable` false) take nothing.
+ */
+export function routingBadges(
+  accounts: ReadonlyArray<{
+    readonly id: string;
+    readonly reading: Reading;
+    readonly plan?: string | undefined;
+  }>,
+  ceiling: Ceiling,
+): Readonly<Record<string, ReadonlyArray<string>>> {
+  const usable = accounts.filter((a) => a.reading.usable);
+  const candidates = (model: string | undefined): Candidate[] =>
+    usable.map((a) => ({
+      id: a.id,
+      name: a.id,
+      sessionUsed: a.reading.session,
+      weeklyUsed: a.reading.weekly,
+      modelUsed: usedForModel(a.reading, model),
+      size: planSize(a.plan),
+    }));
+  const badges: Record<string, string[]> = {};
+  const mark = (id: string | undefined, badge: string) => {
+    if (id !== undefined) (badges[id] ??= []).push(badge);
+  };
+  mark(pickForThread(candidates(undefined))?.id, "Threads");
+  mark(pick(candidates(undefined), ceiling)?.id, "Subagents");
+  const models = new Set(usable.flatMap((a) => Object.keys(a.reading.models)));
+  for (const model of [...models].toSorted()) {
+    mark(pick(candidates(model.toLowerCase()), ceiling)?.id, model);
+  }
+  return badges;
 }
 
 /** True while the account can still answer: below 100% of both windows (and the model's week). */

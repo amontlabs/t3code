@@ -9,7 +9,7 @@ What it adds:
 - **Limits per account.** Hover over the usage icon to see what each account has left.
 - **Uses your existing T3 Code data.** It opens the same projects, threads and settings as the official app (`~/.t3`) and keeps its own files in `~/.t3/lastdrop/`. Use one of the two apps at a time, and keep only one installed so sign-in links open the right one.
 
-**Uninstalling:** first remove the `Z.ai (lastdrop)` and `OpenRouter (lastdrop)` providers in Settings → Providers. They keep working in the official app only while `~/.t3/lastdrop/` exists, and nothing updates them.
+**Uninstalling:** first remove lastdrop's `Z.ai` and `OpenRouter` providers in Settings → Providers. They keep working in the official app only while `~/.t3/lastdrop/` exists, and nothing updates them.
 
 Download it from [Releases](https://github.com/amontlabs/t3code/releases) (Apple Silicon Macs). The first time, open it from System Settings → Privacy & Security.
 

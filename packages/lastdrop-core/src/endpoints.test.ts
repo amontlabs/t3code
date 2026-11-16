@@ -93,7 +93,7 @@ describe("endpoint instance", () => {
     });
     expect(instanceId).toBe("zai");
     expect(instance.driver).toBe("claudeAgent");
-    expect(instance.displayName).toBe("Z.ai (lastdrop)");
+    expect(instance.displayName).toBe("Z.ai");
     expect(instance.config.homePath).toBe("/h/.t3/lastdrop/endpoints/zai");
     const env = Object.fromEntries(instance.environment.map((v) => [v.name, v.value]));
     // The settings go inline (single-quoted for T3's tokenizer), with the endpoint's routing in them.

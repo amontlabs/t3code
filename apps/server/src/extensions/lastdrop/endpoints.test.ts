@@ -459,7 +459,7 @@ describe("through T3's real settings service", () => {
       assert.equal(writes.length, 2);
       const after = (yield* service.getSettings).providerInstances[ZAI]!;
       assert.equal(after.enabled, false);
-      assert.equal(after.displayName, "Z.ai (lastdrop)");
+      assert.equal(after.displayName, "Z.ai");
     }).pipe(Effect.provide(layerServerSettings)),
   );
 });
