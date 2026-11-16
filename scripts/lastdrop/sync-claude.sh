@@ -24,9 +24,9 @@ for token in "${CLAUDE_CODE_OAUTH_TOKEN:-}" "${CLAUDE_CODE_OAUTH_TOKEN_2:-}"; do
     --dangerously-skip-permissions --output-format json > "$out" 2>&1
   status=$?
   jq -r '.result // empty' "$out" 2>/dev/null || cat "$out"
-  jq -r --arg step "$(basename "$prompt_file" .md)" --arg account "$account" \
+  usage="$(jq -r --arg step "$(basename "$prompt_file" .md)" --arg account "$account" \
     '"- Claude (\($step), account \($account)): \(.num_turns) turns, \(.usage.input_tokens + .usage.cache_read_input_tokens + .usage.cache_creation_input_tokens) input and \(.usage.output_tokens) output tokens, $\(.total_cost_usd) at API prices"' \
-    "$out" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+    "$out" 2>/dev/null)" && { echo "$usage"; echo "$usage" >> "$GITHUB_STEP_SUMMARY"; }
   if grep -qiE "hit your .*limit|usage limit|limit reached|rate.?limit" "$out" &&
     { ((status != 0)) || jq -e '.is_error == true' "$out" > /dev/null 2>&1; }; then
     echo "Account $account is at its limit; trying the next one."
