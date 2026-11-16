@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - a small sync CLI over one directory.
 /**
  * The server bundle must keep a single `server-*.mjs` chunk (`scripts/lib/server-compile-cache.ts` rejects two).
  * A dynamic import of a module that `server.ts` also imports statically (or a lazy wrapper around it) can split
@@ -5,7 +6,6 @@
  *
  *   node scripts/lastdrop/check-server-bundle.ts [apps/server/dist]
  */
-// @effect-diagnostics-next-line nodeBuiltinImport:off - A small sync CLI over one directory.
 import * as NodeFS from "node:fs";
 
 const dist = process.argv[2] ?? "apps/server/dist";

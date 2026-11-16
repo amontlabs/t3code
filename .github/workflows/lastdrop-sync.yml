@@ -145,6 +145,7 @@ jobs:
             echo "TAG=${{ steps.plan.outputs.tag }}"
             echo "BASE=${{ steps.plan.outputs.base }}"
             echo "PREVIOUS=${{ steps.plan.outputs.previous }}"
+            echo "PRE_REBASE=${{ steps.plan.outputs.head }}"
           } >> "$GITHUB_ENV"
 
       - name: Rebase (Claude resolves conflicts)
@@ -181,9 +182,10 @@ jobs:
             git commit -m "lastdrop: lockfile for $TAG" -- pnpm-lock.yaml
           fi
 
-      - name: Install browser secret helper build libraries
+      # zsh: lastdrop-node's judge tests run fake agy scripts with it, as macOS does.
+      - name: Install browser secret helper build libraries and zsh
         if: steps.plan.outputs.tag != ''
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config zsh
 
       - name: Setup dependencies
         if: steps.plan.outputs.tag != ''

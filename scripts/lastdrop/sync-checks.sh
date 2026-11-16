@@ -11,7 +11,11 @@ run() {
   shift
   echo "::group::$name"
   echo "===== $name" >> "$log"
-  "$@" 2>&1 | tee -a "$log" || failed+=("$name")
+  if ! "$@" 2>&1 | tee -a "$log"; then
+    failed+=("$name")
+    # vp run prints which tasks failed, and their output, only here.
+    if [[ "$1" == vp ]]; then vp run --last-details 2>&1 | tee -a "$log" || true; fi
+  fi
   echo "::endgroup::"
 }
 

@@ -24,6 +24,8 @@ import {
 import { lastdropPaths } from "./paths.ts";
 import { makeTestHome, type TestHome } from "./testHome.ts";
 
+const onMacOS = NodeFS.existsSync("/usr/bin/plutil");
+
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
 interface Call {
@@ -114,7 +116,8 @@ describe("endpoint profile", () => {
     expect(home.read(`${dir}/.claude.json`).projects).toEqual({ a: 1 });
   });
 
-  it("has a key helper that prints the key and embeds none", async () => {
+  // The helper is macOS-only: Keychain through /usr/bin/security, plutil and `base64 -D`.
+  it.skipIf(!onMacOS)("has a key helper that prints the key and embeds none", async () => {
     await prepareEndpointProfile({ paths: home.paths, provider: "zai" });
     const helper = keyHelperPath(home.paths);
     const run = (provider: string, env: Record<string, string> = {}) =>
@@ -140,23 +143,27 @@ describe("endpoint profile", () => {
 });
 
 describe("a home with a space", () => {
-  it("runs the apiKeyHelper command as Claude Code does (through a shell)", async () => {
-    const spaced = makeTestHome("lastdrop node ");
-    try {
-      expect(spaced.paths.home).toContain(" ");
-      spaced.setKeychainItem("lastdrop", "zai-api-key", b64("spaced-key"));
-      await prepareEndpointProfile({ paths: spaced.paths, provider: "zai" });
-      const command = spaced.read(`${endpointDirectory(spaced.paths, "zai")}/settings.json`)
-        .apiKeyHelper as string;
-      const out = NodeChildProcess.spawnSync("/bin/sh", ["-c", command], {
-        encoding: "utf8",
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      expect(out.stdout).toBe("spaced-key\n");
-    } finally {
-      spaced.remove();
-    }
-  });
+  // The helper is macOS-only: Keychain through /usr/bin/security, plutil and `base64 -D`.
+  it.skipIf(!onMacOS)(
+    "runs the apiKeyHelper command as Claude Code does (through a shell)",
+    async () => {
+      const spaced = makeTestHome("lastdrop node ");
+      try {
+        expect(spaced.paths.home).toContain(" ");
+        spaced.setKeychainItem("lastdrop", "zai-api-key", b64("spaced-key"));
+        await prepareEndpointProfile({ paths: spaced.paths, provider: "zai" });
+        const command = spaced.read(`${endpointDirectory(spaced.paths, "zai")}/settings.json`)
+          .apiKeyHelper as string;
+        const out = NodeChildProcess.spawnSync("/bin/sh", ["-c", command], {
+          encoding: "utf8",
+          env: { PATH: "/usr/bin:/bin" },
+        });
+        expect(out.stdout).toBe("spaced-key\n");
+      } finally {
+        spaced.remove();
+      }
+    },
+  );
 });
 
 describe("Z.ai usage", () => {

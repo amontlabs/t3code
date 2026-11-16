@@ -7,7 +7,10 @@ For each stop, `git status` lists the conflicted files. In a rebase, `--ours` (H
 - A seam: start from HEAD's version and redo what this fork commit changes there, guided by the seam's section ("Lines", "Must survive", "Conflict"). If upstream moved or renamed what the seam relies on, apply the same intent where it now lives, and update the seam's section in `FORK.md` and its entry in `scripts/lastdrop/seams.json`, keeping the change as small as it allows.
 - `pnpm-lock.yaml`: `git checkout --ours pnpm-lock.yaml`. The workflow regenerates it after the rebase.
 - Any other file outside the fork folders: the fork should not differ from upstream there. Take HEAD's version.
-- A file in a fork folder: upstream should never touch these paths, so this means upstream now uses the same path for something of its own. Do not drop either side and do not try to resolve it: stop.
+- A file in a fork folder: check whether upstream has that path (`git cat-file -e $BASE:<path>`).
+  - Upstream has it: upstream now uses the same path for something of its own. Do not drop either side and do not try to resolve it: stop.
+  - Upstream does not: the fork's own commits conflict with each other. This happens when the fork's history has merge commits, which a rebase flattens. Take the file as it is at the pre-rebase tip, `git show $PRE_REBASE:<path>`, the state the fork had working.
+- Changes that existed only in merge commits are lost when a rebase flattens them. When the rebase ends, compare fork-folder files and seams with the pre-rebase tip (`git diff $PRE_REBASE HEAD -- <fork folders>`) and restore anything that went missing.
 - A commit left empty: `git rebase --skip`.
 
 Then `git add` the files and run `GIT_EDITOR=true git rebase --continue`. Repeat until the rebase finishes. When it has, run `node scripts/lastdrop/check-fork-paths.ts --base $BASE` and fix what it reports in a commit `lastdrop: sync fixes for $TAG`.
