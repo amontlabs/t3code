@@ -4,14 +4,16 @@ This is [T3 Code](https://github.com/pingdotgg/t3code) with a few additions. It 
 
 What it adds:
 
-- **Several Claude accounts, used automatically** _(not built yet)_. Each conversation runs on the account with the most room left, and moves on to another account when one hits its limit.
-- **Your own agents** _(not built yet)_. Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus.
-- **Limits per account** _(not built yet)_. Hover over the usage icon to see what each account has left.
+- **Several Claude accounts, used automatically.** Each conversation runs on the account with the most room left, and moves on to another account when one hits its limit.
+- **Your own agents.** Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus.
+- **Limits per account.** Hover over the usage icon to see what each account has left.
 - **Uses your existing T3 Code data.** It opens the same projects, threads and settings as the official app (`~/.t3`) and keeps its own files in `~/.t3/lastdrop/`. Use one of the two apps at a time, and keep only one installed so sign-in links open the right one.
 
 **Uninstalling:** first remove the `Z.ai (lastdrop)` and `OpenRouter (lastdrop)` providers in Settings → Providers. They keep working in the official app only while `~/.t3/lastdrop/` exists, and nothing updates them.
 
-Download it from [Releases](https://github.com/amontlabs/t3code/releases) (Apple Silicon Macs). The first time, open it from System Settings → Privacy & Security. How the fork is kept in sync: [FORK.md](./FORK.md).
+Download it from [Releases](https://github.com/amontlabs/t3code/releases) (Apple Silicon Macs). The first time, open it from System Settings → Privacy & Security.
+
+**Updates:** within a few hours of each stable T3 Code release, the fork rebases onto it, checks it and publishes an update, which the app offers like any other. When that gets stuck (a conflict Claude could not resolve, failing checks, a failed build), the sidebar shows a warning linking to the pull request or issue. How it works: [FORK.md](./FORK.md#sync).
 
 ---
 

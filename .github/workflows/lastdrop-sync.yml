@@ -1,9 +1,10 @@
 name: lastdrop sync
 
 # Every hour: when upstream (pingdotgg/t3code) has a newer stable tag (vX.Y.Z) than the one
-# `lastdrop` is based on, rebase `lastdrop` onto it, check it (fork guard, install, typecheck,
-# tests, build), then push it, tag v<X.Y.Z>-ld.<n> and release. A conflict or a red check pushes
-# lastdrop-sync/<tag> and opens a PR with the log instead; FORK.md says how to resolve it.
+# `lastdrop` is based on, rebase `lastdrop` onto it, check it (fork guard, typecheck, tests, build),
+# then move `lastdrop` and push tag v<X.Y.Z>-ld.<n>, which releases. Claude Code resolves a rebase
+# conflict and gets one attempt at fixing red checks; a sync still stuck after that pushes
+# lastdrop-sync/<tag> with a PR labelled lastdrop-sync. FORK.md, "Sync", has the whole flow.
 #
 # Scheduled and manual runs use this file from the default branch, so it must be there.
 
@@ -13,13 +14,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Upstream tag to sync to (empty = newest stable tag)
+        description: Upstream tag to sync to (empty = newest stable tag). A dry run takes any upstream ref, such as main.
         required: false
         type: string
+      dry_run:
+        description: Dry run (push, open and release nothing; the outcome is in the run summary)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
   actions: write
 
 concurrency:
@@ -28,6 +35,7 @@ concurrency:
 
 env:
   UPSTREAM: https://github.com/pingdotgg/t3code.git
+  CLAUDE_CODE_VERSION: 2.1.325
 
 # An explicit bash runs with pipefail, so a failing command piped into tee fails its step.
 defaults:
@@ -35,28 +43,33 @@ defaults:
     shell: bash
 
 jobs:
-  rebase:
-    name: Rebase onto the new upstream tag
+  sync:
+    name: Rebase onto the new upstream tag and check it
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 330
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
-      previous: ${{ steps.plan.outputs.previous }}
       head: ${{ steps.plan.outputs.head }}
-      rebased: ${{ steps.rebase.outputs.rebased }}
+      ready: ${{ steps.ready.outputs.ready }}
+    env:
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+      # Pushes use this token: the workflow token cannot push commits that change workflow files.
+      PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
+      # No credentials in the checkout, so the Claude steps cannot push.
       - name: Checkout lastdrop
         uses: actions/checkout@v6
         with:
           ref: lastdrop
           fetch-depth: 0
+          persist-credentials: false
 
       # Upstream's workflows come along with every sync; on this fork they would fail or wait
       # forever for upstream's runners. Turn off every workflow that is not the fork's own.
       - name: Turn off upstream workflows
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows" \
             --jq '.workflows[] | select(.state == "active") | .path' |
@@ -69,184 +82,271 @@ jobs:
 
       - name: Find the new upstream tag
         id: plan
-        shell: bash
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           git fetch --no-tags "$UPSTREAM" '+refs/tags/v*:refs/tags/v*'
           previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' HEAD)"
-          latest="${REQUESTED_TAG:-$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)}"
-          echo "lastdrop is based on $previous; newest stable upstream tag is $latest."
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if [[ "$latest" == "$previous" || "$(printf '%s\n%s\n' "$previous" "$latest" | sort -V | tail -1)" != "$latest" ]]; then
-            echo "Nothing to sync."
-            exit 0
+          if [[ "$DRY_RUN" == true ]]; then
+            tag="${REQUESTED_TAG:-main}"
+            git fetch --no-tags "$UPSTREAM" "$tag"
+            base="$(git rev-parse 'FETCH_HEAD^{commit}')"
+            echo "Dry run: lastdrop is based on $previous; syncing to $tag ($base)."
+          else
+            tag="${REQUESTED_TAG:-$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)}"
+            echo "lastdrop is based on $previous; newest stable upstream tag is $tag."
+            if [[ "$tag" == "$previous" || "$(printf '%s\n%s\n' "$previous" "$tag" | sort -V | tail -1)" != "$tag" ]]; then
+              echo "Nothing to sync."
+              exit 0
+            fi
+            if git ls-remote --exit-code --heads origin "lastdrop-sync/$tag" > /dev/null; then
+              echo "::notice::lastdrop-sync/$tag already exists: a sync to $tag is waiting to be resolved (see its PR)."
+              exit 0
+            fi
+            base="$(git rev-parse "refs/tags/$tag^{commit}")"
           fi
-          if git ls-remote --exit-code --heads origin "lastdrop-sync/$latest" > /dev/null; then
-            echo "::notice::lastdrop-sync/$latest already exists: a sync to $latest is waiting to be resolved (see its PR)."
-            exit 0
-          fi
-          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      - name: Rebase
-        id: rebase
+      - name: Prepare
         if: steps.plan.outputs.tag != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.plan.outputs.tag }}
-          PREVIOUS: ${{ steps.plan.outputs.previous }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          missing=()
+          [[ -n "$PUSH_TOKEN" ]] || missing+=(LASTDROP_SYNC_TOKEN)
+          [[ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]] || missing+=(CLAUDE_CODE_OAUTH_TOKEN)
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing repository secrets: ${missing[*]}. See FORK.md, \"Sync\"."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The rebase rewrites the checkout, so keep this run's prompts, scripts and FORK.md aside.
+          tools="$RUNNER_TEMP/lastdrop-sync"
+          mkdir -p "$tools"
+          cp FORK.md scripts/lastdrop/sync-* "$tools/"
+          {
+            echo "TOOLS=$tools"
+            echo "FORK_MD=$tools/FORK.md"
+            echo "NOTES=$RUNNER_TEMP/claude-notes.md"
+            echo "TAG=${{ steps.plan.outputs.tag }}"
+            echo "BASE=${{ steps.plan.outputs.base }}"
+            echo "PREVIOUS=${{ steps.plan.outputs.previous }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Rebase (Claude resolves conflicts)
+        id: rebase
+        if: steps.plan.outputs.tag != ''
+        timeout-minutes: 90
+        run: |
+          set -uo pipefail
           log="$RUNNER_TEMP/rebase.log"
-          if git rebase --onto "$TAG" "$PREVIOUS" lastdrop > "$log" 2>&1; then
-            git push --force origin "HEAD:refs/heads/lastdrop-sync/$TAG"
-            echo "rebased=true" >> "$GITHUB_OUTPUT"
+          if git rebase --onto "$BASE" "$PREVIOUS" > "$log" 2>&1; then
+            echo "Rebased cleanly."
             exit 0
           fi
-          {
-            echo "Conflicting files:"
-            git diff --name-only --diff-filter=U
-            echo
-            git status
-          } >> "$log" 2>&1
-          git rebase --abort
-          # The branch is upstream's tag: the PR is a notice, resolved by rebasing locally.
-          git push --force origin "refs/tags/$TAG:refs/heads/lastdrop-sync/$TAG"
-          {
-            echo "Rebasing \`lastdrop\` from \`$PREVIOUS\` onto \`$TAG\` stopped on a conflict."
-            echo
-            echo "Resolve it locally, following FORK.md (\"Resolving a sync\"):"
-            echo
-            echo '```sh'
-            echo "git fetch origin && git fetch $UPSTREAM 'refs/tags/$TAG:refs/tags/$TAG'"
-            echo "git switch lastdrop && git rebase --onto $TAG $PREVIOUS"
-            echo "node scripts/lastdrop/check-fork-paths.ts"
-            echo "git push --force-with-lease origin lastdrop && git push origin <tag v${TAG#v}-ld.1>"
-            echo '```'
-            echo
-            echo "Then close this PR and delete \`lastdrop-sync/$TAG\`. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo
-            echo '<details><summary>Rebase log</summary>'
-            echo
-            echo '```'
-            tail -c 50000 "$log"
-            echo '```'
-            echo '</details>'
-          } > "$RUNNER_TEMP/body.md"
-          gh pr create --repo "$GITHUB_REPOSITORY" --base lastdrop --head "lastdrop-sync/$TAG" \
-            --title "Sync to $TAG: rebase conflict" --body-file "$RUNNER_TEMP/body.md"
-          echo "::error::Rebase onto $TAG conflicted; opened a PR."
-          exit 1
+          echo "The rebase stopped on a conflict:"
+          git diff --name-only --diff-filter=U | tee -a "$log"
+          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-resolve.md" 2>&1 | tee "$RUNNER_TEMP/claude-resolve.log" || true
+          if [[ -d .git/rebase-merge || -d .git/rebase-apply ]]; then
+            echo "::error::Claude did not finish the rebase."
+            exit 1
+          fi
 
-  verify:
-    name: Guard, typecheck, tests, build
-    needs: rebase
-    if: needs.rebase.outputs.rebased == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      TAG: ${{ needs.rebase.outputs.tag }}
-    steps:
-      - name: Checkout the rebased branch
-        uses: actions/checkout@v6
+      - name: Setup Vite+
+        if: steps.plan.outputs.tag != ''
+        uses: ./.github/actions/setup-ci-deps
         with:
-          ref: lastdrop-sync/${{ needs.rebase.outputs.tag }}
-          fetch-depth: 0
+          install: "false"
 
-      - name: Fetch the upstream tag
-        run: git fetch --no-tags "$UPSTREAM" "+refs/tags/$TAG:refs/tags/$TAG"
+      - name: Regenerate the lockfile
+        if: steps.plan.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          vp install --lockfile-only --ignore-scripts
+          if ! git diff --quiet -- pnpm-lock.yaml; then
+            git commit -m "lastdrop: lockfile for $TAG" -- pnpm-lock.yaml
+          fi
 
       - name: Install browser secret helper build libraries
+        if: steps.plan.outputs.tag != ''
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Setup dependencies
+        if: steps.plan.outputs.tag != ''
         uses: ./.github/actions/setup-ci-deps
 
-      - name: Fork guard
-        run: node scripts/lastdrop/check-fork-paths.ts --base "$TAG" 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
-
       - name: Ensure Electron runtime is installed
+        if: steps.plan.outputs.tag != ''
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Install Chromium for browser tests
+        if: steps.plan.outputs.tag != ''
         run: |
           node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
           node apps/server/node_modules/playwright-core/cli.js install --only-shell chromium
 
-      - name: Typecheck
-        run: vp run typecheck 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+      - name: Checks
+        id: checks
+        if: steps.plan.outputs.tag != ''
+        continue-on-error: true
+        run: bash "$TOOLS/sync-checks.sh" "$BASE" "$RUNNER_TEMP/checks.log"
 
-      - name: Test
-        run: vp run -r test 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
-
-      - name: Build
-        run: vp run build:desktop 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
-
-      - name: Open a PR with the log
-        if: failure()
+      - name: Claude fixes the checks
+        id: fix
+        if: steps.checks.outcome == 'failure'
+        timeout-minutes: 90
         env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+          CHECKS_LOG: ${{ runner.temp }}/checks.log
+        run: |
+          set -uo pipefail
+          before="$(git rev-parse HEAD)"
+          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-fix.md" 2>&1 | tee "$RUNNER_TEMP/claude-fix.log" || true
+          git add -A
+          git diff --cached --quiet || git commit -m "lastdrop: fixes for $TAG"
+          if [[ "$(git rev-parse HEAD)" != "$before" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Claude changed nothing."
+          fi
+
+      - name: Checks again
+        id: recheck
+        if: steps.fix.outputs.changed == 'true'
+        continue-on-error: true
+        run: bash "$TOOLS/sync-checks.sh" "$BASE" "$RUNNER_TEMP/recheck.log"
+
+      - name: Push the checked branch
+        id: ready
+        if: steps.plan.outputs.tag != ''
+        env:
+          CHECKS: ${{ steps.checks.outcome }}
+          RECHECK: ${{ steps.recheck.outcome }}
         run: |
           set -euo pipefail
+          if [[ "$CHECKS" != success && "$RECHECK" != success ]]; then
+            echo "::error::The checks failed."
+            exit 1
+          fi
+          if [[ "$DRY_RUN" == true ]]; then
+            echo "### Dry run to \`$TAG\`: green" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git push --force "https://x-access-token:$PUSH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/lastdrop-sync/$TAG"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      # Only once the rebase ran: a failure before it (no secrets, say) is not a stuck sync.
+      - name: Open a PR
+        if: failure() && (steps.rebase.outcome == 'success' || steps.rebase.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBASED: ${{ steps.rebase.outcome == 'success' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [[ -d .git/rebase-merge || -d .git/rebase-apply ]]; then git rebase --abort; fi
+          body="$RUNNER_TEMP/body.md"
+          tail_of() { [[ -s "$1" ]] && { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 30000 "$1"; echo '```'; echo '</details>'; echo; }; }
+          if [[ "$REBASED" == true ]]; then
+            title="Sync to $TAG: checks failed"
+            {
+              echo "\`lastdrop\` rebased onto \`$TAG\`, but the checks failed even after Claude's attempt, so \`lastdrop\` was not moved."
+              echo
+              echo "This branch is the rebased \`lastdrop\`. Fix it here (FORK.md, \"Resolving a sync\"), force-push it to \`lastdrop\` and push tag \`v${TAG#v}-ld.1\` to release."
+            } > "$body"
+            head=HEAD
+          else
+            title="Sync to $TAG: rebase conflict"
+            {
+              echo "Rebasing \`lastdrop\` from \`$PREVIOUS\` onto \`$TAG\` stopped on a conflict Claude did not resolve."
+              echo
+              echo "Resolve it locally, following FORK.md (\"Resolving a sync\"):"
+              echo
+              echo '```sh'
+              echo "git fetch origin && git fetch $UPSTREAM 'refs/tags/$TAG:refs/tags/$TAG'"
+              echo "git switch lastdrop && git rebase --onto $TAG $PREVIOUS"
+              echo "node scripts/lastdrop/check-fork-paths.ts"
+              echo "git push --force-with-lease origin lastdrop && git push origin v${TAG#v}-ld.1"
+              echo '```'
+              echo
+              echo "This branch is upstream's tag; the PR is a notice."
+            } > "$body"
+            head="refs/tags/$TAG"
+          fi
           {
-            echo "\`lastdrop\` rebased cleanly onto \`$TAG\`, but a check failed, so \`lastdrop\` was not moved."
             echo
-            echo "This branch is the rebased \`lastdrop\`. Fix it here (FORK.md, \"Resolving a sync\"), then"
-            echo "force-push it to \`lastdrop\` and push tag \`v${TAG#v}-ld.1\` to release. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Then close this PR and delete \`lastdrop-sync/$TAG\`. Run: $RUN_URL"
             echo
-            echo '<details><summary>Log tail</summary>'
-            echo
-            echo '```'
-            tail -c 50000 "$RUNNER_TEMP/verify.log" 2>/dev/null || echo "(no log)"
-            echo '```'
-            echo '</details>'
-          } > "$RUNNER_TEMP/body.md"
+            if [[ -s "$NOTES" ]]; then echo "## Claude's notes"; echo; cat "$NOTES"; echo; fi
+            tail_of "$RUNNER_TEMP/rebase.log" "Rebase log"
+            tail_of "$RUNNER_TEMP/recheck.log" "Checks after Claude's fix (tail)"
+            tail_of "$RUNNER_TEMP/checks.log" "Checks (tail)"
+            tail_of "$RUNNER_TEMP/claude-resolve.log" "Claude, resolving (tail)"
+            tail_of "$RUNNER_TEMP/claude-fix.log" "Claude, fixing (tail)"
+          } >> "$body"
+          if [[ "$DRY_RUN" == true ]]; then
+            { echo "### Dry run to \`$TAG\`: $title"; echo; cat "$body"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          git push --force "https://x-access-token:$PUSH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "$head:refs/heads/lastdrop-sync/$TAG"
+          gh label create lastdrop-sync --repo "$GITHUB_REPOSITORY" --color D93F0B \
+            --description "A fork update that needs attention (the app warns while one is open)" --force
           gh pr create --repo "$GITHUB_REPOSITORY" --base lastdrop --head "lastdrop-sync/$TAG" \
-            --title "Sync to $TAG: checks failed" --body-file "$RUNNER_TEMP/body.md"
+            --label lastdrop-sync --title "$title" --body-file "$body"
+          exit 1
+
+      - name: Claude's notes in the summary
+        if: always() && steps.plan.outputs.tag != ''
+        run: |
+          if [[ -s "$NOTES" ]]; then
+            { echo "## Claude's notes"; echo; cat "$NOTES"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   publish:
     name: Move lastdrop and tag
-    needs: [rebase, verify]
+    needs: sync
+    if: needs.sync.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    outputs:
-      release_tag: ${{ steps.tag.outputs.release_tag }}
     env:
-      TAG: ${{ needs.rebase.outputs.tag }}
-      HEAD_BEFORE: ${{ needs.rebase.outputs.head }}
+      TAG: ${{ needs.sync.outputs.tag }}
+      HEAD_BEFORE: ${{ needs.sync.outputs.head }}
+      PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: lastdrop-sync/${{ needs.rebase.outputs.tag }}
+          ref: lastdrop-sync/${{ needs.sync.outputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Push lastdrop and the release tag
-        id: tag
-        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          remote="https://x-access-token:$PUSH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           last="$(git tag -l "${TAG}-ld.*" | sed -E 's/.*-ld\.([0-9]+)$/\1/' | sort -n | tail -1)"
           release_tag="${TAG}-ld.$(( ${last:-0} + 1 ))"
-          # Moves lastdrop only if nobody pushed to it since the rebase started.
-          git push --force-with-lease="lastdrop:$HEAD_BEFORE" origin "HEAD:refs/heads/lastdrop"
+          # Moves lastdrop only if nobody pushed to it since the sync started.
+          git push --force-with-lease="lastdrop:$HEAD_BEFORE" "$remote" "HEAD:refs/heads/lastdrop"
+          # This sync supersedes every stuck one; deleting their branches closes their PRs.
+          git ls-remote --heads origin 'lastdrop-sync/*' | awk '{ print ":" $2 }' | xargs -r git push "$remote"
+          # Workflows upstream added in this sync are now on the default branch: turn them off before
+          # the tag, pushed with the sync token, starts workflows (lastdrop-release.yml among them).
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows" \
+            --jq '.workflows[] | select(.state == "active") | .path' |
+            while read -r path; do
+              case "$(basename "$path")" in
+                lastdrop-*) ;;
+                *) gh workflow disable "$(basename "$path")" --repo "$GITHUB_REPOSITORY" || true ;;
+              esac
+            done
           git tag -a "$release_tag" -m "T3 Code ${TAG} with lastdrop"
-          git push origin "refs/tags/$release_tag"
-          git push origin --delete "lastdrop-sync/$TAG"
-          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-
-  release:
-    name: Release
-    needs: publish
-    uses: ./.github/workflows/lastdrop-release.yml
-    with:
-      tag: ${{ needs.publish.outputs.release_tag }}
-    secrets: inherit
+          git push "$remote" "refs/tags/$release_tag"
+          echo "Tagged $release_tag." >> "$GITHUB_STEP_SUMMARY"

@@ -12,7 +12,7 @@
   "exempt": ["pnpm-lock.yaml"],
   "seams": {
     "README.md": {
-      "budget": 17,
+      "budget": 19,
       "why": "the fork's section above upstream's README"
     },
     "apps/server/src/provider/builtInDrivers.ts": {
@@ -72,8 +72,8 @@
       "why": "bundle id, self-signed mac signing"
     },
     "apps/web/src/components/sidebar/SidebarChrome.tsx": {
-      "budget": 3,
-      "why": "Usage button with each account's limits on hover"
+      "budget": 4,
+      "why": "Usage button with each account's limits on hover; stuck-update warning"
     },
     "apps/web/src/components/chat/ModelListRow.tsx": {
       "budget": 3,
