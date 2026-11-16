@@ -14,7 +14,8 @@
   },
   "scripts": {
     "typecheck": "effect-tsgo tsrs --noEmit",
-    "test": "vp test run --config ../../vite.config.ts --dir ."
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "build-plugin-files": "node ../../scripts/lastdrop/build-plugin-files.ts"
   },
   "dependencies": {
     "@t3tools/lastdrop-core": "workspace:*"

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 
 import {
   bindRunner,
+  boundPlugin,
   isLoopbackUrl,
   runnerEnvironment,
   runnerVariables,
@@ -11,7 +12,7 @@ import {
   unbindRunner,
 } from "./endpoint.ts";
 import { agentsCommand, encodeLine, stepText } from "./protocol.ts";
-import { withRunnerEnvironment } from "./queryEnvironment.ts";
+import { withLastdropPlugin, withRunnerEnvironment } from "./queryEnvironment.ts";
 import { fakeCatalog } from "./testkit.ts";
 
 describe("lines", () => {
@@ -139,6 +140,69 @@ describe("a query's environment", () => {
         "LASTDROP_RUNNER_TOKEN",
         "LASTDROP_RUNNER_URL",
       ]);
+    } finally {
+      unbindRunner();
+    }
+  });
+});
+
+describe("lastdrop's plugin in a query", () => {
+  const PLUGIN = "/t3/lastdrop/plugin/lastdrop";
+  const APP = "lastdrop@lastdrop";
+  const unread = () => {
+    throw new Error("not read");
+  };
+  const optionsOf = (input: { readonly options: object }) =>
+    input.options as { plugins?: unknown; settings?: unknown; env?: unknown };
+
+  it("is loaded and the app's copy turned off, on a routed query and an endpoint query alike", () => {
+    const routed = withLastdropPlugin(
+      { options: { env: { CLAUDE_CONFIG_DIR: "/accounts/a" } } },
+      PLUGIN,
+    );
+    assert.deepStrictEqual(optionsOf(routed).plugins, [{ type: "local", path: PLUGIN }]);
+    assert.deepStrictEqual(optionsOf(routed).settings, { enabledPlugins: { [APP]: false } });
+    assert.deepStrictEqual(optionsOf(routed).env, { CLAUDE_CONFIG_DIR: "/accounts/a" });
+
+    // An endpoint instance's inline settings, and the user's own plugins, are kept; twice changes nothing more.
+    const endpoint = {
+      options: {
+        env: { LASTDROP_ENDPOINT: "zai" },
+        plugins: [{ type: "local" as const, path: "/user/plugin" }],
+        settings: { apiKeyHelper: "/h zai", enabledPlugins: { "other@market": true, [APP]: true } },
+      },
+    };
+    const once = withLastdropPlugin(endpoint, PLUGIN);
+    assert.deepStrictEqual(optionsOf(once).plugins, [
+      { type: "local", path: "/user/plugin" },
+      { type: "local", path: PLUGIN },
+    ]);
+    assert.deepStrictEqual(optionsOf(once).settings, {
+      apiKeyHelper: "/h zai",
+      enabledPlugins: { "other@market": true, [APP]: false },
+    });
+    assert.deepStrictEqual(withLastdropPlugin(once, PLUGIN), once);
+  });
+
+  it("reads a settings string, inline or a file, and leaves one it can't read", () => {
+    const inline = withLastdropPlugin({ options: { settings: '{"model":"x"}' } }, PLUGIN, unread);
+    assert.deepStrictEqual(optionsOf(inline).settings, {
+      model: "x",
+      enabledPlugins: { [APP]: false },
+    });
+    const file = withLastdropPlugin({ options: { settings: "/s.json" } }, PLUGIN, () => '{"a":1}');
+    assert.deepStrictEqual(optionsOf(file).settings, { a: 1, enabledPlugins: { [APP]: false } });
+    const broken = withLastdropPlugin({ options: { settings: "/gone.json" } }, PLUGIN, unread);
+    assert.strictEqual(optionsOf(broken).settings, "/gone.json");
+    assert.deepStrictEqual(optionsOf(broken).plugins, [{ type: "local", path: PLUGIN }]);
+  });
+
+  it("is the folder the routes bound", () => {
+    unbindRunner();
+    assert.isUndefined(boundPlugin());
+    bindRunner({ script: "/s", url: "http://127.0.0.1:1/api/lastdrop/runner", plugin: PLUGIN });
+    try {
+      assert.strictEqual(boundPlugin(), PLUGIN);
     } finally {
       unbindRunner();
     }

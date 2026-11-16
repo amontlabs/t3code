@@ -32,8 +32,8 @@ import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
 import { lastdropDataDir } from "../dataDir.ts";
 import { pendingContinuations } from "./moveContinuation.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
-import { runnerVariables } from "./runner/endpoint.ts";
-import { withRunnerEnvironment } from "./runner/queryEnvironment.ts";
+import { boundPlugin, runnerVariables } from "./runner/endpoint.ts";
+import { withLastdropPlugin, withRunnerEnvironment } from "./runner/queryEnvironment.ts";
 
 const MAIN_THREAD: ThreadLineage = { delegated: false };
 
@@ -56,8 +56,8 @@ const lineageReader = Effect.gen(function* () {
 });
 
 /**
- * The runner's variables on every query (step 8, `runner/`), around the routing wrapper so a routed
- * query's environment keeps them. Not under vitest, where T3's tests pin the query's options.
+ * The runner's variables and lastdrop's plugin on every query (step 8, `runner/`), around the routing wrapper
+ * so a routed query's environment and options keep them. Not under vitest, where T3's tests pin the query's options.
  */
 export const wrapLive = <E, R>(
   queryRunner: Layer.Layer<ClaudeAgentSdkQueryRunner, E, R>,
@@ -78,7 +78,11 @@ export const wrapLive = <E, R>(
           input: ClaudeAgentSdkQueryOpenInput,
         ) {
           const added = yield* runnerVariables(input.threadId);
-          return yield* inner.open(withRunnerEnvironment(input, hostEnvironment, () => added));
+          const withRunner = withRunnerEnvironment(input, hostEnvironment, () => added);
+          const plugin = boundPlugin();
+          return yield* inner.open(
+            plugin === undefined ? withRunner : withLastdropPlugin(withRunner, plugin),
+          );
         }),
       };
     }),

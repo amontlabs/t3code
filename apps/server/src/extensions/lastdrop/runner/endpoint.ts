@@ -107,6 +107,8 @@ interface Binding {
   readonly url: string;
   /** Whether lastdrop's agents can run now (their T3 instance is on); unbound means yes. */
   readonly available?: Effect.Effect<boolean> | undefined;
+  /** The folder of lastdrop's Claude Code plugin, loaded into every query (`queryEnvironment.ts`). */
+  readonly plugin?: string | undefined;
 }
 
 /** Only an address on this machine carries the bearer token. */
@@ -129,6 +131,9 @@ export const bindRunner = (binding: Binding): void => {
 export const unbindRunner = (): void => {
   bound = undefined;
 };
+
+/** The plugin folder queries load once the routes are bound. */
+export const boundPlugin = (): string | undefined => bound?.plugin;
 
 /** The variables a thread's Claude query gains; undefined until the routes are bound. */
 export const runnerEnvironment = (

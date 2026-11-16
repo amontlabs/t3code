@@ -1,7 +1,8 @@
 /**
- * Z.ai and OpenRouter I/O (headroom's `EndpointProfile`, `ZAIProvider`, `OpenRouterProvider`): keys read-only
- * from the standalone's keychain items, each T3 instance's Claude Code profile, and usage. The key never goes
- * into a file or T3's settings: the profile's `apiKeyHelper` script reads it when Claude Code starts.
+ * Z.ai and OpenRouter I/O (headroom's `EndpointProfile`, `ZAIProvider`, `OpenRouterProvider`): keys read from
+ * the fork's own keychain service (written by `endpointKeys.ts`), each T3 instance's Claude Code profile, and
+ * usage. The key never goes into a file or T3's settings: the profile's `apiKeyHelper` script reads it when
+ * Claude Code starts.
  */
 import * as NodeFSP from "node:fs/promises";
 
@@ -34,9 +35,9 @@ import { exists, readText, writeAtomic } from "./files.ts";
 import { probeOwnKeychain, readOwnKeychain } from "./keychain.ts";
 import type { LastdropPaths } from "./paths.ts";
 
-/** The standalone's keychain service, and its name before the rename (read only, never moved). */
-const SERVICES = ["lastdrop", "Headroom"] as const;
-const KEY_ITEMS: Readonly<Record<EndpointProvider, string>> = {
+/** The fork's keychain service: its items are never the standalone app's. */
+export const KEYCHAIN_SERVICE = "t3code-lastdrop";
+export const KEY_ITEMS: Readonly<Record<EndpointProvider, string>> = {
   zai: "zai-api-key",
   openrouter: "openrouter-api-key",
 };
@@ -56,11 +57,7 @@ const trimmed = (value: string | undefined): string | undefined => {
 };
 
 async function readOwn(paths: LastdropPaths, item: string): Promise<string | undefined> {
-  for (const service of SERVICES) {
-    const value = trimmed(await readOwnKeychain(paths.security, service, item));
-    if (value !== undefined) return value;
-  }
-  return undefined;
+  return trimmed(await readOwnKeychain(paths.security, KEYCHAIN_SERVICE, item));
 }
 
 /** `~/.config/zai/key.json`: `{apiKey}`, `{api_key}`, `{key}`, or the key as plain text. */
@@ -83,8 +80,8 @@ async function zaiKeyFile(paths: LastdropPaths): Promise<string | undefined> {
 }
 
 /**
- * The main account's key that runs models: lastdrop's keychain item, then (as the standalone) Z.ai's key
- * file and `ZAI_API_KEY`/`GLM_API_KEY`, or `OPENROUTER_API_KEY`.
+ * The main account's key that runs models: lastdrop's keychain item, then Z.ai's key file and
+ * `ZAI_API_KEY`/`GLM_API_KEY`, or `OPENROUTER_API_KEY`.
  */
 export async function endpointApiKey(
   provider: EndpointProvider,
@@ -110,19 +107,23 @@ export async function lookupEndpointKey(
   paths: LastdropPaths,
   env: Env = {},
 ): Promise<KeyLookup> {
-  let unreadable = false;
-  for (const service of SERVICES) {
-    const read = await probeOwnKeychain(paths.security, service, KEY_ITEMS[provider]);
-    if (read.state === "found") return { state: "found", key: read.value };
-    if (read.state === "unreadable") unreadable = true;
-  }
-  const fallback =
-    provider === "zai"
-      ? ((await zaiKeyFile(paths)) ??
-        ZAI_ENV_KEYS.map((name) => trimmed(env[name])).find((k) => k !== undefined))
-      : trimmed(env[OPENROUTER_ENV_KEY]);
+  const read = await probeOwnKeychain(paths.security, KEYCHAIN_SERVICE, KEY_ITEMS[provider]);
+  if (read.state === "found") return { state: "found", key: read.value };
+  const fallback = await fallbackEndpointKey(provider, paths, env);
   if (fallback !== undefined) return { state: "found", key: fallback };
-  return unreadable ? { state: "unreadable" } : { state: "missing" };
+  return read.state === "unreadable" ? { state: "unreadable" } : { state: "missing" };
+}
+
+/** The key from outside the keychain: Z.ai's key file and `ZAI_API_KEY`/`GLM_API_KEY`, or `OPENROUTER_API_KEY`. */
+export async function fallbackEndpointKey(
+  provider: EndpointProvider,
+  paths: LastdropPaths,
+  env: Env = {},
+): Promise<string | undefined> {
+  return provider === "zai"
+    ? ((await zaiKeyFile(paths)) ??
+        ZAI_ENV_KEYS.map((name) => trimmed(env[name])).find((k) => k !== undefined))
+    : trimmed(env[OPENROUTER_ENV_KEY]);
 }
 
 /** Z.ai's usage authorization: the web session lastdrop keeps, else the API key. */
@@ -153,19 +154,17 @@ export function keyHelperScript(paths: LastdropPaths): string {
   const keyFile = shellQuote(`${paths.home}/.config/zai/key.json`);
   return `#!/bin/sh
 # lastdrop (T3 Code fork): prints the Z.ai or OpenRouter key for Claude Code's apiKeyHelper.
-# Reads the standalone lastdrop's keychain item; never stores the key.
+# Reads the fork's keychain item (service ${KEYCHAIN_SERVICE}); never stores the key.
 case "$1" in
   zai) item=${KEY_ITEMS.zai} ;;
   openrouter) item=${KEY_ITEMS.openrouter} ;;
   *) echo "usage: key-helper zai|openrouter" >&2; exit 2 ;;
 esac
-for service in ${SERVICES.join(" ")}; do
-  encoded=$(${security} find-generic-password -s "$service" -a "$item" -w 2>/dev/null)
-  if [ -n "$encoded" ]; then
-    key=$(printf '%s' "$encoded" | /usr/bin/base64 -D 2>/dev/null)
-    if [ -n "$key" ]; then printf '%s\\n' "$key"; exit 0; fi
-  fi
-done
+encoded=$(${security} find-generic-password -s ${KEYCHAIN_SERVICE} -a "$item" -w 2>/dev/null)
+if [ -n "$encoded" ]; then
+  key=$(printf '%s' "$encoded" | /usr/bin/base64 -D 2>/dev/null)
+  if [ -n "$key" ]; then printf '%s\\n' "$key"; exit 0; fi
+fi
 if [ "$1" = zai ]; then
   if [ -f ${keyFile} ]; then
     for field in apiKey api_key key; do
@@ -273,15 +272,15 @@ export async function fetchZaiUsage(
 ): Promise<EndpointUsage> {
   const auth = await zaiAuthorization(paths, env);
   if (auth === undefined)
-    throw endpointUsageError("notConfigured", "Sign in to Z.ai in lastdrop's Settings.");
+    throw endpointUsageError("notConfigured", "Add the Z.ai key in Settings → Providers → Claude.");
   const headers = { Authorization: auth.header, Accept: "application/json" };
   const { status, body } = await getJson(fetch, ZAI_QUOTA_URL, headers);
   if (status === 401 || status === 403) {
     throw endpointUsageError(
       "unauthorized",
       auth.isSession
-        ? "Z.ai session expired. Sign in again in lastdrop's Settings."
-        : "Z.ai API key invalid. Check it in lastdrop's Settings.",
+        ? "Z.ai session expired. Sign in again in Settings → Providers → Claude."
+        : "Z.ai API key invalid. Check it in Settings → Providers → Claude.",
     );
   }
   if (!ok(status)) throw endpointUsageError("http", `Z.ai answered HTTP ${status}.`);
@@ -317,7 +316,7 @@ export async function fetchOpenRouterUsage(fetch: FetchLike, key: string): Promi
     if (credits.status === 401) {
       throw endpointUsageError(
         "unauthorized",
-        "OpenRouter API key invalid. Check it in lastdrop's Settings.",
+        "OpenRouter API key invalid. Check it in Settings → Providers → Claude.",
       );
     }
     if (!ok(credits.status))
@@ -347,7 +346,7 @@ export async function validateOpenRouterKey(fetch: FetchLike, key: string): Prom
     }
     throw endpointUsageError(
       "unauthorized",
-      "OpenRouter authentication failed. Check the regular API key in lastdrop's Settings.",
+      "OpenRouter authentication failed. Check the regular API key in Settings → Providers → Claude.",
     );
   }
   throw endpointUsageError("http", `OpenRouter answered HTTP ${own.status}.`);

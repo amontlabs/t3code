@@ -57,7 +57,7 @@ afterEach(() => home.remove());
 describe("endpoint keys", () => {
   it("tells a missing key apart from a keychain it couldn't read", async () => {
     expect(await lookupEndpointKey("zai", home.paths)).toEqual({ state: "missing" });
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("k"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("k"));
     home.lockKeychain(true);
     expect(await lookupEndpointKey("zai", home.paths)).toEqual({ state: "unreadable" });
     // A fallback key still counts while the keychain is locked.
@@ -69,21 +69,22 @@ describe("endpoint keys", () => {
     expect(await lookupEndpointKey("zai", home.paths)).toEqual({ state: "found", key: "k" });
   });
 
-  it("reads lastdrop's own item, then its old name, then the standalone's fallbacks", async () => {
+  it("reads the fork's own item, then the fallbacks, and never the app's", async () => {
     expect(await endpointApiKey("zai", home.paths)).toBeUndefined();
     expect(await endpointApiKey("zai", home.paths, { GLM_API_KEY: " env-key " })).toBe("env-key");
     home.write(`${home.paths.home}/.config/zai/key.json`, { api_key: "file-key" });
     expect(await endpointApiKey("zai", home.paths, { ZAI_API_KEY: "env" })).toBe("file-key");
-    home.setKeychainItem("Headroom", "zai-api-key", b64("old-key"));
-    expect(await endpointApiKey("zai", home.paths)).toBe("old-key");
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("own-key"));
+    home.setKeychainItem("lastdrop", "zai-api-key", b64("app-key"));
+    home.setKeychainItem("Headroom", "zai-api-key", b64("old-app-key"));
+    expect(await endpointApiKey("zai", home.paths)).toBe("file-key");
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("own-key"));
     expect(await endpointApiKey("zai", home.paths)).toBe("own-key");
 
     expect(await endpointApiKey("openrouter", home.paths, { ZAI_API_KEY: "x" })).toBeUndefined();
     expect(await endpointApiKey("openrouter", home.paths, { OPENROUTER_API_KEY: "or-env" })).toBe(
       "or-env",
     );
-    home.setKeychainItem("lastdrop", "openrouter-api-key", b64("or-own"));
+    home.setKeychainItem("t3code-lastdrop", "openrouter-api-key", b64("or-own"));
     expect(await endpointApiKey("openrouter", home.paths)).toBe("or-own");
   });
 });
@@ -130,7 +131,7 @@ describe("endpoint profile", () => {
     expect(run("zai", { ZAI_API_KEY: "env-key" }).stdout).toBe("env-key\n");
     home.write(`${home.paths.home}/.config/zai/key.json`, { apiKey: "file-key" });
     expect(run("zai").stdout).toBe("file-key\n");
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("sk-zai-secret"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("sk-zai-secret"));
     expect(run("zai").stdout).toBe("sk-zai-secret\n");
     expect(run("openrouter").status).toBe(1);
     expect(run("openrouter", { OPENROUTER_API_KEY: "or" }).stdout).toBe("or\n");
@@ -150,7 +151,7 @@ describe("a home with a space", () => {
       const spaced = makeTestHome("lastdrop node ");
       try {
         expect(spaced.paths.home).toContain(" ");
-        spaced.setKeychainItem("lastdrop", "zai-api-key", b64("spaced-key"));
+        spaced.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("spaced-key"));
         await prepareEndpointProfile({ paths: spaced.paths, provider: "zai" });
         const command = spaced.read(`${endpointDirectory(spaced.paths, "zai")}/settings.json`)
           .apiKeyHelper as string;
@@ -168,7 +169,7 @@ describe("a home with a space", () => {
 
 describe("Z.ai usage", () => {
   it("prefers the web session, reads the plan, and words a refused key", async () => {
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("k"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("k"));
     const calls: Call[] = [];
     const fetch = fakeFetch(
       (url) =>
@@ -186,7 +187,7 @@ describe("Z.ai usage", () => {
     expect(usage).toMatchObject({ title: "Z.ai", plan: "GLM Coding Lite" });
     expect(usage.windows[0]).toMatchObject({ label: "Session", usedPercent: 10 });
     expect(calls[0]!.headers.Authorization).toBe("Bearer k");
-    home.setKeychainItem("lastdrop", "zai-session", b64("session-header"));
+    home.setKeychainItem("t3code-lastdrop", "zai-session", b64("session-header"));
     await fetchZaiUsage(fetch, home.paths);
     expect(calls.at(-2)!.headers.Authorization).toBe("session-header");
 
@@ -194,13 +195,13 @@ describe("Z.ai usage", () => {
     await expect(fetchZaiUsage(refused, home.paths)).rejects.toThrow("Z.ai session expired");
   });
 
-  it("asks for a sign-in when nothing is set", async () => {
+  it("asks for a key when nothing is set", async () => {
     await expect(
       fetchZaiUsage(
         fakeFetch(() => ({ status: 200 })),
         home.paths,
       ),
-    ).rejects.toThrow("Sign in to Z.ai");
+    ).rejects.toThrow("Add the Z.ai key");
   });
 });
 
@@ -254,8 +255,8 @@ describe("endpoint monitor", () => {
     expect((await monitor.refresh()).map((s) => s.configured)).toEqual([false, false]);
     expect(calls).toEqual([]);
 
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("k"));
-    home.setKeychainItem("lastdrop", "openrouter-api-key", b64("o"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("k"));
+    home.setKeychainItem("t3code-lastdrop", "openrouter-api-key", b64("o"));
     await monitor.refresh();
     expect(monitor.state("zai")).toMatchObject({ configured: true, readAt: now });
     expect(monitor.state("openrouter")).toMatchObject({ configured: true, problem: undefined });
@@ -283,7 +284,7 @@ describe("endpoint monitor", () => {
     const fetch = fakeFetch(() =>
       fail ? { status: 500 } : { status: 200, body: { data: { limits: [] } } },
     );
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("k"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("k"));
     const monitor = new EndpointMonitor({ paths: home.paths, fetch, now: () => now });
     await monitor.refresh();
     fail = true;
@@ -305,7 +306,7 @@ describe("endpoint monitor across failures", () => {
     await monitor.refresh();
     expect(monitor.state("zai")).toMatchObject({ presence: "unknown", configured: false });
     home.lockKeychain(false);
-    home.setKeychainItem("lastdrop", "zai-api-key", b64("k"));
+    home.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("k"));
     await monitor.refresh();
     expect(monitor.state("zai")).toMatchObject({ presence: "configured", readAt: now });
     home.lockKeychain(true);
@@ -328,7 +329,7 @@ describe("endpoint monitor across failures", () => {
         ? { status: 200, body: { data: { is_management_key: true } } }
         : { status: 200, body: { data: { total_credits: 1, total_usage: 0 } } };
     });
-    home.setKeychainItem("lastdrop", "openrouter-api-key", b64("o"));
+    home.setKeychainItem("t3code-lastdrop", "openrouter-api-key", b64("o"));
     const monitor = new EndpointMonitor({ paths: home.paths, fetch, now: () => now });
     const pass = async (next: typeof answer) => {
       answer = next;
@@ -434,7 +435,7 @@ describe.runIf(process.env.LASTDROP_ENDPOINT_CLI_TEST === "1")("real Claude Code
     const good = await fakeEndpoint();
     const bad = await fakeEndpoint();
     try {
-      spaced.setKeychainItem("lastdrop", "zai-api-key", b64("synthetic-endpoint-key"));
+      spaced.setKeychainItem("t3code-lastdrop", "zai-api-key", b64("synthetic-endpoint-key"));
       await prepareEndpointProfile({ paths: spaced.paths, provider: "zai" });
       const dir = endpointDirectory(spaced.paths, "zai");
       const { instance } = endpointInstance({

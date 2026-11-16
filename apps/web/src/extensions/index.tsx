@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import type { ComponentType } from "react";
 
-import { AccountsSection } from "./lastdrop/AccountsSection";
+import { ClaudeInstanceSections } from "./lastdrop/ClaudeInstanceSections";
 
 export interface ExtensionInstanceSectionProps {
   readonly environmentId: EnvironmentId;
@@ -21,11 +21,12 @@ export interface ExtensionInstanceSectionProps {
 
 /**
  * Extra settings sections for a provider instance, by driver kind. lastdrop's Claude accounts show on T3's
- * own Claude provider (`claudeAgent`), whose queries lastdrop will route across them.
+ * own Claude provider (`claudeAgent`), whose queries lastdrop routes across them, with the Z.ai and OpenRouter
+ * keys (`ClaudeInstanceSections`).
  */
 const extensionInstanceSections: Readonly<
   Record<string, ComponentType<ExtensionInstanceSectionProps>>
-> = { claudeAgent: AccountsSection };
+> = { claudeAgent: ClaudeInstanceSections };
 
 /** Renders the extension section for this instance's driver, if any. */
 export function ExtensionInstanceSection(props: {
