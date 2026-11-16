@@ -38,7 +38,7 @@ export class ClaudeKeeper {
     this.online = options.online ?? (() => true);
   }
 
-  /** By account key ("main", "Pro"). */
+  /** By account key ("Pro"). */
   get signIns(): ReadonlyMap<string, KeeperSignIn> {
     return this.entries;
   }

@@ -9,13 +9,13 @@ import {
   claudeView,
   decideThread,
   type LedgerWrite,
-  MAIN_KEY,
   moveNotice,
   pick,
   pickForThread,
   planSize,
   pool,
   readingFromStatus,
+  TERMINAL_KEY,
   type ThreadDecision,
   type ThreadIdentity,
   usedForModel,
@@ -164,6 +164,20 @@ export class ThreadRouter {
     };
   }
 
+  /**
+   * Where one-off work outside a thread runs (T3's titles and commit messages): the roomiest account's
+   * environment, or undefined while no account can take it (it then runs on Claude Code's own login).
+   */
+  async oneOffEnvironment(
+    model: string | undefined,
+    env: Readonly<Record<string, string | undefined>>,
+  ): Promise<Record<string, string> | undefined> {
+    const { candidates } = await this.candidates(model);
+    const picked =
+      pickForThread(candidates.filter((c) => !this.isTroubled(c.id))) ?? pickForThread(candidates);
+    return picked === undefined ? undefined : runEnvironment(this.options.paths, picked.id, env);
+  }
+
   /** Its passing errors outlasted every retry a moment ago (not gone: a warm thread stays). */
   isTroubled(account: string): boolean {
     return (this.troubledUntil.get(account) ?? -Infinity) > this.now();
@@ -172,7 +186,8 @@ export class ThreadRouter {
   /**
    * Where a query opens when choosing failed or took too long: the thread's recorded account, its ids
    * translated, nothing written. Throws when that can't be built (an unreadable ledger, a profile that
-   * can't be prepared): the caller then refuses to open, rather than run another account's id on Main.
+   * can't be prepared): the caller then refuses to open, rather than run another account's id on Claude
+   * Code's own login.
    */
   async recorded(input: Pick<RouteInput, "identity" | "env">): Promise<Route> {
     const store = await this.options.ledger.read();
@@ -188,9 +203,9 @@ export class ThreadRouter {
       };
     }
     const session = identity.resume;
-    const account = store.sessions[session]?.account ?? MAIN_KEY;
+    const account = store.sessions[session]?.account ?? TERMINAL_KEY;
     const env = await runEnvironment(this.options.paths, account, input.env);
-    if (account !== MAIN_KEY && env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] === undefined) {
+    if (account !== TERMINAL_KEY && env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] === undefined) {
       throw new Error(`the sign-in folder of Claude account ${account} is missing`);
     }
     this.log(
@@ -233,8 +248,8 @@ export class ThreadRouter {
         ? undefined
         : store.appThreads[input.parentThreadId]?.account;
     const { candidates, ceiling } = await this.candidates(input.model, own);
-    // No account to start a new thread on (nobody is signed in anywhere): the choice is Claude Code's. A resumed
-    // thread is still decided: it never opens untouched with an id another account has seen.
+    // No account to start a new thread on (no fork account is signed in): it runs on Claude Code's own login. A
+    // resumed thread is still decided: it never opens untouched with an id another account has seen.
     if (candidates.length === 0 && input.identity.resume === undefined) {
       return {
         identity: await translated,
@@ -382,7 +397,7 @@ export class ThreadRouter {
     const current = currentSessionIn(store, source);
     await this.options.ledger.record({
       session: forked,
-      account: store.sessions[current]?.account ?? MAIN_KEY,
+      account: store.sessions[current]?.account ?? TERMINAL_KEY,
       forkedAt: this.now(),
       from: current,
       at: this.now(),

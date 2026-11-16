@@ -5,6 +5,7 @@ import {
   append,
   emptyConfig,
   encodeAccountsConfig,
+  TERMINAL_KEY,
 } from "@t3tools/lastdrop-core";
 import * as NodeFS from "node:fs";
 
@@ -91,12 +92,41 @@ describe("the thread router", () => {
     expect((await ledger.read()).appThreads["thread-1"]?.account).toBe("Ultra");
   });
 
-  it("main runs as it is", async () => {
-    statuses = { main: { session: 0, weekly: 0, at, plan: "Ultra" } };
-    const r = await route({ sessionId: "X" });
-    expect(r.decision?.account).toBe("main");
-    expect(r.env["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBeUndefined();
-    expect(r.env["CLAUDE_CONFIG_DIR"]).toBeUndefined();
+  it("Main is the fork's own sign-in: Claude Code's own login is used only while no account is signed in", async () => {
+    // An older list's Main, roomiest, while Claude Code's own login (`~/.claude.json`) is signed in.
+    let config = append(emptyConfig(), { provider: "claude", key: "main", addedAt: 0 });
+    for (const key of ["Pro", "Ultra"]) {
+      config = append(config, { provider: "claude", key, addedAt: 0 });
+    }
+    t.write(accountsFile(t.paths), encodeAccountsConfig(config));
+    statuses = { ...statuses, main: { session: 0, weekly: 0, at, plan: "Max 20x" } };
+    expect((await route({ sessionId: "X" })).decision?.account).toBe("Ultra");
+
+    t.write(`${claudeFolder(t.paths, "main")}/.claude.json`, {
+      oauthAccount: { accountUuid: "u-fork-main" },
+    });
+    const main = await route({ sessionId: "Y" });
+    expect(main.decision?.account).toBe("main");
+    expect(main.env["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBe(`${t.paths.claudeFolders}/main`);
+    const oneOff = await router.oneOffEnvironment(undefined, { PATH: "/bin" });
+    expect(oneOff?.["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBe(`${t.paths.claudeFolders}/main`);
+
+    for (const key of ["main", "Pro", "Ultra"]) {
+      NodeFS.rmSync(`${claudeFolder(t.paths, key)}/.claude.json`);
+    }
+    const terminal = await route({ sessionId: "Z" });
+    expect(terminal.untouched).toBe("no signed-in account");
+    expect(terminal.env["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBeUndefined();
+    expect(terminal.env["CLAUDE_CONFIG_DIR"]).toBeUndefined();
+    expect(await router.oneOffEnvironment(undefined, { PATH: "/bin" })).toBeUndefined();
+  });
+
+  it("a thread T3 ran on Claude Code's own login moves to an account once one is signed in", async () => {
+    const r = await route({ resume: "T" });
+    expect(r.decision?.from).toBe(TERMINAL_KEY);
+    expect(r.decision?.action).toBe("move");
+    expect(r.decision?.account).toBe("Ultra");
+    expect(r.identity).toEqual({ resume: "T", forkSession: true, sessionId: "new-1" });
   });
 
   it("the user's own sign-in in the environment is left alone", async () => {

@@ -39,14 +39,14 @@ const blob = (expiresAt: number, plan = "max") =>
 
 describe("the accounts monitor", () => {
   it("reads every account's sign-in and usage, and keeps the status file", async () => {
-    const config = append(emptyConfig(), {
+    const config = append(append(emptyConfig(), { provider: "claude", key: "main", addedAt: 0 }), {
       provider: "claude",
       key: "Pro",
       name: "Work",
       addedAt: 0,
     });
     t.write(accountsFile(t.paths), encodeAccountsConfig(config));
-    // Main: signed in, with Claude Code's own recent reading.
+    // Claude Code's own login, signed in with a recent reading: never the fork's Main, never read or renewed.
     t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
     t.write(t.paths.sharedConfig, {
       oauthAccount: { accountUuid: mainUUID, emailAddress: "main@example.com" },
@@ -109,20 +109,13 @@ describe("the accounts monitor", () => {
         a.source,
       ]),
     ).toEqual([
-      ["main", undefined, "main@example.com", "Ultra", "ok", 30, 40, "cache"],
+      ["main", undefined, undefined, undefined, "signedOut", undefined, undefined, undefined],
       ["Pro", "Work", "pro@example.com", "Pro", "ok", 5, 7, "endpoint"],
     ]);
-    // Main's reading came from Claude Code's copy; only its plan and grants were asked for.
-    expect(asked.filter((a) => a.startsWith("Bearer tok-max")).map((a) => a.split(" ")[2])).toEqual(
-      ["/api/oauth/usage?cedar_ember=1&skip_spend=1", "/api/oauth/profile"],
-    );
+    expect(view.terminalLogin).toBe(false);
+    expect(asked.some((a) => a.startsWith("Bearer tok-max"))).toBe(false);
     const statuses = decodeStatusFile(NodeFS.readFileSync(statusFile(t.paths), "utf8"));
-    expect(statuses["main"]).toMatchObject({
-      session: 30,
-      weekly: 40,
-      plan: "Ultra",
-      signIn: "ok",
-    });
+    expect(statuses["main"]?.signIn).toBe("signedOut");
     expect(statuses["Pro"]).toMatchObject({ session: 5, weekly: 7, plan: "Pro", signIn: "ok" });
 
     // Within five minutes nothing is asked again; after, it is.
@@ -147,14 +140,20 @@ describe("the accounts monitor", () => {
     });
     const view = await monitor.view();
     expect(view.accounts.map((a) => [a.key, a.signIn, a.error])).toEqual([
-      ["main", "signedOut", "Run `claude` to sign in."],
-      ["Gone", "signedOut", "Run `claude` to sign in."],
+      ["Gone", "signedOut", "Not signed in here."],
     ]);
+    // No account can take work: Claude threads run on Claude Code's own login.
+    expect(view.terminalLogin).toBe(true);
   });
 
   it("a never-read account has no read time, and an old usage.json entry shows no windows", async () => {
-    t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: mainUUID } });
-    t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
+    t.write(
+      accountsFile(t.paths),
+      encodeAccountsConfig(append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 0 })),
+    );
+    const folder = claudeFolder(t.paths, "Pro")!;
+    t.write(`${folder}/.claude.json`, { oauthAccount: { accountUuid: proUUID } });
+    t.setKeychain(keychainService(folder), blob(at + 3_600_000));
     const monitor = new AccountsMonitor({
       paths: t.paths,
       env: {},
@@ -171,7 +170,7 @@ describe("the accounts monitor", () => {
     expect(main?.error).toContain("no network");
 
     t.write(statusFile(t.paths), {
-      main: { session: 0, weekly: 34, at: at / 1000 - 3 * 3600, plan: "Max 20x" },
+      Pro: { session: 0, weekly: 34, at: at / 1000 - 3 * 3600, plan: "Max 20x" },
     });
     const later = new AccountsMonitor({
       paths: t.paths,

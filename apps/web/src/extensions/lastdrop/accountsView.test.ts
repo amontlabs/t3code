@@ -11,9 +11,9 @@ import {
 
 describe("the accounts section", () => {
   it("names accounts and words their state", () => {
-    expect(accountTitle({ isMain: true, key: "main" })).toBe("Main");
-    expect(accountTitle({ isMain: false, key: "Pro" })).toBe("Pro");
-    expect(accountTitle({ isMain: false, key: "Pro", name: "Work" })).toBe("Work");
+    expect(accountTitle({ key: "main" })).toBe("Main");
+    expect(accountTitle({ key: "Pro" })).toBe("Pro");
+    expect(accountTitle({ key: "Pro", name: "Work" })).toBe("Work");
     expect(usedLabel(undefined)).toBe("Unknown");
     expect(usedLabel(41.6)).toBe("42% used");
     expect(signInLabel({ signIn: "ok", signInEndsSoon: false })).toEqual({

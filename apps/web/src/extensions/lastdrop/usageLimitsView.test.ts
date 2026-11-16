@@ -93,7 +93,6 @@ describe("the usage limits list", () => {
         {
           key: "claude-2",
           name: "Work",
-          isMain: false,
           email: "B@example.com",
           signIn: "ok",
           signInEndsSoon: false,

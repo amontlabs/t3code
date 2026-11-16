@@ -171,7 +171,7 @@ export class ClaudeUsage {
       throw new UsageFetchError("rateLimited", rateLimitedMessage(until, this.now()));
     }
     const raw = await storedCredentials(this.options.paths, folder);
-    if (raw === undefined) throw new UsageFetchError("notConfigured", "Run `claude` to sign in.");
+    if (raw === undefined) throw new UsageFetchError("notConfigured", "Not signed in here.");
     const creds = parseCredentials(raw);
     if (!creds) {
       throw new UsageFetchError(

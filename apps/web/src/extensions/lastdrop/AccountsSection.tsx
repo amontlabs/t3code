@@ -201,7 +201,7 @@ function AccountRow(props: {
         )}
         {change !== undefined && renaming === undefined ? (
           <div className="flex shrink-0 items-center gap-1">
-            {!account.isMain && account.signInUrl === undefined ? (
+            {account.signInUrl === undefined ? (
               <Button
                 size="compact"
                 variant={account.signIn === "ok" ? "ghost" : "outline"}
@@ -238,17 +238,15 @@ function AccountRow(props: {
             >
               <PencilIcon />
             </Button>
-            {account.isMain ? null : (
-              <Button
-                size="icon-xs"
-                variant="ghost-destructive"
-                aria-label="Remove"
-                disabled={busy}
-                onClick={() => setConfirmRemove(true)}
-              >
-                <Trash2Icon />
-              </Button>
-            )}
+            <Button
+              size="icon-xs"
+              variant="ghost-destructive"
+              aria-label="Remove"
+              disabled={busy}
+              onClick={() => setConfirmRemove(true)}
+            >
+              <Trash2Icon />
+            </Button>
           </div>
         ) : null}
       </div>
@@ -453,6 +451,18 @@ export function AccountsSection(props: ExtensionInstanceSectionProps) {
           <p className="px-3 py-3 text-xs text-muted-foreground sm:px-4">{note}</p>
         ) : (
           <ul className="divide-y divide-border">
+            {view.terminalLogin ? (
+              <li className="flex flex-col gap-1 px-3 py-3 sm:px-4">
+                <span className="text-sm font-medium text-foreground">
+                  Using Claude Code's own login
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  No account here is signed in, so Claude threads run on the login Claude Code uses
+                  in a terminal, and signing in or out there changes them. Add an account and sign
+                  it in to keep lastdrop separate.
+                </p>
+              </li>
+            ) : null}
             {view.accounts.map((account, index) => (
               <AccountRow
                 key={account.key}

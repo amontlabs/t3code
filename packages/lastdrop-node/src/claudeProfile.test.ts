@@ -4,6 +4,8 @@ import * as NodeFS from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { TERMINAL_KEY } from "@t3tools/lastdrop-core";
+
 import { prepareProfile, runEnvironment, withoutCallerIdentity } from "./claudeProfile.ts";
 import { ClaudeUsage } from "./claudeUsage.ts";
 import { claudeFolder, profileDirectory } from "./paths.ts";
@@ -253,10 +255,12 @@ describe("where the profile is used", () => {
     const runner = await runEnvironment(t.paths, "claude-2", withoutCallerIdentity(base));
     expect(runner["CLAUDE_CONFIG_DIR"]).toBe(env["CLAUDE_CONFIG_DIR"]);
     expect(runner["CLAUDE_CODE_ACCOUNT_UUID"]).toBeUndefined();
-    // Main is never given a profile.
+    // Main signs in through its own folder, like any account; only Claude Code's own login runs as it is.
     const main = await runEnvironment(t.paths, "main", base);
-    expect(main["CLAUDE_CONFIG_DIR"]).toBeUndefined();
-    expect(main["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBeUndefined();
+    expect(main["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBe(claudeFolder(t.paths, "main"));
+    const terminal = await runEnvironment(t.paths, TERMINAL_KEY, base);
+    expect(terminal["CLAUDE_CONFIG_DIR"]).toBeUndefined();
+    expect(terminal["CLAUDE_SECURESTORAGE_CONFIG_DIR"]).toBeUndefined();
   });
 
   it("the usage cache is read from the profile", async () => {
