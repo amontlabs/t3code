@@ -1,9 +1,9 @@
 name: lastdrop sync
 
 # Every hour: when upstream (pingdotgg/t3code) has a newer stable tag (vX.Y.Z) than the one
-# `lastdrop` is based on, rebase `lastdrop` onto it, check it (fork guard, typecheck, tests, build),
-# then move `lastdrop` and push tag v<X.Y.Z>-ld.<n>, which releases. Claude Code resolves a rebase
-# conflict and gets one attempt at fixing red checks; a sync still stuck after that pushes
+# `lastdrop` is based on, merge it into `lastdrop`, check it (fork guard, typecheck, tests, build),
+# then move `lastdrop` and push tag v<X.Y.Z>-ld.<n>, which releases. Claude Code resolves merge
+# conflicts and gets one attempt at fixing red checks; a sync still stuck after that pushes
 # lastdrop-sync/<tag> with a PR labelled lastdrop-sync. FORK.md, "Sync", has the whole flow.
 #
 # Scheduled and manual runs use this file from the default branch, so it must be there.
@@ -44,7 +44,7 @@ defaults:
 
 jobs:
   sync:
-    name: Rebase onto the new upstream tag and check it
+    name: Merge the new upstream tag and check it
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     outputs:
@@ -53,9 +53,9 @@ jobs:
       ready: ${{ steps.ready.outputs.ready }}
     env:
       DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-      # Pushes use this token: the workflow token cannot push commits that change workflow files.
-      PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
+      # Only the push steps get LASTDROP_SYNC_TOKEN, so Claude's steps never see it.
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
     steps:
       - name: Checkout lastdrop
         uses: actions/checkout@v6
@@ -123,6 +123,8 @@ jobs:
 
       - name: Prepare
         if: steps.plan.outputs.tag != ''
+        env:
+          PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
         run: |
           set -euo pipefail
           missing=()
@@ -134,7 +136,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # The rebase rewrites the checkout, so keep this run's prompts, scripts and FORK.md aside.
+          # The merge rewrites the checkout, so keep this run's prompts, scripts and FORK.md aside.
           tools="$RUNNER_TEMP/lastdrop-sync"
           mkdir -p "$tools"
           cp FORK.md scripts/lastdrop/sync-* "$tools/"
@@ -145,25 +147,36 @@ jobs:
             echo "TAG=${{ steps.plan.outputs.tag }}"
             echo "BASE=${{ steps.plan.outputs.base }}"
             echo "PREVIOUS=${{ steps.plan.outputs.previous }}"
-            echo "PRE_REBASE=${{ steps.plan.outputs.head }}"
+            echo "PRE_MERGE=${{ steps.plan.outputs.head }}"
+            echo "BRIEF=$RUNNER_TEMP/conflicts.md"
           } >> "$GITHUB_ENV"
 
-      - name: Rebase (Claude resolves conflicts)
-        id: rebase
+      # A merge, not a rebase: only files both sides changed since the last sync can conflict (the
+      # seams), they are resolved once, and lastdrop's history is never rewritten.
+      - name: Merge (Claude resolves conflicts)
+        id: merge
         if: steps.plan.outputs.tag != ''
-        timeout-minutes: 90
+        timeout-minutes: 60
         run: |
           set -uo pipefail
-          log="$RUNNER_TEMP/rebase.log"
-          if git rebase --onto "$BASE" "$PREVIOUS" > "$log" 2>&1; then
-            echo "Rebased cleanly."
+          log="$RUNNER_TEMP/merge.log"
+          if git merge --no-ff -m "lastdrop: merge upstream $TAG" "$BASE" > "$log" 2>&1; then
+            echo "Merged cleanly."
             exit 0
           fi
-          echo "The rebase stopped on a conflict:"
+          # The lockfile is upstream's, regenerated after the merge; no need for Claude.
+          if git diff --name-only --diff-filter=U | grep -qx pnpm-lock.yaml; then
+            git checkout --theirs pnpm-lock.yaml && git add pnpm-lock.yaml
+          fi
+          if [[ -z "$(git diff --name-only --diff-filter=U)" ]]; then
+            git commit --no-edit && exit 0
+          fi
+          echo "The merge stopped on conflicts:"
           git diff --name-only --diff-filter=U | tee -a "$log"
-          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-resolve.md" 2>&1 | tee "$RUNNER_TEMP/claude-resolve.log" || true
-          if [[ -d .git/rebase-merge || -d .git/rebase-apply ]]; then
-            echo "::error::Claude did not finish the rebase."
+          bash "$TOOLS/sync-brief.sh" "$FORK_MD" > "$BRIEF"
+          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-resolve.md" sonnet 5 2>&1 | tee "$RUNNER_TEMP/claude-resolve.log" || true
+          if [[ -f .git/MERGE_HEAD ]]; then
+            echo "::error::Claude did not finish the merge."
             exit 1
           fi
 
@@ -213,10 +226,11 @@ jobs:
         timeout-minutes: 90
         env:
           CHECKS_LOG: ${{ runner.temp }}/checks.log
+          CHECKS_DIGEST: ${{ runner.temp }}/checks.digest.md
         run: |
           set -uo pipefail
           before="$(git rev-parse HEAD)"
-          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-fix.md" 2>&1 | tee "$RUNNER_TEMP/claude-fix.log" || true
+          bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-fix.md" opus 15 2>&1 | tee "$RUNNER_TEMP/claude-fix.log" || true
           git add -A
           git diff --cached --quiet || git commit -m "lastdrop: fixes for $TAG"
           if [[ "$(git rev-parse HEAD)" != "$before" ]]; then
@@ -235,6 +249,7 @@ jobs:
         id: ready
         if: steps.plan.outputs.tag != ''
         env:
+          PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
           CHECKS: ${{ steps.checks.outcome }}
           RECHECK: ${{ steps.recheck.outcome }}
         run: |
@@ -250,38 +265,39 @@ jobs:
           git push --force "https://x-access-token:$PUSH_TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:refs/heads/lastdrop-sync/$TAG"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      # Only once the rebase ran: a failure before it (no secrets, say) is not a stuck sync.
+      # Only once the merge ran: a failure before it (no secrets, say) is not a stuck sync.
       - name: Open a PR
-        if: failure() && (steps.rebase.outcome == 'success' || steps.rebase.outcome == 'failure')
+        if: failure() && (steps.merge.outcome == 'success' || steps.merge.outcome == 'failure')
         env:
+          PUSH_TOKEN: ${{ secrets.LASTDROP_SYNC_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          REBASED: ${{ steps.rebase.outcome == 'success' }}
+          MERGED: ${{ steps.merge.outcome == 'success' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          if [[ -d .git/rebase-merge || -d .git/rebase-apply ]]; then git rebase --abort; fi
+          if [[ -f .git/MERGE_HEAD ]]; then git merge --abort; fi
           body="$RUNNER_TEMP/body.md"
           tail_of() { [[ -s "$1" ]] && { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 30000 "$1"; echo '```'; echo '</details>'; echo; }; }
-          if [[ "$REBASED" == true ]]; then
+          if [[ "$MERGED" == true ]]; then
             title="Sync to $TAG: checks failed"
             {
-              echo "\`lastdrop\` rebased onto \`$TAG\`, but the checks failed even after Claude's attempt, so \`lastdrop\` was not moved."
+              echo "\`$TAG\` merged into \`lastdrop\`, but the checks failed even after Claude's attempt, so \`lastdrop\` was not moved."
               echo
-              echo "This branch is the rebased \`lastdrop\`. Fix it here (FORK.md, \"Resolving a sync\"), force-push it to \`lastdrop\` and push tag \`v${TAG#v}-ld.1\` to release."
+              echo "This branch is \`lastdrop\` with the merge. Fix it here (FORK.md, \"Resolving a sync\"), then merge this PR and push tag \`v${TAG#v}-ld.1\` to release."
             } > "$body"
             head=HEAD
           else
-            title="Sync to $TAG: rebase conflict"
+            title="Sync to $TAG: merge conflict"
             {
-              echo "Rebasing \`lastdrop\` from \`$PREVIOUS\` onto \`$TAG\` stopped on a conflict Claude did not resolve."
+              echo "Merging \`$TAG\` into \`lastdrop\` stopped on a conflict Claude did not resolve."
               echo
               echo "Resolve it locally, following FORK.md (\"Resolving a sync\"):"
               echo
               echo '```sh'
               echo "git fetch origin && git fetch $UPSTREAM 'refs/tags/$TAG:refs/tags/$TAG'"
-              echo "git switch lastdrop && git rebase --onto $TAG $PREVIOUS"
+              echo "git switch lastdrop && git merge $TAG"
               echo "node scripts/lastdrop/check-fork-paths.ts"
-              echo "git push --force-with-lease origin lastdrop && git push origin v${TAG#v}-ld.1"
+              echo "git push origin lastdrop && git push origin v${TAG#v}-ld.1"
               echo '```'
               echo
               echo "This branch is upstream's tag; the PR is a notice."
@@ -293,7 +309,8 @@ jobs:
             echo "Then close this PR and delete \`lastdrop-sync/$TAG\`. Run: $RUN_URL"
             echo
             if [[ -s "$NOTES" ]]; then echo "## Claude's notes"; echo; cat "$NOTES"; echo; fi
-            tail_of "$RUNNER_TEMP/rebase.log" "Rebase log"
+            tail_of "$RUNNER_TEMP/merge.log" "Merge log"
+            tail_of "$RUNNER_TEMP/checks.digest.md" "Failures (digest)"
             tail_of "$RUNNER_TEMP/recheck.log" "Checks after Claude's fix (tail)"
             tail_of "$RUNNER_TEMP/checks.log" "Checks (tail)"
             tail_of "$RUNNER_TEMP/claude-resolve.log" "Claude, resolving (tail)"

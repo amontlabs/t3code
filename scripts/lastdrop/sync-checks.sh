@@ -27,5 +27,15 @@ run build vp run build:desktop
 
 if ((${#failed[@]})); then
   echo "Failed: ${failed[*]}" | tee -a "$log"
+  # What the fix step reads first: failing tasks, then each error or failing test with some context.
+  {
+    echo "# Failed checks: ${failed[*]}"
+    echo
+    echo '```'
+    sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -a -E '✗ \(exit code|violation' | sort -u
+    sed 's/\x1b\[[0-9;]*m//g' "$log" |
+      grep -a -A 20 -E '^ *FAIL |error TS[0-9]+|^ *Error:|AssertionError|check-fork-paths:' | head -c 40000
+    echo '```'
+  } > "${log%.log}.digest.md"
   exit 1
 fi

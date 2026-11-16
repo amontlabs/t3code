@@ -2,7 +2,7 @@
 
 Read this before resolving an upstream conflict or touching a T3 file.
 
-This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The `lastdrop` branch is the latest stable upstream tag (`vX.Y.Z`) plus a short stack of fork commits on top. The fork adds lastdrop (several Claude accounts picked by remaining limits, the user's own agents with fallbacks across providers) and installs as its own app that opens the official T3 Code's data (`~/.t3`). Use one of the two apps at a time.
+This repository is a fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code). The `lastdrop` branch is the fork's commits with each stable upstream tag (`vX.Y.Z`) merged in; its diff from the newest merged tag is the whole fork. The fork adds lastdrop (several Claude accounts picked by remaining limits, the user's own agents with fallbacks across providers) and installs as its own app that opens the official T3 Code's data (`~/.t3`). Use one of the two apps at a time.
 
 ## Rules
 
@@ -245,13 +245,13 @@ The official app reads the same `settings.json`, so it shows and runs lastdrop's
 
 1. Turns off every workflow that is not `lastdrop-*` (upstream's would fail or wait for upstream's runners).
 2. Finds the newest stable upstream tag (`^v\d+\.\d+\.\d+$`; nightly and preview tags are skipped). Nothing newer than the base of `lastdrop`, or `lastdrop-sync/<tag>` already exists (waiting for a person): done.
-3. `git rebase --onto <tag> <previous>`. On a conflict, Claude Code resolves it headless, following `scripts/lastdrop/sync-resolve.md`. If it stops, the conflict goes to a PR (step 7).
+3. `git merge <tag>`. Only files both sides changed since the last sync can conflict, which is the seams (fork folders are the fork's alone). The lockfile takes upstream's; any other conflict goes to Claude Code, headless, with only the conflicted files and their seam sections (`sync-brief.sh`, `sync-resolve.md`, Sonnet). If it stops, the conflict goes to a PR (step 7).
 4. Regenerates `pnpm-lock.yaml` (`vp install --lockfile-only`), installs, then `scripts/lastdrop/sync-checks.sh`: the guard, `vp run typecheck`, `vp run -r test`, `vp run build:desktop`.
-5. Red: Claude gets one attempt at a fix (`scripts/lastdrop/sync-fix.md`, inside the fork's folders and seams only), then the checks run again.
+5. Red: Claude gets one attempt at a fix (`sync-fix.md`, Opus, inside the fork's folders and seams only), starting from a digest of the failures rather than the whole log, then the checks run again.
 6. Green: moves `lastdrop` (only if nobody pushed meanwhile), deletes every `lastdrop-sync/*` branch (closing older stuck syncs' PRs), and pushes tag `v<tag>-ld.<n>`, which runs `lastdrop-release.yml`.
-7. Still stuck: pushes `lastdrop-sync/<tag>` (the upstream tag on a conflict, the rebased branch on red checks) with a PR into `lastdrop`, labelled `lastdrop-sync`, carrying Claude's notes and the log. The hourly job does not retry while that branch exists.
+7. Still stuck: pushes `lastdrop-sync/<tag>` (the upstream tag on a conflict, the merged branch on red checks) with a PR into `lastdrop`, labelled `lastdrop-sync`, carrying Claude's notes and the log. The hourly job does not retry while that branch exists.
 
-The gate is the checks, not Claude: a sync Claude resolved or fixed ships like a clean one, and its changes are visible as the rebased commits or a `lastdrop: fixes for <tag>` commit. `lastdrop-release.yml` opens an issue labelled `lastdrop-sync` when a release fails and closes those issues on the next good release. The app's sidebar shows a warning, linking to the newest open item, while any PR or issue with that label is open (`apps/web/src/extensions/lastdrop/SyncNotice.tsx`).
+The gate is the checks, not Claude: a sync Claude resolved or fixed ships like a clean one, and its changes are visible in the merge commit and any `lastdrop: sync fixes` or `lastdrop: fixes for <tag>` commit. Each Claude step is capped (`--max-budget-usd`) and the run summary lists its turns, tokens and cost at API prices. `lastdrop-release.yml` opens an issue labelled `lastdrop-sync` when a release fails and closes those issues on the next good release. The app's sidebar shows a warning, linking to the newest open item, while any PR or issue with that label is open (`apps/web/src/extensions/lastdrop/SyncNotice.tsx`).
 
 `lastdrop-guard.yml` runs the guard on every push and PR to `lastdrop`. A person can release by pushing a `v*-ld.*` tag.
 
@@ -260,17 +260,17 @@ The gate is the checks, not Claude: a sync Claude resolved or fixed ships like a
 **Repository setup**:
 
 - Secret `LASTDROP_SYNC_TOKEN`: a fine-grained token for this repository only, with Contents and Workflows read and write. The workflow token cannot push commits that change `.github/workflows/`, which upstream's releases do, and a tag it pushes starts no workflow.
-- Secret `CLAUDE_CODE_OAUTH_TOKEN`: from `claude setup-token`, on the subscription Claude runs on. It lasts a year.
+- Secrets `CLAUDE_CODE_OAUTH_TOKEN` and, optionally, `CLAUDE_CODE_OAUTH_TOKEN_2`: from `claude setup-token`, each on a Claude subscription. The second is used when the first account is at its limit. They last a year.
 - Actions settings: "Allow GitHub Actions to create and approve pull requests", so the workflow token opens the PRs (and you are notified of them, which you would not be for a PR opened as you).
 
 ### Resolving a sync
 
 1. `git fetch origin && git fetch https://github.com/pingdotgg/t3code.git 'refs/tags/<tag>:refs/tags/<tag>'`.
-2. `git switch lastdrop && git rebase --onto <tag> <previous>` (or start from `lastdrop-sync/<tag>` when checks were red).
-3. For each conflict (in a rebase, `--ours` is the upstream side, `--theirs` the fork commit being replayed):
+2. `git switch lastdrop && git merge <tag>` (or start from `lastdrop-sync/<tag>` when checks were red).
+3. For each conflict (`--ours` is the fork, `--theirs` upstream; `git diff <previous> lastdrop -- <file>` is the fork's change to a file):
    - a seam: start from upstream's file and re-apply the seam from its section above;
    - `pnpm-lock.yaml`: take upstream's, then `vp install --lockfile-only` at the end;
    - any other upstream file: it should not differ from upstream, take upstream's;
    - a file in a fork folder: upstream should never touch these paths, so this means upstream now uses the same path for something of its own. Neither side can be dropped: move the fork's file to a path upstream does not use, update its imports and this file, then take upstream's.
 4. `node scripts/lastdrop/check-fork-paths.ts`, then the checks for the packages you touched (`vp run check:changed`) and the desktop tests.
-5. `git push --force-with-lease origin lastdrop`, then push tag `v<tag>-ld.1` to release. Close the PR and delete `lastdrop-sync/<tag>`.
+5. `git push origin lastdrop`, then push tag `v<tag>-ld.1` to release. Close the PR and delete `lastdrop-sync/<tag>`.
