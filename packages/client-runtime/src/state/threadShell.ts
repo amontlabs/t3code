@@ -14,6 +14,7 @@ import {
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
+import { withoutLastdropShadowThreads } from "../extensions.ts";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
@@ -237,9 +238,10 @@ export function createEnvironmentThreadShellAtoms(input: {
   };
 
   const environmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationV2ThreadShell> =>
+    Atom.make((get): ReadonlyArray<OrchestrationV2ThreadShell> =>
+      withoutLastdropShadowThreads(
         get(input.snapshotAtom(environmentId))?.threads ?? EMPTY_THREADS,
+      ),
     ).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
   );
 

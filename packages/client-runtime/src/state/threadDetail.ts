@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
+import { withoutLastdropShadowState } from "../extensions.ts";
 import {
   deriveThreadQueueWorkflowState,
   getUserQueuedThreadRuns,
@@ -258,9 +259,11 @@ export function createEnvironmentThreadDetailAtoms<E>(
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     return Atom.make((get) =>
-      AsyncResult.getOrElse(
-        get(threadStateAtom(ref.environmentId, ref.threadId)),
-        () => EMPTY_ENVIRONMENT_THREAD_STATE,
+      withoutLastdropShadowState(
+        AsyncResult.getOrElse(
+          get(threadStateAtom(ref.environmentId, ref.threadId)),
+          () => EMPTY_ENVIRONMENT_THREAD_STATE,
+        ),
       ),
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-state-value:${key}`));
   });

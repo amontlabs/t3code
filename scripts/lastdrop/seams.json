@@ -4,6 +4,7 @@
     "packages/lastdrop-*/**",
     "apps/*/src/extensions/**",
     "packages/client-runtime/src/extensions.ts",
+    "packages/client-runtime/src/extensions.test.ts",
     "scripts/lastdrop/**",
     "docs/lastdrop/**",
     ".github/workflows/lastdrop-*",
@@ -94,6 +95,14 @@
     "apps/server/src/orchestration-v2/RestartContinuation.ts": {
       "budget": 2,
       "why": "export CONTINUE_PROMPT for the continuation after a usage-limit move"
+    },
+    "packages/client-runtime/src/state/threadDetail.ts": {
+      "budget": 9,
+      "why": "a lastdrop agent's duplicate Claude subagent hidden from thread readers"
+    },
+    "packages/client-runtime/src/state/threadShell.ts": {
+      "budget": 6,
+      "why": "a lastdrop agent's duplicate Claude subagent thread hidden from thread lists"
     }
   }
 }
