@@ -10,7 +10,7 @@ import * as NodeFS from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { accountsFiles, claudeFolder } from "./paths.ts";
+import { accountsFile, claudeFolder } from "./paths.ts";
 import { SessionLedger } from "./sessionLedger.ts";
 import { makeTestHome, type TestHome } from "./testHome.ts";
 import { ThreadRouter } from "./threadRouter.ts";
@@ -34,7 +34,7 @@ beforeEach(() => {
   for (const key of ["Pro", "Ultra"]) {
     config = append(config, { provider: "claude", key, addedAt: 0 });
   }
-  t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
+  t.write(accountsFile(t.paths), encodeAccountsConfig(config));
   t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: "u-main" } });
   for (const key of ["Pro", "Ultra"]) {
     t.write(`${claudeFolder(t.paths, key)}/.claude.json`, {

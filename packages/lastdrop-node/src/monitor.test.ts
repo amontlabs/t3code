@@ -12,12 +12,7 @@ import * as NodeFS from "node:fs";
 
 import type { FetchLike } from "./claudeUsage.ts";
 import { AccountsMonitor, USAGE_REFRESH_MS } from "./monitor.ts";
-import { accountsFiles, claudeFolder, statusFile } from "./paths.ts";
-import {
-  standaloneAppRunning,
-  standaloneHeartbeatFile,
-  standaloneStatusFile,
-} from "./standalone.ts";
+import { accountsFile, claudeFolder, statusFile } from "./paths.ts";
 import { makeTestHome, type TestHome } from "./testHome.ts";
 
 const mainUUID = "614646e1-0000-0000-0000-000000000001";
@@ -50,7 +45,7 @@ describe("the accounts monitor", () => {
       name: "Work",
       addedAt: 0,
     });
-    t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
+    t.write(accountsFile(t.paths), encodeAccountsConfig(config));
     // Main: signed in, with Claude Code's own recent reading.
     t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
     t.write(t.paths.sharedConfig, {
@@ -129,8 +124,6 @@ describe("the accounts monitor", () => {
       signIn: "ok",
     });
     expect(statuses["Pro"]).toMatchObject({ session: 5, weekly: 7, plan: "Pro", signIn: "ok" });
-    // The standalone lastdrop's files are only read.
-    expect(NodeFS.readdirSync(`${t.paths.swiftSupport}`)).toEqual(["accounts.json"]);
 
     // Within five minutes nothing is asked again; after, it is.
     const before = asked.length;
@@ -144,7 +137,7 @@ describe("the accounts monitor", () => {
 
   it("an account without a sign-in says so and isn't read", async () => {
     const config = append(emptyConfig(), { provider: "claude", key: "Gone", addedAt: 0 });
-    t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
+    t.write(accountsFile(t.paths), encodeAccountsConfig(config));
     const monitor = new AccountsMonitor({
       paths: t.paths,
       env: {},
@@ -159,50 +152,6 @@ describe("the accounts monitor", () => {
     ]);
   });
 
-  it("while the standalone app runs, the fork reads its usage.json and asks nobody", async () => {
-    const config = append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 0 });
-    t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
-    t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: mainUUID } });
-    // The app's own file, in its format (seconds).
-    t.write(standaloneStatusFile(t.paths), {
-      main: { session: 12, weekly: 34, at: at / 1000 - 60, plan: "Ultra", signIn: "ok" },
-      Pro: { session: 50, weekly: 60, at: at / 1000 - 60, signIn: "needsSignIn" },
-    });
-    const asked: string[] = [];
-    const renewed: string[] = [];
-    const monitor = new AccountsMonitor({
-      paths: t.paths,
-      env: {},
-      fetch: async (url) => {
-        asked.push(url);
-        throw new Error("no network");
-      },
-      sessionId: "s",
-      now: () => at,
-      renew: async (key) => {
-        renewed.push(key);
-        return true;
-      },
-      standaloneRunning: async () => true,
-    });
-    const view = await monitor.view();
-    expect(view.readBy).toBe("standalone");
-    expect(view.accounts.map((a) => [a.key, a.session, a.weekly, a.signIn, a.source])).toEqual([
-      ["main", 12, 34, "ok", "standalone"],
-      ["Pro", 50, 60, "needsSignIn", "standalone"],
-    ]);
-    // An idle Max-sized session still has its row; Ultra has none.
-    expect(view.accounts.map((a) => a.windows.map((w) => w.label))).toEqual([
-      ["Weekly"],
-      ["Session", "Weekly"],
-    ]);
-    expect((await monitor.routingStatuses())["main"]?.session).toBe(12);
-    expect(asked).toEqual([]);
-    expect(renewed).toEqual([]);
-    // Nothing of the fork's own was written, and the app's file is only read.
-    expect(NodeFS.existsSync(statusFile(t.paths))).toBe(false);
-  });
-
   it("a never-read account has no read time, and an old usage.json entry shows no windows", async () => {
     t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: mainUUID } });
     t.setKeychain("Claude Code-credentials", blob(at + 3_600_000));
@@ -215,17 +164,16 @@ describe("the accounts monitor", () => {
       sessionId: "s",
       now: () => at,
       renew: async () => false,
-      standaloneRunning: async () => false,
     });
     const [main] = (await monitor.view()).accounts;
     expect(main?.readAt).toBeUndefined();
     expect(main?.windows).toEqual([]);
     expect(main?.error).toContain("no network");
 
-    t.write(standaloneStatusFile(t.paths), {
+    t.write(statusFile(t.paths), {
       main: { session: 0, weekly: 34, at: at / 1000 - 3 * 3600, plan: "Max 20x" },
     });
-    const standalone = new AccountsMonitor({
+    const later = new AccountsMonitor({
       paths: t.paths,
       env: {},
       fetch: async () => {
@@ -233,18 +181,10 @@ describe("the accounts monitor", () => {
       },
       sessionId: "s",
       now: () => at,
-      standaloneRunning: async () => true,
+      renew: async () => false,
     });
-    const [old] = (await standalone.view()).accounts;
+    const [old] = (await later.view()).accounts;
     expect(old?.readAt).toBe(at - 3 * 3_600_000);
     expect(old?.windows).toEqual([]);
-  });
-
-  it("the standalone app counts as running while its heartbeat is under a minute old", async () => {
-    expect(await standaloneAppRunning(t.paths, at)).toBe(false);
-    t.write(standaloneHeartbeatFile(t.paths), "");
-    NodeFS.utimesSync(standaloneHeartbeatFile(t.paths), at / 1000 - 30, at / 1000 - 30);
-    expect(await standaloneAppRunning(t.paths, at)).toBe(true);
-    expect(await standaloneAppRunning(t.paths, at + 31_000)).toBe(false);
   });
 });

@@ -20,6 +20,9 @@ export interface AccountView {
   readonly rateLimitedUntil?: number;
   /** Where new work goes now: "Threads", "Subagents", or a model's subagents ("Fable"). */
   readonly nextFor?: ReadonlyArray<string>;
+  /** A sign-in started here, waiting for the code its page shows. */
+  readonly signInUrl?: string;
+  readonly signInError?: string;
 }
 
 export interface AccountsView {
@@ -27,7 +30,32 @@ export interface AccountsView {
   readonly sessionThreshold: number;
   readonly weeklyThreshold: number;
   readonly accounts: ReadonlyArray<AccountView>;
+  /** Accounts "Import from the lastdrop app" would add; only while there are none here. */
+  readonly importable?: number;
 }
+
+/** One change to the accounts (`AccountChange` in lastdrop-node's claudeAccounts.ts). */
+export type AccountChange =
+  | { readonly action: "add"; readonly name: string }
+  | { readonly action: "rename"; readonly key: string; readonly name: string }
+  | { readonly action: "move"; readonly key: string; readonly by: -1 | 1 }
+  | { readonly action: "remove"; readonly key: string }
+  | { readonly action: "import" }
+  | { readonly action: "signIn"; readonly key: string }
+  | { readonly action: "submitCode"; readonly key: string; readonly code: string }
+  | { readonly action: "cancelSignIn"; readonly key: string };
+
+export interface AccountChangeResponse {
+  readonly view: AccountsView;
+  readonly signInUrl?: string;
+}
+
+/** The newer of the polled view and the last change's answer. */
+export const newestView = (
+  a: AccountsView | undefined,
+  b: AccountsView | undefined,
+): AccountsView | undefined =>
+  a === undefined ? b : b === undefined ? a : b.updatedAt >= a.updatedAt ? b : a;
 
 export type AccountsResponse = AccountsView | { readonly unavailable: string };
 

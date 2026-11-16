@@ -31,7 +31,6 @@ import {
 } from "./claudeSignIn.ts";
 import { ClaudeKeeper } from "./keeper.ts";
 import { claudeFolder, type LastdropPaths, statusFile } from "./paths.ts";
-import { standaloneAppRunning, standaloneStatusFile } from "./standalone.ts";
 import { StatusStore } from "./statusStore.ts";
 
 /** Each account's usage is read this often (lastdrop's app refresh). */
@@ -57,8 +56,7 @@ export interface AccountView {
   readonly resets?: LimitResets | undefined;
   /** When the numbers were read (epoch ms), and where from. */
   readonly readAt?: number | undefined;
-  /** `standalone`: the standalone lastdrop app read it (it runs, so the fork asks nobody itself). */
-  readonly source?: "cache" | "endpoint" | "standalone" | undefined;
+  readonly source?: "cache" | "endpoint" | undefined;
   /** Why the last read failed, if it did. */
   readonly error?: string | undefined;
   readonly rateLimitedUntil?: number | undefined;
@@ -71,8 +69,6 @@ export interface AccountsView {
   readonly sessionThreshold: number;
   readonly weeklyThreshold: number;
   readonly accounts: ReadonlyArray<AccountView>;
-  /** Set while the standalone lastdrop app runs and reads usage for both apps. */
-  readonly readBy?: "standalone" | undefined;
 }
 
 export interface MonitorOptions {
@@ -85,8 +81,6 @@ export interface MonitorOptions {
   readonly log?: (line: string) => void;
   /** Tests replace Claude Code. */
   readonly renew?: (key: string) => Promise<boolean>;
-  /** Whether the standalone lastdrop app runs (its heartbeat); tests decide. */
-  readonly standaloneRunning?: () => Promise<boolean>;
 }
 
 interface UsageEntry {
@@ -98,8 +92,6 @@ interface UsageEntry {
 
 export class AccountsMonitor {
   readonly statuses: StatusStore;
-  /** The standalone app's readings, read only, while it runs. */
-  readonly standaloneStatuses: StatusStore;
   readonly usage: ClaudeUsage;
   readonly keeper: ClaudeKeeper;
   private readonly options: MonitorOptions;
@@ -113,7 +105,6 @@ export class AccountsMonitor {
     this.options = options;
     this.now = options.now ?? Date.now;
     this.statuses = new StatusStore(statusFile(options.paths));
-    this.standaloneStatuses = new StatusStore(standaloneStatusFile(options.paths));
     this.usage = new ClaudeUsage({
       paths: options.paths,
       statuses: this.statuses,
@@ -149,19 +140,11 @@ export class AccountsMonitor {
     return this.ticking;
   }
 
-  /** Whether the standalone app runs now: then it reads usage and renews sign-ins, and the fork only reads. */
-  standaloneRunning(): Promise<boolean> {
-    return (
-      this.options.standaloneRunning ?? (() => standaloneAppRunning(this.options.paths, this.now()))
-    )();
-  }
-
-  /**
-   * The readings routing uses: the standalone app's while it runs (it is the one reader of Anthropic's usage
-   * then), else the fork's own.
-   */
-  async routingStatuses(): Promise<Record<string, AccountStatus>> {
-    return (await this.standaloneRunning()) ? this.standaloneStatuses.read() : this.statuses.read();
+  /** A fresh pass after the list changed: one already running may have read the old list, so it runs after. */
+  async refresh(): Promise<AccountsView> {
+    await this.ticking?.catch(() => {});
+    await this.tick();
+    return this.lastView!;
   }
 
   /** The last pass's view; runs a pass first when there was none. */
@@ -175,17 +158,6 @@ export class AccountsMonitor {
     const config = await loadAccounts(this.options.paths, now);
     const accounts = pool(config, "claude");
     const keys = accounts.map((a) => a.key);
-    if (await this.standaloneRunning()) {
-      // The standalone app asks Anthropic and renews sign-ins: asking too would double its requests.
-      this.lastView = await this.viewFrom(
-        config,
-        accounts,
-        await this.standaloneStatuses.read(),
-        now,
-        true,
-      );
-      return;
-    }
     await this.keeper.tick(keys);
     for (const key of keys) {
       const entry = this.entries.get(key) ?? { attemptedAt: -Infinity, due: true };
@@ -224,7 +196,7 @@ export class AccountsMonitor {
       }
       return { ...all };
     });
-    this.lastView = await this.viewFrom(config, accounts, statuses, now, false);
+    this.lastView = await this.viewFrom(config, accounts, statuses, now);
   }
 
   private async viewFrom(
@@ -232,14 +204,13 @@ export class AccountsMonitor {
     accounts: ReturnType<typeof pool>,
     statuses: Record<string, AccountStatus>,
     now: number,
-    standalone: boolean,
   ): Promise<AccountsView> {
     const views: AccountView[] = [];
     const readings: Array<Parameters<typeof routingBadges>[0][number]> = [];
     for (const account of accounts) {
       const key = account.key;
-      const entry = standalone ? undefined : this.entries.get(key);
-      const signIn = standalone ? undefined : this.keeper.signIns.get(key);
+      const entry = this.entries.get(key);
+      const signIn = this.keeper.signIns.get(key);
       const status = statuses[key];
       const reading = readingFromStatus(status, now);
       const { email } = await signedInAccountOf(
@@ -247,7 +218,7 @@ export class AccountsMonitor {
         claudeFolder(this.options.paths, key),
       );
       const plan = entry?.snapshot?.plan ?? status?.plan ?? signIn?.plan;
-      const signInState = signIn?.state ?? (standalone ? (status?.signIn ?? "ok") : "signedOut");
+      const signInState = signIn?.state ?? "signedOut";
       readings.push({ id: key, plan, reading: { ...reading, usable: signInState === "ok" } });
       views.push(
         dropUndefined({
@@ -257,20 +228,20 @@ export class AccountsMonitor {
           email,
           plan,
           signIn: signInState,
-          signInDetail: signIn?.detail ?? (standalone ? status?.signInDetail : undefined),
+          signInDetail: signIn?.detail,
           signInEndsSoon: signIn ? endsSoon(signIn, now) : false,
-          signInEndsAt: signIn?.endsAt ?? (standalone ? status?.signInEndsAt : undefined),
+          signInEndsAt: signIn?.endsAt,
           session: reading.session,
           weekly: reading.weekly,
-          // The standalone's readings (and this app's own before its first read) keep numbers, not rows. Either
-          // way an old reading shows nothing and a passed reset shows as unused.
+          // Readings from before this process's first read keep numbers, not rows. Either way an old reading
+          // shows nothing and a passed reset shows as unused.
           windows: entry?.snapshot
             ? currentWindows(entry.snapshot.windows, entry.snapshot.at, now)
             : windowsFromStatus(status, now),
           resets: entry?.snapshot?.resets,
           // A never-read account's status has `at: -Infinity`: no time, not an invalid one.
           readAt: finite(entry?.snapshot?.at ?? status?.at),
-          source: entry?.snapshot?.source ?? (standalone ? "standalone" : undefined),
+          source: entry?.snapshot?.source,
           error: entry?.error,
           rateLimitedUntil:
             status?.blockedUntil !== undefined && status.blockedUntil > now
@@ -288,7 +259,6 @@ export class AccountsMonitor {
       accounts: views.map((view) =>
         badges[view.key] ? { ...view, nextFor: badges[view.key] } : view,
       ),
-      ...(standalone ? { readBy: "standalone" as const } : {}),
     };
   }
 }

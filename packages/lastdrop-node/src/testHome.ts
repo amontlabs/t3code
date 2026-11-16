@@ -13,6 +13,7 @@ export interface TestHome {
   readonly paths: LastdropPaths;
   /** Stores a keychain item the fake `security` returns for `service`. */
   setKeychain(service: string, value: string): void;
+  hasKeychain(service: string): boolean;
   /** Stores an item for `service` and `account`, which wins over the service-only item for that account. */
   setKeychainItem(service: string, account: string, value: string): void;
   /** While locked, the fake `security` fails like a locked keychain (51), for every item. */
@@ -30,12 +31,14 @@ export function makeTestHome(prefix = "lastdrop-node-"): TestHome {
   NodeFS.mkdirSync(home, { recursive: true });
   NodeFS.mkdirSync(items, { recursive: true });
   const security = `${root}/security`;
-  // find-generic-password -s <service> [-a <account>] -w: prints the item, or fails like the real tool (44).
+  // find-generic-password -s <service> [-a <account>] -w prints the item, delete-generic-password removes it;
+  // either fails like the real tool (44) when there's none.
   NodeFS.writeFileSync(
     security,
     `#!/bin/sh
 service=""
 account=""
+command="$1"
 [ -f "${root}/locked" ] && exit 51
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +53,7 @@ if [ -n "$account" ]; then
   [ -f "$own" ] && file="$own"
 fi
 [ -f "$file" ] || exit 44
+if [ "$command" = "delete-generic-password" ]; then rm "$file"; exit 0; fi
 cat "$file"
 `,
     { mode: 0o755 },
@@ -59,6 +63,7 @@ cat "$file"
     root,
     paths: lastdropPaths({ home, dataDir: `${home}/.t3/lastdrop`, security }),
     setKeychain: (service, value) => NodeFS.writeFileSync(`${items}/${hex(service)}`, value),
+    hasKeychain: (service) => NodeFS.existsSync(`${items}/${hex(service)}`),
     lockKeychain: (locked) =>
       locked
         ? NodeFS.writeFileSync(`${root}/locked`, "")

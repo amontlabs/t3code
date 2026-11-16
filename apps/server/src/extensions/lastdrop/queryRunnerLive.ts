@@ -10,7 +10,8 @@ import { isDelegatedAppThread, ThreadId } from "@t3tools/contracts";
 import {
   fileLogger,
   lastdropPaths,
-  routingStatuses,
+  StatusStore,
+  statusFile,
   SessionLedger,
   ThreadRouter,
 } from "@t3tools/lastdrop-node";
@@ -124,11 +125,11 @@ const wrapRouting = <E, R>(
       const fault = yield* setting("LASTDROP_FAULT_ROUTE");
       const paths = lastdropPaths({ home, dataDir, claudeFolders, profiles });
       const log = fileLogger(`${dataDir}/lastdrop.log`);
+      const statuses = new StatusStore(statusFile(paths));
       const router = new ThreadRouter({
         paths,
         ledger: new SessionLedger(`${dataDir}/sessions.json`),
-        // @effect-diagnostics-next-line globalDate:off - the router's reads are plain promises.
-        statuses: () => routingStatuses(paths, Date.now()),
+        statuses: () => statuses.read(),
         newSessionId: () => NodeCrypto.randomUUID(),
         log,
       });

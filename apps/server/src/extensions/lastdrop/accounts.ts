@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - The real home folder and a run id; the I/O is lastdrop-node's.
 /**
  * lastdrop's Claude accounts: a service keeping every sign-in renewed and its usage read (lastdrop-node's
- * `AccountsMonitor`), and `GET /api/lastdrop/accounts` for the settings section. Accounts are the standalone
- * app's, only read here; the fork's own state is `<T3 home>/lastdrop/usage.json`.
+ * `AccountsMonitor`) and editing the fork's own list (`ClaudeAccounts`), with `GET /api/lastdrop/accounts` and
+ * `POST /api/lastdrop/accounts` (one change per request) for the settings section.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
@@ -10,8 +10,11 @@ import * as NodeOS from "node:os";
 import { AuthOrchestrationReadScope } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
+  type AccountChange,
+  AccountChangeError,
   AccountsMonitor,
-  type AccountsView,
+  ClaudeAccounts,
+  type ClaudeAccountsView,
   fileLogger,
   lastdropPaths,
   nodeFetch,
@@ -36,7 +39,14 @@ export class LastdropAccounts extends Context.Service<
   LastdropAccounts,
   {
     /** The accounts as last read; reads them first when nothing was read yet. */
-    readonly view: Effect.Effect<AccountsView | undefined>;
+    readonly view: Effect.Effect<ClaudeAccountsView | undefined>;
+    /** Adds, signs in, renames, reorders, removes or imports; the view after it, and a sign-in's URL. */
+    readonly change: (
+      change: AccountChange,
+    ) => Effect.Effect<
+      { readonly view: ClaudeAccountsView; readonly signInUrl?: string },
+      AccountsChangeRefused | AccountsRefreshError
+    >;
   }
 >()("t3/extensions/lastdrop/accounts/LastdropAccounts") {}
 
@@ -44,6 +54,16 @@ class AccountsRefreshError extends Schema.TaggedError<AccountsRefreshError>()(
   "LastdropAccountsRefreshError",
   { cause: Schema.Defect() },
 ) {}
+
+/** A change that can't be made, with a message for the user. */
+export class AccountsChangeRefused extends Schema.TaggedError<AccountsChangeRefused>()(
+  "LastdropAccountsChangeRefused",
+  { message: Schema.String },
+) {}
+
+const unavailable = AccountsChangeRefused.make({
+  message: "lastdrop's accounts run on macOS only.",
+});
 
 /**
  * Starts the monitor on macOS, where Claude Code keeps sign-ins in the keychain. Not under vitest: T3's own
@@ -55,15 +75,24 @@ export const layer = Layer.effect(
     const underTest = yield* Config.String("VITEST").pipe(Config.option);
     const platform = yield* HostProcess.Platform;
     if (platform !== "darwin" || underTest._tag === "Some") {
-      return LastdropAccounts.of({ view: Effect.undefined });
+      return LastdropAccounts.of({
+        view: Effect.undefined,
+        change: Effect.fn("LastdropAccounts.change")(function* () {
+          return yield* unavailable;
+        }),
+      });
     }
     const dataDir = yield* resolveLastdropDataDir;
+    const paths = lastdropPaths({ home: NodeOS.homedir(), dataDir });
+    const log = fileLogger(`${dataDir}/lastdrop.log`);
     const monitor = new AccountsMonitor({
-      paths: lastdropPaths({ home: NodeOS.homedir(), dataDir }),
+      paths,
       fetch: nodeFetch,
       sessionId: NodeCrypto.randomUUID(),
-      log: fileLogger(`${dataDir}/lastdrop.log`),
+      log,
     });
+    const accounts = new ClaudeAccounts({ paths, monitor, env: process.env, log });
+    yield* Effect.addFinalizer(() => Effect.sync(() => accounts.logins.cancelAll()));
     const io = <A>(run: () => Promise<A>) =>
       Effect.tryPromise({ try: run, catch: (cause) => new AccountsRefreshError({ cause }) });
     const tick = io(() => monitor.tick()).pipe(
@@ -71,34 +100,93 @@ export const layer = Layer.effect(
     );
     yield* tick.pipe(Effect.repeat(Schedule.spaced(TICK)), Effect.forkScoped);
     return LastdropAccounts.of({
-      view: io(() => monitor.view()).pipe(
+      view: io(() => accounts.view()).pipe(
         Effect.catch((error) =>
           Effect.logWarning("lastdrop accounts view failed", error).pipe(Effect.as(undefined)),
         ),
       ),
+      change: Effect.fn("LastdropAccounts.change")(function* (change: AccountChange) {
+        return yield* Effect.tryPromise({
+          try: () => accounts.change(change),
+          catch: (cause) =>
+            cause instanceof AccountChangeError
+              ? AccountsChangeRefused.make({ message: cause.message })
+              : new AccountsRefreshError({ cause }),
+        });
+      }),
     });
   }),
 );
 
-/** `GET /api/lastdrop/accounts`: the accounts view, for a session that may read the environment. */
-export const routes = HttpRouter.add(
+const AccountKey = Schema.String.check(Schema.isMinLength(1));
+const AccountChangeBody = Schema.Union([
+  Schema.Struct({ action: Schema.Literal("add"), name: Schema.String }),
+  Schema.Struct({ action: Schema.Literal("rename"), key: AccountKey, name: Schema.String }),
+  Schema.Struct({ action: Schema.Literal("move"), key: AccountKey, by: Schema.Literals([-1, 1]) }),
+  Schema.Struct({ action: Schema.Literal("remove"), key: AccountKey }),
+  Schema.Struct({ action: Schema.Literal("import") }),
+  Schema.Struct({ action: Schema.Literal("signIn"), key: AccountKey }),
+  Schema.Struct({ action: Schema.Literal("submitCode"), key: AccountKey, code: Schema.String }),
+  Schema.Struct({ action: Schema.Literal("cancelSignIn"), key: AccountKey }),
+]);
+const decodeAccountChange = Schema.decodeUnknownOption(Schema.fromJsonString(AccountChangeBody));
+
+const json = (body: unknown, status = 200) =>
+  HttpServerResponse.jsonUnsafe(body, { status, headers: { "cache-control": "no-store" } });
+
+/**
+ * A session that may read the environment. A remote (DPoP) client may not change accounts: their sign-ins live
+ * on the Mac that runs them, and the settings section shows none there.
+ */
+const authorize = Effect.fn("LastdropAccounts.authorize")(function* (change: boolean) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
+  if (session._tag === "None") return json({ error: "unauthorized" }, 401);
+  if (!session.value.scopes.includes(AuthOrchestrationReadScope)) {
+    return json({ error: "forbidden" }, 403);
+  }
+  if (change && session.value.method === "dpop-access-token") {
+    return json({ error: "Accounts change on the Mac that runs them." }, 403);
+  }
+  return undefined;
+});
+
+/** `GET /api/lastdrop/accounts`: the accounts view. */
+const readRoute = HttpRouter.add(
   "GET",
   ACCOUNTS_ROUTE,
   Effect.gen(function* () {
+    const refused = yield* authorize(false);
+    if (refused) return refused;
+    const view = yield* (yield* LastdropAccounts).view;
+    return json(view ?? { unavailable: "lastdrop's accounts run on macOS only." });
+  }),
+);
+
+/** `POST /api/lastdrop/accounts` with one `AccountChange`: the view after it (and a sign-in's URL), or `{ error }`. */
+const changeRoute = HttpRouter.add(
+  "POST",
+  ACCOUNTS_ROUTE,
+  Effect.gen(function* () {
+    const refused = yield* authorize(true);
+    if (refused) return refused;
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const auth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
-    if (session._tag === "None") {
-      return HttpServerResponse.jsonUnsafe({ error: "unauthorized" }, { status: 401 });
-    }
-    if (!session.value.scopes.includes(AuthOrchestrationReadScope)) {
-      return HttpServerResponse.jsonUnsafe({ error: "forbidden" }, { status: 403 });
-    }
-    const accounts = yield* LastdropAccounts;
-    const view = yield* accounts.view;
-    return HttpServerResponse.jsonUnsafe(
-      view ?? { unavailable: "lastdrop's accounts run on macOS only." },
-      { headers: { "cache-control": "no-store" } },
+    const body = yield* request.text.pipe(Effect.orElseSucceed(() => ""));
+    const change = decodeAccountChange(body);
+    if (change._tag === "None") return json({ error: "That isn't an account change." }, 400);
+    return yield* (yield* LastdropAccounts).change(change.value).pipe(
+      Effect.map((result) => json(result)),
+      Effect.catchTags({
+        LastdropAccountsChangeRefused: (refusal) =>
+          Effect.succeed(json({ error: refusal.message }, 400)),
+        LastdropAccountsRefreshError: (error) =>
+          Effect.logWarning("lastdrop account change failed", error).pipe(
+            Effect.as(json({ error: "The change failed; see lastdrop.log." }, 500)),
+          ),
+      }),
     );
   }),
 );
+
+export const routes = Layer.mergeAll(readRoute, changeRoute);

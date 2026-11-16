@@ -12,8 +12,8 @@ On each `open(threadId, options)`:
 - The thread's lineage comes from T3's projection (`ProjectionStoreV2.getThread`, `isDelegatedAppThread`). A
   delegated child picks with `pick`, the subagents' rule: the smallest plan with room under the thresholds, the
   parent's account counted as its own. A main thread picks with `pickForThread`: the most room in Pro-sized windows.
-- The candidates are the standalone lastdrop's Claude accounts that are signed in and usable (no sign-in needed),
-  with their readings from `usage.json` (see "Usage"). An account whose passing errors outlasted every retry
+- The candidates are the fork's Claude accounts (`~/.t3/lastdrop/accounts.json`) that are signed in and usable
+  (no sign-in needed), with their readings from `usage.json` (see "Usage"). An account whose passing errors outlasted every retry
   ("troubled", 10 minutes) stays a candidate: a warm thread there stays (and shows the error); it is only never
   a destination while another account has room.
 - The account's sign-in folder goes in `CLAUDE_SECURESTORAGE_CONFIG_DIR` and its profile in `CLAUDE_CONFIG_DIR`
@@ -93,9 +93,8 @@ The wrapper watches the SDK stream; it never polls transcripts and never signals
 
 ## Usage
 
-While the standalone lastdrop app runs (its `app.heartbeat` in `~/Library/Application Support/lastdrop` is under a
-minute old), routing reads its `usage.json` and the fork's monitor neither asks Anthropic nor renews sign-ins: the
-two apps never double the requests. Otherwise the fork polls as in step 3 and routing reads `~/.t3/lastdrop/usage.json`.
+Routing reads the fork's own `~/.t3/lastdrop/usage.json`, which the accounts monitor keeps (step 3). It never reads
+the standalone app's.
 
 ## The ledger file
 
@@ -107,7 +106,7 @@ resumed threads then don't open, with an error naming the file, until it is fixe
 ## Live-check settings
 
 Unset, these change nothing. `LASTDROP_CLAUDE_FOLDERS` names the accounts' sign-in folders' parent (default
-`<home>/.claude-accounts`) and `LASTDROP_PROFILES` where profiles are built (default `<folder>/profile`), so a
+`<T3 home>/lastdrop/accounts`) and `LASTDROP_PROFILES` where profiles are built (default `<folder>/profile`), so a
 throwaway home can sign in through an account's real folder path (its keychain item is named after that path)
 without touching the real profile. `LASTDROP_FAULT_ROUTE=throw` makes every route fail.
 

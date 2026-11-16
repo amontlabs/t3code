@@ -9,6 +9,7 @@ import * as NodeFSP from "node:fs/promises";
 import {
   type AccountsConfig,
   claudeCodeVersion,
+  encodeAccountsConfig,
   keychainService,
   loadAccountsConfig,
   type SignInFacts,
@@ -16,18 +17,18 @@ import {
   signInFacts,
 } from "@t3tools/lastdrop-core";
 
-import { readJsonObject, readText } from "./files.ts";
+import { readJsonObject, readText, writeAtomic } from "./files.ts";
 import { readKeychain } from "./keychain.ts";
 import { runEnvironment, withoutCallerIdentity } from "./claudeProfile.ts";
-import { accountsFiles, claudeFolder, helperDirectory, type LastdropPaths } from "./paths.ts";
+import { accountsFile, claudeFolder, helperDirectory, type LastdropPaths } from "./paths.ts";
 
-/** The account list the standalone lastdrop keeps (read only: the fork never rewrites it here). */
+/** The fork's account list; Main alone while there is none. */
 export async function loadAccounts(paths: LastdropPaths, now: number): Promise<AccountsConfig> {
-  const files = accountsFiles(paths);
-  return loadAccountsConfig(
-    { accounts: await readText(files.accounts), legacy: await readText(files.legacy) },
-    now,
-  );
+  return loadAccountsConfig({ accounts: await readText(accountsFile(paths)) }, now);
+}
+
+export async function saveAccounts(paths: LastdropPaths, config: AccountsConfig): Promise<void> {
+  await writeAtomic(accountsFile(paths), encodeAccountsConfig(config));
 }
 
 /** Claude Code's credentials blob for a config folder: the keychain, else `<folder>/.credentials.json`. */

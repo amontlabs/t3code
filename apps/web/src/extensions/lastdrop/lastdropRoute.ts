@@ -1,6 +1,7 @@
 /**
  * Reads lastdrop's HTTP routes (`GET /api/lastdrop/accounts`, `/endpoints`) from an environment, polling while
- * `active`. A remote (DPoP) connection gets none: the accounts live on the Mac that runs them.
+ * `active`, and posts account changes. A remote (DPoP) connection gets none: the accounts live on the Mac that
+ * runs them (the server refuses its changes too).
  */
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -36,17 +37,62 @@ async function readRoute<T>(
     : { state: "loaded", response: body };
 }
 
+/** One POST of a JSON body; a refusal's `{ error }` becomes the failure's message. Never throws. */
+async function postRoute<T>(
+  route: string,
+  baseUrl: string,
+  bearer: string | undefined,
+  body: unknown,
+): Promise<Load<T>> {
+  const response = await fetch(new URL(route, baseUrl), {
+    method: "POST",
+    credentials: bearer === undefined ? "include" : "omit",
+    headers: {
+      "content-type": "application/json",
+      ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }),
+    },
+    body: JSON.stringify(body),
+  }).catch(() => undefined);
+  if (response === undefined)
+    return { state: "failed", message: "The server couldn't be reached." };
+  const answer = (await response.json().catch(() => undefined)) as
+    | (T & { readonly error?: string })
+    | undefined;
+  if (!response.ok || answer === undefined) {
+    return {
+      state: "failed",
+      message: answer?.error ?? `The server answered ${response.status}.`,
+    };
+  }
+  return { state: "loaded", response: answer };
+}
+
+function useConnection(environmentId: EnvironmentId | null) {
+  const prepared = usePreparedConnection(environmentId);
+  const connection = Option.getOrUndefined(prepared);
+  const authorization = connection?.httpAuthorization ?? null;
+  return {
+    baseUrl: connection?.httpBaseUrl,
+    bearer: authorization?._tag === "Bearer" ? authorization.token : undefined,
+    remote: authorization?._tag === "Dpop",
+  };
+}
+
+/** Posts to a lastdrop route; undefined where changes aren't possible (no connection, or a remote one). */
+export function useRouteSender(
+  environmentId: EnvironmentId | null,
+): (<T>(route: string, body: unknown) => Promise<Load<T>>) | undefined {
+  const { baseUrl, bearer, remote } = useConnection(environmentId);
+  if (baseUrl === undefined || remote) return undefined;
+  return <T>(route: string, body: unknown) => postRoute<T>(route, baseUrl, bearer, body);
+}
+
 export function useRoute<T>(
   environmentId: EnvironmentId | null,
   route: string,
   active = true,
 ): Load<T> {
-  const prepared = usePreparedConnection(environmentId);
-  const connection = Option.getOrUndefined(prepared);
-  const baseUrl = connection?.httpBaseUrl;
-  const authorization = connection?.httpAuthorization ?? null;
-  const bearer = authorization?._tag === "Bearer" ? authorization.token : undefined;
-  const remote = authorization?._tag === "Dpop";
+  const { baseUrl, bearer, remote } = useConnection(environmentId);
   const [load, setLoad] = useState<Load<T>>({ state: "loading" });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Polls the server's lastdrop route on a timer while active.

@@ -5,7 +5,7 @@ import * as NodeFS from "node:fs";
 
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { assert, describe, it } from "@effect/vitest";
-import { accountsFiles, claudeFolder, SessionLedger, ThreadRouter } from "@t3tools/lastdrop-node";
+import { accountsFile, claudeFolder, SessionLedger, ThreadRouter } from "@t3tools/lastdrop-node";
 import {
   type AccountStatus,
   append,
@@ -154,7 +154,7 @@ function world(): World {
   let config = emptyConfig();
   for (const key of ["Pro", "Ultra"])
     config = append(config, { provider: "claude", key, addedAt: 0 });
-  t.write(accountsFiles(t.paths).accounts, encodeAccountsConfig(config));
+  t.write(accountsFile(t.paths), encodeAccountsConfig(config));
   t.write(t.paths.sharedConfig, { oauthAccount: { accountUuid: "u-main" } });
   for (const key of ["Pro", "Ultra"]) {
     t.write(`${claudeFolder(t.paths, key)}/.claude.json`, {

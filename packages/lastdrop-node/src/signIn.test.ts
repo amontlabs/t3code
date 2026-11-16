@@ -1,9 +1,14 @@
-// The I/O around sign-ins: the account list in the standalone lastdrop's folder (AccountsTests'
-// testLoadMigratesUntilSavedThenReadsItsOwnFile, file part), the keychain through a fake `security`, the
+// The I/O around sign-ins: the fork's account list, the keychain through a fake `security`, the
 // keeper's loop, and renewal by starting a fake `claude`. All in a temporary home (see PORTING.md).
 import * as NodeFS from "node:fs";
 
-import { encodeAccountsConfig, keychainService, pool } from "@t3tools/lastdrop-core";
+import {
+  append,
+  emptyConfig,
+  encodeAccountsConfig,
+  keychainService,
+  pool,
+} from "@t3tools/lastdrop-core";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -12,12 +17,13 @@ import {
   loadAccounts,
   readSignInFacts,
   renewSignIn,
+  saveAccounts,
   signedInAccountOf,
   storedCredentials,
 } from "./claudeSignIn.ts";
 import { ClaudeKeeper } from "./keeper.ts";
 import { readKeychain } from "./keychain.ts";
-import { accountsFiles, claudeFolder } from "./paths.ts";
+import { accountsFile, claudeFolder } from "./paths.ts";
 import { makeTestHome, type TestHome } from "./testHome.ts";
 
 let t: TestHome;
@@ -32,18 +38,17 @@ const blob = (expiresAt: number) =>
   });
 
 describe("the account list", () => {
-  const legacyJSON = `{"accounts":[{"id":"Pro","addedAt":100},{"id":"Team","addedAt":200}],"order":["Pro","main","Team"],"sessionThreshold":0.75,"weeklyThreshold":0.95}`;
-
-  it("is read from the standalone lastdrop's folder, migrating the old list without touching it", async () => {
-    const files = accountsFiles(t.paths);
+  it("is Main alone until the fork saves its own, and never the app's", async () => {
     expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual(["main"]);
-    t.write(files.legacy, legacyJSON);
-    const migrated = await loadAccounts(t.paths, 0);
-    expect(pool(migrated, "claude").map((a) => a.key)).toEqual(["Pro", "main", "Team"]);
-    expect(NodeFS.existsSync(files.accounts)).toBe(false); // read only
-    t.write(files.accounts, encodeAccountsConfig(migrated));
-    expect(await loadAccounts(t.paths, 0)).toEqual(migrated);
-    expect(NodeFS.readFileSync(files.legacy, "utf8")).toBe(legacyJSON); // the old file stays as it was
+    t.write(
+      `${t.paths.home}/Library/Application Support/lastdrop/accounts.json`,
+      encodeAccountsConfig(append(emptyConfig(), { provider: "claude", key: "App", addedAt: 0 })),
+    );
+    expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual(["main"]);
+    const own = append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 1000 });
+    await saveAccounts(t.paths, own);
+    expect(NodeFS.readFileSync(accountsFile(t.paths), "utf8")).toBe(encodeAccountsConfig(own));
+    expect(await loadAccounts(t.paths, 0)).toEqual(own);
   });
 });
 
