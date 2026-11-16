@@ -8,16 +8,31 @@ base="$1"
 log="$2"
 failed=()
 
+# A runner crash, not a result: a process killed for memory, or the test browser going away.
+RUNNER_CRASH='exit code: 137|Killed|VITEST_BROWSER_CONNECTION_CLOSED|Browser connection was closed'
+
 run() {
   local name="$1"
   shift
+  local attempt out="$RUNNER_TEMP/check-output.log"
   echo "::group::$name"
-  echo "===== $name" >> "$log"
-  if ! "$@" 2>&1 | tee -a "$log"; then
-    failed+=("$name")
+  for attempt in 1 2; do
+    echo "===== $name" >> "$log"
+    if "$@" > "$out" 2>&1; then
+      tee -a "$log" < "$out"
+      echo "::endgroup::"
+      return
+    fi
     # vp run prints which tasks failed, and their output, only here.
-    if [[ "$1" == vp ]]; then vp run --last-details 2>&1 | tee -a "$log" || true; fi
-  fi
+    if [[ "$1" == vp ]]; then vp run --last-details >> "$out" 2>&1 || true; fi
+    tee -a "$log" < "$out"
+    if ((attempt == 1)) && grep -aqE "$RUNNER_CRASH" "$out"; then
+      echo "::warning::$name: the runner crashed (memory or test browser); running it once more."
+      continue
+    fi
+    failed+=("$name")
+    break
+  done
   echo "::endgroup::"
 }
 
