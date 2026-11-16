@@ -8,13 +8,14 @@
     "scripts/lastdrop/**",
     "docs/lastdrop/**",
     ".github/workflows/lastdrop-*",
-    "FORK.md"
+    "FORK.md",
+    "README.md"
   ],
   "exempt": ["pnpm-lock.yaml"],
   "seams": {
-    "README.md": {
-      "budget": 19,
-      "why": "the fork's section above upstream's README"
+    "CLAUDE.md": {
+      "budget": 2,
+      "why": "points agents to FORK.md"
     },
     "apps/server/src/provider/builtInDrivers.ts": {
       "budget": 9,
