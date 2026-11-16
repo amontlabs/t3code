@@ -19,12 +19,14 @@ import type {
   UsageWindow,
 } from "@t3tools/lastdrop-node";
 
+import type { CodexAccountsView } from "./codex/accounts.ts";
 import type { EndpointsView } from "./endpointsView.ts";
 
 /** The source's id; reset credits are never redeemed through it. */
 export const LASTDROP_SOURCE_ID = UsageLimitSourceId.make("lastdrop");
 const SOURCE_LABEL = "lastdrop";
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
 /**
  * Z.ai's and OpenRouter's pools. Not T3 drivers (their T3 instances are Claude ones, whose own probe reports no
  * limits behind a proxy): **Usage → Limits** names a pool by its driver when no provider client has it, so these
@@ -158,9 +160,35 @@ const safely = (now: number, make: () => ServerProviderUsageLimits): ServerProvi
 
 const emailKey = (email: string): string => email.trim().toLowerCase();
 
-/** Each Claude account lastdrop knows, then each configured Z.ai/OpenRouter endpoint. */
+/** One of lastdrop's Codex accounts: T3's own windows for its last reading (`codex/routing.ts`). */
+function codexAccount(
+  account: CodexAccountsView["accounts"][number],
+  now: number,
+): UsageLimitSourceAccount {
+  const problem = !account.signedIn
+    ? SIGN_IN_PROBLEMS.signedOut
+    : (account.error ?? (account.usageLimits === undefined ? "No reading yet." : undefined));
+  return {
+    // Unique within the source, beside the Claude accounts' keys.
+    id: `codex-${account.key}`,
+    driver: CODEX_DRIVER,
+    ...(account.email ? { email: account.email } : {}),
+    ...(account.plan ? { plan: account.plan } : {}),
+    usageLimits:
+      problem === undefined && account.usageLimits !== undefined
+        ? account.usageLimits
+        : {
+            checkedAt: iso(account.readAt) ?? isoNow(now),
+            windows: [],
+            unavailable: { reason: "probeFailed", message: problem ?? "No reading yet." },
+          },
+  };
+}
+
+/** Each Claude account lastdrop knows, each Codex account, then each configured Z.ai/OpenRouter endpoint. */
 export function lastdropLimitSource(input: {
   readonly accounts: AccountsView | undefined;
+  readonly codex?: CodexAccountsView | undefined;
   readonly endpoints: EndpointsView | undefined;
   readonly now: number;
   /** E-mails T3's own providers report (any case): their accounts get no reset count from us. */
@@ -204,7 +232,8 @@ export function lastdropLimitSource(input: {
         }),
       ),
     }));
-  const accounts = [...claude, ...endpoints];
+  const codex = (input.codex?.accounts ?? []).map((account) => codexAccount(account, now));
+  const accounts = [...claude, ...codex, ...endpoints];
   if (accounts.length === 0) return undefined;
   return {
     id: LASTDROP_SOURCE_ID,

@@ -18,7 +18,7 @@ export type ProviderOrchestrationAdapterInfrastructure =
 /** Reuse the continuation worker's exact layer reference so memoization shares one queue. */
 export const layer = Layer.mergeAll(
   Extensions.wrapClaudeQueryRunner(ClaudeAdapterV2.layerQueryRunner),
-  CodexAdapterV2.layerAppServerClientFactory,
+  Extensions.wrapCodexAppServerClientFactory(CodexAdapterV2.layerAppServerClientFactory),
   CursorAgentSdk.layer.pipe(Layer.provideMerge(CursorSdk.layer)),
   IdAllocator.layer,
   ProviderContinuationRequests.layer,

@@ -28,8 +28,8 @@
       "why": "managed policy knows extension providers"
     },
     "apps/server/src/provider/ProviderOrchestrationAdapterInfrastructure.ts": {
-      "budget": 3,
-      "why": "Claude query-runner wrapper"
+      "budget": 5,
+      "why": "Claude query-runner and Codex client-factory wrappers"
     },
     "apps/server/src/server.ts": {
       "budget": 7,
