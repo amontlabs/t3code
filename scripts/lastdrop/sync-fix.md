@@ -6,7 +6,7 @@ The fork's code lives in its own folders; upstream files differ from upstream on
 
 1. Find each failure's cause. Usually upstream changed something fork code uses (a renamed export, a changed signature, schema or import order), and the fix belongs in the fork's folders or at a seam. `git diff $PREVIOUS $BASE -- <path>` shows what upstream changed.
 2. Fix it inside the fork's folders or within a seam's budget. If a seam has to change, update its section in `FORK.md` and its entry in `seams.json`.
-3. Check your fix with the narrowest commands: `vp test run <files>`, the package's typecheck (`vp run --filter <package> typecheck`), `node scripts/lastdrop/check-fork-paths.ts --base $BASE`. Do not rerun the whole suite; the workflow does that after you.
+3. Check your fix: the typecheck of every package you changed (`vp run --filter <package> typecheck`; a warning fails it too), the failing test files, and all of the fork's own tests, which are quick and catch a fix that breaks another fork test (`vp test run apps/server/src/extensions apps/web/src/extensions` and `vp run --filter './packages/lastdrop-*' test`), then `node scripts/lastdrop/check-fork-paths.ts --base $BASE`. Do not rerun the whole suite; the workflow does that after you.
 4. Commit everything as `lastdrop: fixes for $TAG`.
 
 Rules:

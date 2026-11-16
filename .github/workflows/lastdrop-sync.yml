@@ -237,6 +237,17 @@ jobs:
             echo "Claude changed nothing."
           fi
 
+      # The first pass and Claude's own test runs can leave test browsers or vitest workers behind;
+      # in two runs the web tests then crashed the browser for lack of memory in the second pass only.
+      - name: Free memory left over from the first pass
+        if: steps.fix.outputs.changed == 'true'
+        run: |
+          free -m
+          ps -eo rss,pid,comm --sort=-rss | head -15
+          pkill -f -e 'chrome|chromium|headless_shell|vitest|playwright' || true
+          sleep 2
+          free -m
+
       - name: Checks again
         id: recheck
         if: steps.fix.outputs.changed == 'true'
