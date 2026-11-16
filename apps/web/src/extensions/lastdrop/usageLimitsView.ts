@@ -13,7 +13,7 @@ import {
   type LimitPresentations,
 } from "@t3tools/shared/usageLimits";
 
-import type { AccountView } from "./accountsView";
+import { accountTitle, type AccountView } from "./accountsView";
 import type { CodexAccountView } from "./codexAccountsView";
 
 /** lastdrop's endpoint drivers, which have no provider client of their own. */
@@ -119,15 +119,17 @@ export function limitGroups(input: {
     | undefined;
 }): ReadonlyArray<LimitGroup> {
   const { presentations, now } = input;
+  const lastdrop = (input.lastdrop ?? []).map((account) => ({
+    ...account,
+    name: accountTitle(account),
+  }));
   const named = new Map(
-    (input.lastdrop ?? []).flatMap((account) =>
+    lastdrop.flatMap((account) =>
       account.email ? [[emailKey(account.email), account] as const] : [],
     ),
   );
   // A signed-out account has no e-mail; lastdrop's limit source ids its Claude rows by account key.
-  const namedByKey = new Map(
-    (input.lastdrop ?? []).map((account) => [account.key, account] as const),
-  );
+  const namedByKey = new Map(lastdrop.map((account) => [account.key, account] as const));
   const codexByEmail = new Map(
     (input.lastdropCodex ?? []).flatMap((account) =>
       account.email ? [[emailKey(account.email), account.title] as const] : [],

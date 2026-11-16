@@ -144,6 +144,14 @@ describe("the usage limits list", () => {
         "Team: Needs sign-in. Z.ai: Z.ai: Session 96% left.",
     );
     expect(limitsSummary([])).toBe("No account reports limits yet.");
+    // An older list's unnamed `main` reads "Main", as in the accounts section.
+    const unnamed = limitGroups({
+      presentations: presentations([reading("main", undefined, [])]),
+      now: NOW,
+      driverLabel: () => undefined,
+      lastdrop: [{ key: "main", signIn: "signedOut", signInEndsSoon: false, nextFor: [] }],
+    });
+    expect(unnamed[0]?.entries.map((entry) => entry.name)).toEqual(["Main"]);
   });
 
   it("an enabled provider that reads limits but shows none says why", () => {
