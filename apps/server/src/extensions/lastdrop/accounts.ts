@@ -7,7 +7,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import { AuthOrchestrationReadScope } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, AuthOrchestrationReadScope } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   type AccountChange,
@@ -135,15 +135,16 @@ const json = (body: unknown, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status, headers: { "cache-control": "no-store" } });
 
 /**
- * A session that may read the environment. A remote (DPoP) client may not change accounts: their sign-ins live
- * on the Mac that runs them, and the settings section shows none there.
+ * A session that may read the environment, and operate it for a change. A remote (DPoP) client may not change
+ * accounts: their sign-ins live on the Mac that runs them, and the settings section shows none there.
  */
 const authorize = Effect.fn("LastdropAccounts.authorize")(function* (change: boolean) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
   const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
   if (session._tag === "None") return json({ error: "unauthorized" }, 401);
-  if (!session.value.scopes.includes(AuthOrchestrationReadScope)) {
+  const scope = change ? AuthOrchestrationOperateScope : AuthOrchestrationReadScope;
+  if (!session.value.scopes.includes(scope)) {
     return json({ error: "forbidden" }, 403);
   }
   if (change && session.value.method === "dpop-access-token") {
