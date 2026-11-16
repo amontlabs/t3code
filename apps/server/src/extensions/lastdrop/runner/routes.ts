@@ -8,6 +8,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
+import { installPlugin } from "@t3tools/lastdrop-node";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -218,9 +219,18 @@ const bindLayer = (deps: RunnerDeps) =>
       if (!script.startsWith("/")) {
         return yield* Effect.logWarning("lastdrop runner script not written", script);
       }
+      // Without it the app's own copy of the plugin (if installed) answers, as before.
+      const plugin = yield* Effect.tryPromise({
+        try: () => installPlugin(dataDir),
+        catch: (cause) => String(cause),
+      }).pipe(
+        Effect.tapError((cause) => Effect.logWarning("lastdrop plugin not written", cause)),
+        Effect.orElseSucceed(() => undefined),
+      );
       bindRunner({
         script,
         url,
+        plugin,
         available: deps.port.unavailable.pipe(Effect.map((problem) => problem === undefined)),
       });
       yield* Effect.addFinalizer(() => Effect.sync(unbindRunner));

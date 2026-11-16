@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as LimitSourcesLive from "./lastdrop/limitSourcesLive.ts";
 import * as LastdropAccounts from "./lastdrop/accounts.ts";
 import * as LastdropEndpointsView from "./lastdrop/endpointsView.ts";
+import * as LastdropEndpointKeys from "./lastdrop/endpointKeys.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
@@ -68,6 +69,7 @@ export const usageLimitSourcesLayer = LimitSourcesLive.wrap(UsageLimitSources.la
  */
 const services = Layer.mergeAll(
   LastdropAccounts.layer,
+  LastdropEndpointKeys.layer,
   // Imported when the layer builds: it reaches T3's settings service, which imports this module's lists.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/endpoints.ts")).pipe(
@@ -92,12 +94,13 @@ const services = Layer.mergeAll(
 export const layer = LimitSourcesLive.publisher.pipe(Layer.provideMerge(services));
 
 /**
- * HTTP routes, merged beside T3's own: the accounts and endpoints views for the settings section, and
+ * HTTP routes, merged beside T3's own: the accounts and endpoints views and the endpoint keys for the settings section, and
  * the runner lastdrop's Claude Code plugin calls for its Agent types (`lastdrop/runner/`, step 8).
  */
 export const routes = Layer.mergeAll(
   LastdropAccounts.routes,
   LastdropEndpointsView.routes,
+  LastdropEndpointKeys.routes,
   // Imported when the layer builds: it reaches T3's orchestrator, which imports this module's lists.
   Layer.unwrap(
     Effect.promise(() => import("./lastdrop/runner/routes.ts")).pipe(

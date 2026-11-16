@@ -103,8 +103,8 @@ export function endpointEnvironment(input: {
 /** What to tell the user when the provider has no key that can run models. */
 export const missingKeyMessage = (provider: EndpointProvider): string =>
   provider === "zai"
-    ? "Add a Z.ai Coding Plan API key in lastdrop's Settings."
-    : "Add a regular OpenRouter API key in lastdrop's Settings. Management keys can't run models.";
+    ? "Add a Z.ai Coding Plan API key in Settings → Providers → Claude."
+    : "Add a regular OpenRouter API key in Settings → Providers → Claude. Management keys can't run models.";
 
 // MARK: The T3 instance
 
