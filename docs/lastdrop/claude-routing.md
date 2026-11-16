@@ -105,7 +105,8 @@ The wrapper watches the SDK stream; it never polls transcripts and never signals
   the result's first `errors` entry becomes that notice (T3 shows it as the turn's failure), and the query ends
   (T3's own `close`). Once T3 marks the run failed, lastdrop releases its provider session and sends T3's
   restart follow-up (its note over the subagents and shells the end cut, then its continue prompt); that
-  message's query opens on the new account as a fork. See docs/lastdrop/subagent-resume.md.
+  message's query opens on the new account as a fork. See docs/lastdrop/subagent-resume.md. Codex threads
+  reuse this reactor from the Codex client wrapper (docs/lastdrop/independence.md, item 5).
 - Every fork the wrapper makes (a move, T3's own `forkSession`) copies `subagents/` from the conversation it
   forks and the older ones of its lineage, so SendMessage to a subagent from before still finds it.
 - A `result` at a passing error (`TransientError`: 5xx, 529, Cloudflare page, network, auth while the sign-in
