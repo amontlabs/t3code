@@ -8,13 +8,13 @@ The fork must run with the standalone lastdrop app absent. After this work it ne
 
 - **No new seams.** Everything goes in fork paths (`seams.json` `allowed`). UI goes through the existing `ExtensionInstanceSection` (per-driver section in `ProviderInstanceCard.tsx`); server routes through the existing `server.ts` seam (`/api/lastdrop/*`). Raising an existing seam's budget needs the owner's sign-off.
 - **Fork state** lives in `~/.t3/lastdrop/` (`LastdropPaths.dataDir`); secrets in the keychain under the fork's own service name `t3code-lastdrop`.
-- **Main** is Claude Code's own login (`~/.claude`, `~/.claude.json`), shared by nature with the CLI, plain T3 and the app. Nothing else is shared.
+- **Nothing is shared, Main included.** Every Claude account, the first too, signs in in its own folder (`~/.t3/lastdrop/accounts/<key>`, its own keychain item): a `claude /login` or `/logout` in a terminal never changes which accounts the fork uses. Profiles still link `~/.claude`'s settings, skills, agents and conversations so threads continue. Claude Code's own login is used only while no fork account is signed in (docs/lastdrop/claude-routing.md, "Claude Code's own login").
 - **Import, once.** A section with nothing yet offers "Import from the lastdrop app" while the app's data exists. It copies; it never reads the app again afterwards and never writes to it.
 - Tests run against a temporary home (`testHome.ts`); never the real `~`, keychain or `~/.t3/userdata`.
 
 ## Owner's decisions
 
-1. Extra Claude accounts are signed in again inside the fork (own folders, own keychain items). Sharing the app's would make the two apps invalidate each other's rotating refresh tokens.
+1. Claude accounts are signed in again inside the fork (own folders, own keychain items), Main too since 2026-11-16 (it was Claude Code's own login, and a terminal `claude /login` silently changed it). Sharing the app's, or Claude Code's, would make the two invalidate each other's rotating refresh tokens.
 2. Codex accounts are routed automatically too, like Claude.
 3. Agents are stored in `~/.t3/lastdrop/agents.json`, not T3's `settings.json`.
 4. The `lastdrop:*` Claude Code plugin ships inside the fork.

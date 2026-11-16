@@ -38,13 +38,13 @@ const blob = (expiresAt: number) =>
   });
 
 describe("the account list", () => {
-  it("is Main alone until the fork saves its own, and never the app's", async () => {
-    expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual(["main"]);
+  it("is empty until the fork saves its own, and never the app's", async () => {
+    expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual([]);
     t.write(
       `${t.paths.home}/Library/Application Support/lastdrop/accounts.json`,
       encodeAccountsConfig(append(emptyConfig(), { provider: "claude", key: "App", addedAt: 0 })),
     );
-    expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual(["main"]);
+    expect(pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key)).toEqual([]);
     const own = append(emptyConfig(), { provider: "claude", key: "Pro", addedAt: 1000 });
     await saveAccounts(t.paths, own);
     expect(NodeFS.readFileSync(accountsFile(t.paths), "utf8")).toBe(encodeAccountsConfig(own));

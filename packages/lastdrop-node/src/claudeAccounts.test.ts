@@ -3,7 +3,13 @@
 // a temporary home.
 import * as NodeFS from "node:fs";
 
-import { emptyConfig, encodeAccountsConfig, keychainService, pool } from "@t3tools/lastdrop-core";
+import {
+  append,
+  emptyConfig,
+  encodeAccountsConfig,
+  keychainService,
+  pool,
+} from "@t3tools/lastdrop-core";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { AccountChangeError, ClaudeAccounts } from "./claudeAccounts.ts";
@@ -32,9 +38,16 @@ afterEach(() => {
 
 const keys = async () => pool(await loadAccounts(t.paths, 0), "claude").map((a) => a.key);
 const appFile = () => `${t.paths.home}/Library/Application Support/lastdrop/accounts.json`;
+/** The list an older fork kept: its Main stood for Claude Code's own login. */
+const olderList = () =>
+  t.write(
+    accountsFile(t.paths),
+    encodeAccountsConfig(append(emptyConfig(), { provider: "claude", key: "main", addedAt: 0 })),
+  );
 
 describe("the fork's Claude accounts", () => {
   it("adds, renames, reorders and removes, deleting only the removed account's own sign-in", async () => {
+    olderList();
     const { view } = await accounts.change({ action: "add", name: "My Work" });
     expect(view.accounts.map((a) => [a.key, a.name])).toEqual([
       ["main", undefined],
@@ -56,16 +69,20 @@ describe("the fork's Claude accounts", () => {
 
     t.setKeychain(keychainService(folder), "work sign-in");
     t.setKeychain(keychainService(claudeFolder(t.paths, "Pro")), "pro sign-in");
-    t.setKeychain("Claude Code-credentials", "main sign-in");
+    t.setKeychain("Claude Code-credentials", "Claude Code's own sign-in");
     await accounts.change({ action: "remove", key: "My-Work" });
     expect(await keys()).toEqual(["Pro", "main"]);
     expect(NodeFS.existsSync(folder)).toBe(false);
     expect(t.hasKeychain(keychainService(folder))).toBe(false);
     expect(t.hasKeychain(keychainService(claudeFolder(t.paths, "Pro")))).toBe(true);
     expect(t.hasKeychain("Claude Code-credentials")).toBe(true);
-    await expect(accounts.change({ action: "remove", key: "main" })).rejects.toThrow(
-      "Main can't be removed.",
-    );
+    // Main is an account like the others: removing it deletes its own folder and item, never Claude Code's.
+    const main = claudeFolder(t.paths, "main")!;
+    t.setKeychain(keychainService(main), "main sign-in");
+    await accounts.change({ action: "remove", key: "main" });
+    expect(await keys()).toEqual(["Pro"]);
+    expect(t.hasKeychain(keychainService(main))).toBe(false);
+    expect(t.hasKeychain("Claude Code-credentials")).toBe(true);
   });
 
   it("imports the app's names and order once, never writing to the app's folder", async () => {
@@ -74,11 +91,13 @@ describe("the fork's Claude accounts", () => {
       ...base,
       accounts: [
         { provider: "claude", key: "Pro", name: "Personal", addedAt: 0 },
-        ...base.accounts,
+        { provider: "claude", key: "main", addedAt: 0 },
         { provider: "claude", key: "Team", addedAt: 0 },
+        ...base.accounts,
       ],
     });
     t.write(appFile(), app);
+    olderList();
     expect((await accounts.view()).importable).toBe(2);
 
     const { view } = await accounts.change({ action: "import" });
@@ -115,10 +134,13 @@ exit 1
 `,
     );
     NodeFS.chmodSync(`${t.paths.home}/.local/bin/claude`, 0o755);
+    olderList();
     await accounts.change({ action: "add", name: "Pro" });
-    await expect(accounts.change({ action: "signIn", key: "main" })).rejects.toThrow(
-      "Main is Claude Code's own login",
+    // An older list's Main signs in in its own folder like any account.
+    expect((await accounts.change({ action: "signIn", key: "main" })).signInUrl).toContain(
+      "https://claude.com/",
     );
+    await accounts.change({ action: "cancelSignIn", key: "main" });
 
     const started = await accounts.change({ action: "signIn", key: "Pro" });
     const url = "https://claude.com/cai/oauth/authorize?code=true&state=s";

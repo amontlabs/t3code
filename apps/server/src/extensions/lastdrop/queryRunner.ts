@@ -184,7 +184,7 @@ export function wrapQueryRunner(
     Effect.tryPromise({ try: run, catch: (cause) => new LastdropRoutingError({ cause }) });
 
   const deadline = Duration.millis(options.deadlineMs ?? 3000);
-  /** Refuses the open: never Main's sign-in with an id another account has seen. */
+  /** Refuses the open: never Claude Code's own login with an id another account has seen. */
   const refuse = (threadId: string, why: string) =>
     Effect.fail(
       new ClaudeAgentSdkQueryRunnerError({

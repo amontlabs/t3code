@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { type Candidate, pick } from "./accounts.ts";
+import { TERMINAL_KEY } from "./accountsConfig.ts";
 import {
   COLD,
   decideThread,
@@ -276,7 +277,7 @@ describe("an account that is gone", () => {
     expect(d.forced).toBe(true);
   });
 
-  it("a thread on a gone account falls back to main when nobody has room", () => {
+  it("a thread on a gone account falls back to Claude Code's own login when nobody has room", () => {
     const d = decide(
       { resume: "X" },
       {
@@ -286,7 +287,7 @@ describe("an account that is gone", () => {
       },
     );
     expect(d.action).toBe("move");
-    expect(d.account).toBe("main");
+    expect(d.account).toBe(TERMINAL_KEY);
   });
 });
 

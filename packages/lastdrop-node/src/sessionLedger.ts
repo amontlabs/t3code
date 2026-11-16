@@ -5,10 +5,12 @@
  */
 import * as NodeFSP from "node:fs/promises";
 
+import { TERMINAL_KEY } from "@t3tools/lastdrop-core";
+
 import { writeAtomic } from "./files.ts";
 
 export interface LedgerSession {
-  /** "main", or an account's folder name. */
+  /** An account's folder name, or `TERMINAL_KEY` (Claude Code's own login). */
   readonly account: string;
   readonly startedAt: number;
   /** A conversation forked from another (a move): its lines from before this were copied. */
@@ -172,7 +174,7 @@ export class SessionLedger {
 
   /**
    * The store as it is now; a missing file is an empty ledger. A file that exists but can't be read throws
-   * `LedgerUnreadableError`: it is never taken for an empty ledger (every thread would then count as Main's).
+   * `LedgerUnreadableError`: it is never taken for an empty ledger (every thread would then count as Claude Code's own login's).
    */
   async read(): Promise<LedgerStore> {
     let text: string;
@@ -283,7 +285,7 @@ export function transcriptAccount(
   const parts = rest.split("/");
   // <project>/<session>.jsonl, or <project>/<session>/subagents/agent-<id>.jsonl
   const session = parts.length >= 3 ? parts[1] : parts[1]?.replace(/\.jsonl$/u, "");
-  return (session === undefined ? undefined : store.sessions[session]?.account) ?? "main";
+  return (session === undefined ? undefined : store.sessions[session]?.account) ?? TERMINAL_KEY;
 }
 
 /** A forked conversation's own lines: those from before `forkedAt` were copied, and its parent counts them. */

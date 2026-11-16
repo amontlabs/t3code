@@ -132,14 +132,16 @@ function EntryFields(props: {
         >
           <SelectTrigger size="sm" className="w-32 shrink-0" aria-label={`${label}: effort`}>
             <SelectValue>
-              {entry.effort === undefined
-                ? "Run's effort"
-                : (EFFORT_LABEL[entry.effort] ?? entry.effort)}
+              {entry.effort === undefined ? "Auto" : (EFFORT_LABEL[entry.effort] ?? entry.effort)}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            <SelectItem hideIndicator value={RUN_EFFORT}>
-              Run's effort
+            <SelectItem
+              hideIndicator
+              value={RUN_EFFORT}
+              title="The caller picks the effort when it starts the agent"
+            >
+              Auto
             </SelectItem>
             {efforts.map((level) => (
               <SelectItem hideIndicator key={level} value={level}>

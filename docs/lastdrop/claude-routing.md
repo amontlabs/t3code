@@ -12,21 +12,44 @@ On each `open(threadId, options)`:
 - The thread's lineage comes from T3's projection (`ProjectionStoreV2.getThread`, `isDelegatedAppThread`). A
   delegated child picks with `pick`, the subagents' rule: the smallest plan with room under the thresholds, the
   parent's account counted as its own. A main thread picks with `pickForThread`: the most room in Pro-sized windows.
-- The candidates are the fork's Claude accounts (`~/.t3/lastdrop/accounts.json`) that are signed in and usable
+- The candidates are the fork's Claude accounts (`~/.t3/lastdrop/accounts.json`) that are signed in here and usable
   (no sign-in needed), with their readings from `usage.json` (see "Usage"). An account whose passing errors outlasted every retry
   ("troubled", 10 minutes) stays a candidate: a warm thread there stays (and shows the error); it is only never
   a destination while another account has room.
 - The account's sign-in folder goes in `CLAUDE_SECURESTORAGE_CONFIG_DIR` and its profile in `CLAUDE_CONFIG_DIR`
-  (`runEnvironment`, which brings the profile up to date first). Main runs with neither.
+  (`runEnvironment`, which brings the profile up to date first), Main's too. Only Claude Code's own login
+  (`TERMINAL_KEY`, see below) runs with neither.
 - If the query's environment already names a sign-in or a profile (`ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`,
   Bedrock, a custom `ANTHROPIC_BASE_URL`…), the wrapper leaves the query alone, as the Swift launcher did.
 - Choosing writes nothing: the router returns the route's ledger writes as a `commit`, which the wrapper runs
   only for a route that came back within 3 s, before the query opens. A route that fails or comes back late is
   dropped (it never writes), and the thread opens on its **recorded** account (its sign-in and profile, ids
   translated). If even that can't be built (an unreadable ledger, a missing sign-in folder), the open is refused
-  with a clear error: a thread never runs on Main's sign-in with an id another account has seen.
+  with a clear error: a thread never runs on Claude Code's own login with an id another account has seen.
 - Transcript lookups and tail reads are cached (by path, size and mtime), so routing is a few small reads.
 - `LASTDROP_CLAUDE_ROUTING=0` in the server's environment turns the wrapper off.
+
+## Claude Code's own login
+
+`~/.claude`'s login (`claude /login` in a terminal) is never one of the fork's accounts: lastdrop never reads its
+usage, renews it or routes to it while a fork account can take work. While none can (a fresh install, or every
+account signed out), a new thread runs untouched on it and the Accounts section says so. The ledger records such
+threads, and any session it doesn't know (a thread plain T3 started), as `@terminal`; once an account is signed
+in they count as gone and move to it as a fork on their next message, with a notice.
+
+An `accounts.json` from before 2026-11-16 has a `main` that meant this login. It keeps its key and gets its own
+folder (`accounts/main`), signed out until signed in from the section; its ledger entries stay `main`, so its
+threads stay if it is signed in to the same account, else they move. Nothing is copied from `~/.claude`.
+
+T3 checks its Claude provider against that login too, outside the query runner: its probe
+(`checkClaudeProviderStatus` in `ClaudeProvider.ts`) marks the provider `error`/`unauthenticated` after a terminal
+`/logout`, and the web then hides Claude's models from the picker (`isProviderInstancePickerReady` in
+`apps/web/src/providerInstances.ts`, `shouldIncludeModelPickerOption` in `ModelPickerContent.tsx`) and new
+threads don't default to it; text generation (titles, commit messages) runs `claude -p` with that login. The
+server itself never refuses a turn. `extensions/lastdrop/claudeDriver*.ts` wraps T3's Claude driver (through the
+`builtInDrivers.ts` seam, no new one): while an account can take work, a snapshot T3 marked unauthenticated reads
+as `ready` (auth label "lastdrop accounts"), and text generation runs on the roomiest account
+(`ThreadRouter.oneOffEnvironment`). The snapshot follows a sign-in at T3's next provider refresh.
 
 ## Moving
 
@@ -113,7 +136,8 @@ without touching the real profile. `LASTDROP_FAULT_ROUTE=throw` makes every rout
 ## Known limits
 
 - Full and troubled marks are in the server's memory; a restart forgets them (the next reading still counts).
-- A thread whose account changed by hand outside lastdrop isn't known to the ledger: it counts as Main's.
+- A thread whose account changed by hand outside lastdrop isn't known to the ledger: it counts as Claude Code's
+  own login's (`@terminal`).
 
 ## Checked live (2026-11-14 and 15)
 

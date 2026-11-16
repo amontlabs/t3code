@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import * as NodeFS from "node:fs";
 
+import { TERMINAL_KEY } from "@t3tools/lastdrop-core";
+
 import {
   currentSessionIn,
   decodeLedger,
@@ -139,7 +141,7 @@ describe("shared conversations", () => {
     await ledger.record({ session: "s1", account: "Work", at: now });
     const store = await ledger.read();
     expect(transcriptAccount(`${shared}/p/s1.jsonl`, store, folders())).toBe("Work");
-    expect(transcriptAccount(`${shared}/p/s2.jsonl`, store, folders())).toBe("main");
+    expect(transcriptAccount(`${shared}/p/s2.jsonl`, store, folders())).toBe(TERMINAL_KEY);
     // A subagent transcript counts as the session its side folder belongs to.
     expect(transcriptAccount(`${shared}/p/s1/subagents/agent-a.jsonl`, store, folders())).toBe(
       "Work",

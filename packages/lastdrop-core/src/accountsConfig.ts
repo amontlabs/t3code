@@ -8,9 +8,17 @@ export const PROVIDERS = ["claude", "codex", "antigravity", "zai", "openrouter"]
 export type ProviderId = (typeof PROVIDERS)[number];
 
 export const MAIN_KEY = "main";
+/**
+ * Claude Code's own login (`~/.claude`), where Claude threads run while no fork account is signed in. Not an
+ * account: never on the list, never read or renewed by lastdrop. A slug can't make it, so no key collides.
+ */
+export const TERMINAL_KEY = "@terminal";
 export const DEFAULT_THRESHOLD = 0.9;
 
-/** One sign-in on one provider. Main uses the login already on the Mac; others keep theirs apart. */
+/**
+ * One sign-in on one provider. Every Claude account keeps its own sign-in, Main included; another provider's
+ * Main uses the login already on the Mac.
+ */
 export interface Account {
   readonly provider: ProviderId;
   /** Unique within the provider: "main", or a short name also used in folder and keychain names ("Pro"). */
@@ -75,7 +83,7 @@ export function accountFolder(
 export const keychainItem = (account: Pick<Account, "key">, base: string): string =>
   isMain(account) ? base : `${base}.${account.key}`;
 
-/** Every provider's main account and the default thresholds. */
+/** Every provider's main account but Claude's, and the default thresholds. */
 export const emptyConfig = (): AccountsConfig =>
   normalize({
     accounts: [],
@@ -90,7 +98,10 @@ export const pool = (config: AccountsConfig, provider: ProviderId): ReadonlyArra
 export const findAccount = (config: AccountsConfig, id: string): Account | undefined =>
   config.accounts.find((a) => accountId(a) === id);
 
-/** Drops duplicate accounts and adds a missing main account at the front of its pool. */
+/**
+ * Drops duplicate accounts and adds a missing main account at the front of its pool, except Claude's: its
+ * accounts are all the fork's own, and with none Claude threads run on Claude Code's own login.
+ */
 export function normalize(config: AccountsConfig): AccountsConfig {
   const seen = new Set<string>();
   const accounts = config.accounts.filter((a) => {
@@ -100,7 +111,7 @@ export function normalize(config: AccountsConfig): AccountsConfig {
     return true;
   });
   for (const provider of PROVIDERS) {
-    if (seen.has(accountId(mainAccount(provider)))) continue;
+    if (provider === "claude" || seen.has(accountId(mainAccount(provider)))) continue;
     const first = accounts.findIndex((a) => a.provider === provider);
     accounts.splice(first === -1 ? accounts.length : first, 0, mainAccount(provider));
   }
@@ -117,7 +128,7 @@ export function append(config: AccountsConfig, account: Account): AccountsConfig
 
 /**
  * Adds an account at the end of its provider's pool. Undefined when the name has no usable characters, is
- * "main", or is taken in that pool (compared ignoring case: folder names on macOS do).
+ * "main" outside Claude's pool, or is taken in that pool (compared ignoring case: folder names on macOS do).
  */
 export function add(
   config: AccountsConfig,
@@ -127,7 +138,7 @@ export function add(
 ): { readonly config: AccountsConfig; readonly account: Account } | undefined {
   const key = slug(name);
   const lower = key.toLowerCase();
-  if (!key || lower === MAIN_KEY) return undefined;
+  if (!key || (lower === MAIN_KEY && provider !== "claude")) return undefined;
   if (pool(config, provider).some((a) => a.key.toLowerCase() === lower)) return undefined;
   const account: Account = { provider, key, addedAt: now, notifyAt: 1 };
   return { config: append(config, account), account };
@@ -152,10 +163,12 @@ export function update(
   return { ...config, accounts: config.accounts.map((a) => (accountId(a) === id ? change(a) : a)) };
 }
 
-/** Forgets an account. A main account can't be removed: it stands for the login already on the Mac. */
+/** Forgets an account. Another provider's main account can't be removed: it is the login already on the Mac. */
 export const remove = (config: AccountsConfig, id: string): AccountsConfig => ({
   ...config,
-  accounts: config.accounts.filter((a) => accountId(a) !== id || isMain(a)),
+  accounts: config.accounts.filter(
+    (a) => accountId(a) !== id || (isMain(a) && a.provider !== "claude"),
+  ),
 });
 
 /** Moves an account up (-1) or down (+1) its own pool; other providers' accounts don't count as steps. */

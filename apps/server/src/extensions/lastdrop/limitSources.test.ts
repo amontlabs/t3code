@@ -24,7 +24,6 @@ const HOUR = 3_600_000;
 
 const account = (overrides: Partial<AccountView>): AccountView => ({
   key: "main",
-  isMain: true,
   signIn: "ok",
   signInEndsSoon: false,
   windows: [],
@@ -37,6 +36,7 @@ const accounts = (list: AccountView[]): AccountsView => ({
   sessionThreshold: 90,
   weeklyThreshold: 95,
   accounts: list,
+  terminalLogin: false,
 });
 
 describe("toUsageWindow", () => {
@@ -80,12 +80,11 @@ describe("lastdropLimitSource", () => {
         }),
         account({
           key: "claude-2",
-          isMain: false,
           email: "b@example.com",
           plan: "Ultra",
           windows: [{ label: "Weekly", usedPercent: 10, resetsAt: NOW + 24 * HOUR }],
         }),
-        account({ key: "claude-3", isMain: false, signIn: "needsSignIn", windows: [] }),
+        account({ key: "claude-3", signIn: "needsSignIn", windows: [] }),
       ]),
       endpoints: undefined,
       now: NOW,
@@ -114,10 +113,9 @@ describe("lastdropLimitSource", () => {
   it("a never-read account (no or non-finite read time) never blocks the others", () => {
     const source = lastdropLimitSource({
       accounts: accounts([
-        account({ key: "never", isMain: false, readAt: -Infinity, windows: [] }),
+        account({ key: "never", readAt: -Infinity, windows: [] }),
         account({
           key: "odd",
-          isMain: false,
           readAt: Number.NaN,
           windows: [{ label: "Weekly", usedPercent: 3, resetsAt: Number.POSITIVE_INFINITY }],
           resets: { count: 1, expiries: [Number.NEGATIVE_INFINITY] },
@@ -147,7 +145,6 @@ describe("lastdropLimitSource", () => {
         }),
         account({
           key: "other",
-          isMain: false,
           email: "other@example.com",
           windows: [{ label: "Weekly", usedPercent: 1 }],
           resets,
@@ -277,7 +274,7 @@ describe("the feed", () => {
     const at = (now: number) =>
       lastdropLimitSource({
         accounts: accounts([
-          account({ key: "never", isMain: false, readAt: undefined, windows: [] }),
+          account({ key: "never", readAt: undefined, windows: [] }),
           account({ windows: [{ label: "Weekly", usedPercent: 1 }] }),
         ]),
         endpoints: undefined,

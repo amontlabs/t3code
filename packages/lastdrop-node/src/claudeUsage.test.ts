@@ -93,10 +93,9 @@ describe("Claude usage from files", () => {
     t.write(`${folder}/.claude.json`, { oauthAccount: { accountUuid: uuid } });
     t.write(t.paths.sharedConfig, config({ account: other, cached: uuid }));
     expect(await provider(offline).cachedUsage("Pro")).toBeDefined();
-    // Main is whoever the shared file is signed in to: here the answer is someone else's.
-    expect(await provider(offline).cachedUsage("main")).toBeUndefined();
+    // Main signs in in its own folder: Claude Code's own login's answer is never read as Main's.
     t.write(t.paths.sharedConfig, config({ account: other, cached: other }));
-    expect(await provider(offline).cachedUsage("main")).toBeDefined();
+    expect(await provider(offline).cachedUsage("main")).toBeUndefined();
     expect(await provider(offline).cachedUsage("Pro")).toBeUndefined();
   });
 

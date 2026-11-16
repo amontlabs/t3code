@@ -1,6 +1,6 @@
 /**
- * A non-main account's Claude Code profile: `~/.claude` seen through links, with a `.claude.json` of its own
- * rebuilt from Main's each time a session starts. Port of headroom's `ClaudeProfile.prepare`/`link`/`sync`/
+ * An account's Claude Code profile: `~/.claude` seen through links, with a `.claude.json` of its own
+ * rebuilt from Claude Code's own (`~/.claude.json`) each time a session starts. Port of headroom's `ClaudeProfile.prepare`/`link`/`sync`/
  * `locked` and `ClaudeAccount.runEnvironment` (ClaudeProfile.swift, ClaudeAccounts.swift). The key rules are
  * in `@t3tools/lastdrop-core`.
  */
@@ -42,7 +42,7 @@ export async function withConfigLock(file: string, body: () => Promise<void>): P
 }
 
 /**
- * Conversations every account must share, linked even before Main has any: a profile made while
+ * Conversations every account must share, linked even before `~/.claude` has any: a profile made while
  * `~/.claude/projects` didn't exist would otherwise keep its account's conversations to itself.
  */
 const SHARED_FOLDERS = ["projects"];
@@ -92,8 +92,8 @@ export async function linkShared(paths: LastdropPaths, dir: string): Promise<voi
 }
 
 /**
- * Rewrites the profile's `.claude.json` from Main's and the account's own keys, under Claude Code's config lock.
- * Skipped while Main's config can't be read; throws while the lock stays held (the next start does it).
+ * Rewrites the profile's `.claude.json` from `~/.claude.json` and the account's own keys, under Claude Code's config lock.
+ * Skipped while `~/.claude.json` can't be read; throws while the lock stays held (the next start does it).
  */
 export async function syncProfile(paths: LastdropPaths, folder: string): Promise<void> {
   const file = profileConfigFile(folder, paths);
@@ -120,7 +120,7 @@ export async function syncProfile(paths: LastdropPaths, folder: string): Promise
 
 /**
  * Brings the account's profile up to date and returns it, for `CLAUDE_CONFIG_DIR`. Undefined when there is
- * none to use (no sign-in folder, or Main's config can't be read and no profile was made before).
+ * none to use (no sign-in folder, or `~/.claude.json` can't be read and no profile was made before).
  */
 export async function prepareProfile(
   paths: LastdropPaths,
@@ -140,9 +140,9 @@ export async function prepareProfile(
 }
 
 /**
- * The environment to run claude on an account. Main runs as it is. Another account signs in through
- * `CLAUDE_SECURESTORAGE_CONFIG_DIR` (its folder) and runs in its profile (`CLAUDE_CONFIG_DIR`). Building it
- * brings that profile up to date.
+ * The environment to run claude on an account: it signs in through `CLAUDE_SECURESTORAGE_CONFIG_DIR` (its
+ * folder) and runs in its profile (`CLAUDE_CONFIG_DIR`). Building it brings that profile up to date. Claude
+ * Code's own login (`TERMINAL_KEY`) runs as it is.
  */
 export async function runEnvironment(
   paths: LastdropPaths,

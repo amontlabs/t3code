@@ -8,7 +8,6 @@ import {
   type AccountStatus,
   claudeView,
   endsSoon,
-  isMain,
   type LimitResets,
   pool,
   currentWindows,
@@ -38,10 +37,9 @@ export const USAGE_REFRESH_MS = 5 * 60_000;
 
 /** One Claude account as the Accounts section shows it. Plain JSON: it crosses HTTP as it is. */
 export interface AccountView {
-  /** "main", or the sign-in folder's name. */
+  /** The sign-in folder's name. */
   readonly key: string;
   readonly name?: string | undefined;
-  readonly isMain: boolean;
   readonly email?: string | undefined;
   readonly plan?: string | undefined;
   readonly signIn: SignInState;
@@ -69,6 +67,8 @@ export interface AccountsView {
   readonly sessionThreshold: number;
   readonly weeklyThreshold: number;
   readonly accounts: ReadonlyArray<AccountView>;
+  /** No account can take work (none signed in): Claude threads run on Claude Code's own login (`~/.claude`). */
+  readonly terminalLogin: boolean;
 }
 
 export interface MonitorOptions {
@@ -213,18 +213,21 @@ export class AccountsMonitor {
       const signIn = this.keeper.signIns.get(key);
       const status = statuses[key];
       const reading = readingFromStatus(status, now);
-      const { email } = await signedInAccountOf(
+      const { uuid, email } = await signedInAccountOf(
         this.options.paths,
         claudeFolder(this.options.paths, key),
       );
       const plan = entry?.snapshot?.plan ?? status?.plan ?? signIn?.plan;
       const signInState = signIn?.state ?? "signedOut";
-      readings.push({ id: key, plan, reading: { ...reading, usable: signInState === "ok" } });
+      readings.push({
+        id: key,
+        plan,
+        reading: { ...reading, usable: signInState === "ok" && uuid !== undefined },
+      });
       views.push(
         dropUndefined({
           key,
           name: account.name,
-          isMain: isMain(account),
           email,
           plan,
           signIn: signInState,
@@ -256,6 +259,7 @@ export class AccountsMonitor {
       updatedAt: now,
       sessionThreshold: claude.sessionThreshold,
       weeklyThreshold: claude.weeklyThreshold,
+      terminalLogin: !readings.some((r) => r.reading.usable),
       accounts: views.map((view) =>
         badges[view.key] ? { ...view, nextFor: badges[view.key] } : view,
       ),

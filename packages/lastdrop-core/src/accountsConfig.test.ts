@@ -40,9 +40,9 @@ const added = (c: AccountsConfig, p: ProviderId, name: string) => {
 };
 
 describe("accounts", () => {
-  it("every provider has one main account", () => {
+  it("every provider but Claude has one main account", () => {
     const config = emptyConfig();
-    for (const p of PROVIDERS) expect(keys(config, p)).toEqual(["main"]);
+    for (const p of PROVIDERS) expect(keys(config, p)).toEqual(p === "claude" ? [] : ["main"]);
   });
 
   it("where each account keeps its login", () => {
@@ -71,9 +71,9 @@ describe("accounts", () => {
     config = r.config;
     expect(accountId(r.account)).toBe("codex.home");
     expect(keys(config, "codex")).toEqual(["main", "work", "home"]);
-    expect(keys(config, "claude")).toEqual(["main", "my-pro"]);
-    const claudeEnd = config.accounts.findLastIndex((a) => a.provider === "claude");
-    expect(config.accounts.findIndex((a) => a.provider === "codex")).toBe(claudeEnd + 1);
+    expect(keys(config, "claude")).toEqual(["my-pro"]);
+    const codexEnd = config.accounts.findLastIndex((a) => a.provider === "codex");
+    expect(config.accounts.findIndex((a) => a.provider === "antigravity")).toBe(codexEnd + 1);
   });
 
   it("adding refuses unusable and taken names", () => {
@@ -83,6 +83,7 @@ describe("accounts", () => {
     config = added(config, "zai", "work").config;
     expect(add(config, "zai", "Work", now)).toBeUndefined();
     expect(add(config, "codex", "work", now)).toBeDefined(); // names are per provider
+    expect(add(config, "claude", "Main", now)?.account.key).toBe("Main"); // a Claude account like any other
   });
 
   it("moving stays inside the pool", () => {
@@ -99,11 +100,20 @@ describe("accounts", () => {
     expect(keys(config, "zai")).toEqual(["main", "x"]);
   });
 
-  it("main accounts can't be removed", () => {
+  it("main accounts can't be removed, but Claude's can", () => {
     let config = added(emptyConfig(), "openrouter", "team").config;
     config = remove(config, "openrouter.main");
     config = remove(config, "openrouter.team");
     expect(keys(config, "openrouter")).toEqual(["main"]);
+    config = decodeAccountsConfig(
+      `{"accounts":[{"provider":"claude","key":"main","addedAt":1},{"provider":"claude","key":"Pro","addedAt":2}]}`,
+      now,
+    )!;
+    config = remove(config, "claude.main");
+    expect(keys(config, "claude")).toEqual(["Pro"]);
+    expect(keys(decodeAccountsConfig(encodeAccountsConfig(config), now)!, "claude")).toEqual([
+      "Pro",
+    ]);
   });
 
   it("normalize drops duplicates and restores main", () => {

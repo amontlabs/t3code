@@ -22,7 +22,7 @@ import { readKeychain } from "./keychain.ts";
 import { runEnvironment, withoutCallerIdentity } from "./claudeProfile.ts";
 import { accountsFile, claudeFolder, helperDirectory, type LastdropPaths } from "./paths.ts";
 
-/** The fork's account list; Main alone while there is none. */
+/** The fork's account list; no Claude account while there is none. */
 export async function loadAccounts(paths: LastdropPaths, now: number): Promise<AccountsConfig> {
   return loadAccountsConfig({ accounts: await readText(accountsFile(paths)) }, now);
 }
@@ -52,7 +52,10 @@ export async function readSignInFacts(
   return raw === undefined ? undefined : signInFacts(raw);
 }
 
-/** The account a config folder is signed in to (`oauthAccount` in its `.claude.json`, Main's `~/.claude.json`). */
+/**
+ * The account a config folder is signed in to (`oauthAccount` in its `.claude.json`; Claude Code's own
+ * `~/.claude.json` for no folder).
+ */
 export async function signedInAccountOf(
   paths: LastdropPaths,
   configDir: string | undefined,

@@ -1,20 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off - The real home folder and new session ids; the I/O is lastdrop-node's.
 /**
  * The wrapper as the server runs it: the router over the real home, lineage from T3's projection. Only on
  * macOS and not under vitest (T3's tests build this layer); elsewhere T3's runner is returned unchanged.
  */
-import * as NodeCrypto from "node:crypto";
-import * as NodeOS from "node:os";
-
 import { isDelegatedAppThread, ThreadId } from "@t3tools/contracts";
-import {
-  fileLogger,
-  lastdropPaths,
-  StatusStore,
-  statusFile,
-  SessionLedger,
-  ThreadRouter,
-} from "@t3tools/lastdrop-node";
+import type { ThreadRouter } from "@t3tools/lastdrop-node";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -23,15 +12,14 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { ServerConfig } from "../../config.ts";
 import {
   type ClaudeAgentSdkQueryOpenInput,
   ClaudeAgentSdkQueryRunner,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
-import { lastdropDataDir } from "../dataDir.ts";
 import { pendingContinuations } from "./moveContinuation.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
+import { lastdropRouting } from "./routing.ts";
 import { boundPlugin, runnerVariables } from "./runner/endpoint.ts";
 import { withLastdropPlugin, withRunnerEnvironment } from "./runner/queryEnvironment.ts";
 
@@ -96,47 +84,9 @@ const wrapRouting = <E, R>(
     ClaudeAgentSdkQueryRunner,
     Effect.gen(function* () {
       const inner = yield* ClaudeAgentSdkQueryRunner;
-      const underTest = yield* Config.String("VITEST").pipe(
-        Config.option,
-        Effect.orElseSucceed(Option.none),
-      );
-      const off = yield* Config.String("LASTDROP_CLAUDE_ROUTING").pipe(
-        Config.option,
-        Effect.orElseSucceed(Option.none),
-      );
-      const platform = yield* HostProcess.Platform;
-      const config = yield* Effect.serviceOption(ServerConfig);
-      if (
-        platform !== "darwin" ||
-        underTest._tag === "Some" ||
-        (off._tag === "Some" && off.value === "0") ||
-        Option.isNone(config)
-      ) {
-        return inner;
-      }
-      const dataDir = lastdropDataDir(config.value);
-      const home = NodeOS.homedir();
-      // Live checks only (docs/lastdrop/claude-routing.md): sign in through the accounts' real folders while
-      // their profiles are built elsewhere, and make choosing fail on purpose. Unset, they change nothing.
-      const setting = (name: string) =>
-        Config.String(name).pipe(
-          Config.option,
-          Effect.map(Option.getOrUndefined),
-          Effect.orElseSucceed(() => undefined),
-        );
-      const claudeFolders = yield* setting("LASTDROP_CLAUDE_FOLDERS");
-      const profiles = yield* setting("LASTDROP_PROFILES");
-      const fault = yield* setting("LASTDROP_FAULT_ROUTE");
-      const paths = lastdropPaths({ home, dataDir, claudeFolders, profiles });
-      const log = fileLogger(`${dataDir}/lastdrop.log`);
-      const statuses = new StatusStore(statusFile(paths));
-      const router = new ThreadRouter({
-        paths,
-        ledger: new SessionLedger(`${dataDir}/sessions.json`),
-        statuses: () => statuses.read(),
-        newSessionId: () => NodeCrypto.randomUUID(),
-        log,
-      });
+      const routing = yield* lastdropRouting;
+      if (routing === undefined) return inner;
+      const { router, log, fault } = routing;
       const lineage = yield* lineageReader.pipe(Effect.orElseSucceed(() => undefined));
       if (lineage === undefined)
         log("routing: T3's projection is not readable here; every thread picks as a main thread");

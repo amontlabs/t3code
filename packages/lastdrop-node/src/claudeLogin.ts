@@ -65,7 +65,7 @@ export class ClaudeLogins {
     const { paths } = this.options;
     const folder = claudeFolder(paths, key);
     if (folder === undefined) {
-      throw new SignInError("Main is Claude Code's own login: sign in with `claude auth login`.");
+      throw new SignInError("Claude Code's own login is signed in with `claude auth login`.");
     }
     const claude = await claudeExecutable(paths, this.options.env);
     if (claude === undefined) throw new SignInError("Claude Code (`claude`) wasn't found.");

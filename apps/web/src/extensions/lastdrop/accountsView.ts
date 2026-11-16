@@ -7,7 +7,6 @@ export type SignInState = "ok" | "needsSignIn" | "signedOut";
 export interface AccountView {
   readonly key: string;
   readonly name?: string;
-  readonly isMain: boolean;
   readonly email?: string;
   readonly plan?: string;
   readonly signIn: SignInState;
@@ -30,6 +29,8 @@ export interface AccountsView {
   readonly sessionThreshold: number;
   readonly weeklyThreshold: number;
   readonly accounts: ReadonlyArray<AccountView>;
+  /** No account can take work: Claude threads run on Claude Code's own login (`~/.claude`). */
+  readonly terminalLogin: boolean;
   /** Accounts "Import from the lastdrop app" would add; only while there are none here. */
   readonly importable?: number;
 }
@@ -59,9 +60,9 @@ export const newestView = (
 
 export type AccountsResponse = AccountsView | { readonly unavailable: string };
 
-/** "Main", the account's name, or its folder's. */
-export const accountTitle = (a: Pick<AccountView, "isMain" | "name" | "key">): string =>
-  a.name ?? (a.isMain ? "Main" : a.key);
+/** The account's name, else its folder's ("Main" for an older list's `main`). */
+export const accountTitle = (a: Pick<AccountView, "name" | "key">): string =>
+  a.name ?? (a.key === "main" ? "Main" : a.key);
 
 export const usedLabel = (used: number | undefined): string =>
   used === undefined ? "Unknown" : `${Math.round(used)}% used`;

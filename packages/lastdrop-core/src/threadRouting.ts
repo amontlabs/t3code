@@ -4,7 +4,7 @@
  * `ThreadRelay.Machine` and `SessionTransfer.withoutTrailingNotices`, on the SDK's options. No I/O.
  */
 import { type Candidate, pickForThread } from "./accounts.ts";
-import { MAIN_KEY } from "./accountsConfig.ts";
+import { TERMINAL_KEY } from "./accountsConfig.ts";
 
 /** The SDK options that name the conversation (`ClaudeAgentSdkQueryOptions`' identity). */
 export interface ThreadIdentity {
@@ -121,10 +121,10 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
   // Troubled accounts are never where work goes, unless nothing else is left.
   const choose = (list: ReadonlyArray<Candidate>) =>
     pickFrom(list.filter((c) => !troubled(c.id))) ?? pickFrom(list);
-  // Nothing to continue: a new thread. It starts on the roomiest account; main is the floor when no
-  // account can be trusted with it.
+  // Nothing to continue: a new thread. It starts on the roomiest account; Claude Code's own login is the
+  // floor when no account can be trusted with it.
   if (open.resume === undefined) {
-    const account = choose(candidates)?.id ?? MAIN_KEY;
+    const account = choose(candidates)?.id ?? TERMINAL_KEY;
     const session = open.sessionId ?? "";
     return {
       identity: open,
@@ -138,7 +138,7 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
   }
   const resume = open.resume;
   const current = resolvedSession(ledger, resume);
-  const onCurrent = ledger.account(current) ?? MAIN_KEY;
+  const onCurrent = ledger.account(current) ?? TERMINAL_KEY;
   // A fork T3 asked for brings its own new session id; only the account is chosen.
   if (open.forkSession === true) {
     const account = choose(candidates)?.id ?? onCurrent;
@@ -184,7 +184,7 @@ export function decideThread(open: ThreadIdentity, input: DecideInput): ThreadDe
   const known =
     picked !== undefined && picked.sessionUsed !== undefined && picked.weeklyUsed !== undefined;
   const destination =
-    (known || gone || full ? picked?.id : undefined) ?? (gone ? MAIN_KEY : onCurrent);
+    (known || gone || full ? picked?.id : undefined) ?? (gone ? TERMINAL_KEY : onCurrent);
   if (destination === onCurrent) {
     return stay(full ? "full, no other account has room" : "already the roomiest");
   }
@@ -467,15 +467,23 @@ export function moveNotice(input: {
   readonly to: string | undefined;
   readonly why: "full" | "gone" | "limit";
 }): string {
-  const where = input.to === undefined ? undefined : `Claude account ${input.to}`;
+  const where = input.to === undefined ? undefined : accountLabel(input.to);
+  // Claude Code's own login is only left once a fork account is signed in: it isn't gone, the fork stopped using it.
+  if (input.from === TERMINAL_KEY && input.why !== "limit") {
+    return `lastdrop: this thread ran on Claude Code's own login and continues on ${where ?? "another account"}. The conversation carries over.`;
+  }
+  const from = accountLabel(input.from);
   switch (input.why) {
     case "limit":
       return where === undefined
-        ? `lastdrop: Claude account ${input.from} reached its usage limit, and no other account has room right now. Send the message again once a limit resets.`
-        : `lastdrop: Claude account ${input.from} reached its usage limit. This thread continues on ${where}; the conversation carries over.`;
+        ? `lastdrop: ${from} reached its usage limit, and no other account has room right now. Send the message again once a limit resets.`
+        : `lastdrop: ${from} reached its usage limit. This thread continues on ${where}; the conversation carries over.`;
     case "full":
-      return `lastdrop: Claude account ${input.from} is at its usage limit, so this thread continues on ${where ?? "another account"}. The conversation carries over; its prompt cache is read again once.`;
+      return `lastdrop: ${from} is at its usage limit, so this thread continues on ${where ?? "another account"}. The conversation carries over; its prompt cache is read again once.`;
     case "gone":
-      return `lastdrop: Claude account ${input.from} is no longer signed in, so this thread continues on ${where ?? "another account"}. The conversation carries over.`;
+      return `lastdrop: ${from} is no longer signed in, so this thread continues on ${where ?? "another account"}. The conversation carries over.`;
   }
 }
+
+const accountLabel = (key: string) =>
+  key === TERMINAL_KEY ? "Claude Code's own login" : `Claude account ${key}`;

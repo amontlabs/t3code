@@ -1,19 +1,19 @@
 /**
- * Where lastdrop's files are, from one home folder, so tests run against a temporary home and never touch the
- * real `~/.claude`, `~/.t3` or the keychain.
- *
- * The fork owns its accounts: the list, sign-in folders and readings all live in `dataDir` (`~/.t3/lastdrop/`).
- * Main is Claude Code's own login (`~/.claude`). Only `appImport.ts` names the standalone app's folder.
+ * Where lastdrop's files are, from one home folder, so tests run against a temporary home. The fork's accounts
+ * live in `dataDir` (`~/.t3/lastdrop/`); `~/.claude` lends profiles its settings and conversations, and its login
+ * is used only while no fork account is signed in. Only `appImport.ts` names the standalone app's folder.
  */
+import { TERMINAL_KEY } from "@t3tools/lastdrop-core";
+
 export interface LastdropPaths {
   readonly home: string;
   /** The fork's own folder (`~/.t3/lastdrop/`), from the server's data-dir helper. */
   readonly dataDir: string;
-  /** Non-main Claude accounts' sign-in folders (`<dataDir>/accounts`). */
+  /** Every Claude account's sign-in folder's parent (`<dataDir>/accounts`). */
   readonly claudeFolders: string;
-  /** Main's Claude Code folder (`~/.claude`). */
+  /** Claude Code's own folder (`~/.claude`), which profiles link into. */
   readonly sharedClaude: string;
-  /** Main's Claude Code config (`~/.claude.json`). */
+  /** Claude Code's own config (`~/.claude.json`), which profiles' configs are rebuilt from. */
   readonly sharedConfig: string;
   /** `/usr/bin/security`; tests pass a fake. */
   readonly security: string;
@@ -53,9 +53,12 @@ export const statusFile = (p: LastdropPaths) => `${p.dataDir}/usage.json`;
 /** An empty folder helper CLIs start in, so they never look around the home folder. */
 export const helperDirectory = (p: LastdropPaths) => `${p.dataDir}/helper`;
 
-/** A Claude account's sign-in folder (`CLAUDE_SECURESTORAGE_CONFIG_DIR`); undefined for Main. */
+/**
+ * A Claude account's sign-in folder (`CLAUDE_SECURESTORAGE_CONFIG_DIR`), Main's included; undefined only for
+ * Claude Code's own login (`TERMINAL_KEY`), which has none of the fork's.
+ */
 export const claudeFolder = (p: LastdropPaths, key: string): string | undefined =>
-  key === "main" ? undefined : `${p.claudeFolders}/${key}`;
+  key === TERMINAL_KEY ? undefined : `${p.claudeFolders}/${key}`;
 
 /** The profile of a sign-in folder (`<folder>/profile`), for `CLAUDE_CONFIG_DIR`. */
 export const profileDirectory = (folder: string, p?: Pick<LastdropPaths, "profiles">) =>

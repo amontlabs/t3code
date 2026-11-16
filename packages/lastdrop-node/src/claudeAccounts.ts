@@ -1,8 +1,7 @@
 /**
- * The fork's own Claude accounts: the list in `<dataDir>/accounts.json` and each extra account's sign-in folder
- * `<dataDir>/accounts/<key>` (its keychain item is named after that folder). Adding, renaming, reordering,
- * removing and signing in, plus the one-time import of the standalone app's names and order. Port of headroom's
- * `ClaudeAccounts` list editing.
+ * The fork's own Claude accounts, Main's included: the list in `<dataDir>/accounts.json` and each account's
+ * sign-in folder `<dataDir>/accounts/<key>` (its keychain item is named after it), so a terminal sign-in never
+ * changes them. Editing the list, signing in, and the one-time import of the app's names and order.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
@@ -12,7 +11,6 @@ import {
   type AccountsConfig,
   accountId,
   add,
-  isMain,
   keychainService,
   MAIN_KEY,
   move,
@@ -134,7 +132,6 @@ export class ClaudeAccounts {
           await this.edit(change.key, (config, id) => move(config, id, change.by));
           break;
         case "remove": {
-          if (change.key === MAIN_KEY) throw new AccountChangeError("Main can't be removed.");
           await this.edit(change.key, (config, id) => remove(config, id));
           this.logins.cancel(change.key);
           await this.forgetSignIn(change.key);
@@ -188,38 +185,37 @@ export class ClaudeAccounts {
     await NodeFSP.rm(folder, { recursive: true, force: true });
   }
 
-  /** The app's Claude accounts' names and order, each to sign in again here. Only while the fork has none. */
+  /**
+   * The app's Claude accounts' names and order (its Main too), each to sign in again here. Only while the fork
+   * has no account but an older list's Main.
+   */
   private async importFromApp(): Promise<void> {
     const { paths } = this.options;
     const now = this.now();
     const config = await loadAccounts(paths, now);
     const own = pool(config, "claude");
-    if (own.some((a) => !isMain(a))) {
-      throw new AccountChangeError("Accounts were added here already.");
-    }
+    if (!onlyOldMain(own)) throw new AccountChangeError("Accounts were added here already.");
     const app = await appClaudeAccounts(paths, now);
     if (app.length === 0)
       throw new AccountChangeError("The lastdrop app has no accounts to import.");
-    const claude = app.map((a): Account =>
-      isMain(a)
-        ? own[0]!
-        : {
-            provider: "claude",
-            key: a.key,
-            ...(a.name === undefined ? {} : { name: a.name }),
-            addedAt: now,
-            notifyAt: 1,
-          },
+    const claude = app.map(
+      (a): Account =>
+        own.find((o) => o.key === a.key) ?? {
+          provider: "claude",
+          key: a.key,
+          ...(a.name === undefined ? {} : { name: a.name }),
+          addedAt: now,
+          notifyAt: 1,
+        },
     );
     for (const a of claude) {
-      const folder = claudeFolder(paths, a.key);
-      if (folder !== undefined) await NodeFSP.mkdir(folder, { recursive: true, mode: 0o700 });
+      await NodeFSP.mkdir(claudeFolder(paths, a.key)!, { recursive: true, mode: 0o700 });
     }
     await saveAccounts(paths, {
       ...config,
       accounts: [...claude, ...config.accounts.filter((a) => a.provider !== "claude")],
     });
-    this.options.log?.(`imported ${claude.length - 1} accounts from the lastdrop app`);
+    this.options.log?.(`imported ${claude.length - own.length} accounts from the lastdrop app`);
   }
 
   private async decorate(view: AccountsView): Promise<ClaudeAccountsView> {
@@ -234,12 +230,18 @@ export class ClaudeAccounts {
             ...(signInError === undefined ? {} : { signInError }),
           };
     });
-    const importable = view.accounts.every((a) => a.isMain)
-      ? (await appClaudeAccounts(this.options.paths, this.now())).filter((a) => !isMain(a)).length
+    const importable = onlyOldMain(view.accounts)
+      ? (await appClaudeAccounts(this.options.paths, this.now())).filter(
+          (a) => !view.accounts.some((o) => o.key === a.key),
+        ).length
       : 0;
     return { ...view, accounts, ...(importable > 0 ? { importable } : {}) };
   }
 }
+
+/** No account, or only the `main` an older list had (Claude Code's own login back then). */
+const onlyOldMain = (accounts: ReadonlyArray<{ readonly key: string }>) =>
+  accounts.every((a) => a.key === MAIN_KEY);
 
 /** Deletes every keychain item of `service` (Claude Code keeps one per folder). */
 async function deleteKeychainItems(security: string, service: string): Promise<void> {
