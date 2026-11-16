@@ -12,7 +12,7 @@ if [[ ! -x "$prefix/node_modules/.bin/claude" ]]; then
   # Outside the checkout, so the workspace's package manager settings stay out of it.
   (cd "$RUNNER_TEMP" && npm install --no-save --silent --prefix "$prefix" "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION") || exit 1
 fi
-prompt="$(envsubst '$TAG $PREVIOUS $PRE_MERGE $BASE $FORK_MD $BRIEF $NOTES $CHECKS_LOG $CHECKS_DIGEST' < "$prompt_file")"
+prompt="$(envsubst '$TAG $PREVIOUS $PRE_MERGE $BASE $FORK_MD $NOTES $CHECKS_LOG $CHECKS_DIGEST' < "$prompt_file")"
 out="$RUNNER_TEMP/claude-$(basename "$prompt_file" .md).json"
 
 account=0

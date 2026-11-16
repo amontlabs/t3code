@@ -148,7 +148,6 @@ jobs:
             echo "BASE=${{ steps.plan.outputs.base }}"
             echo "PREVIOUS=${{ steps.plan.outputs.previous }}"
             echo "PRE_MERGE=${{ steps.plan.outputs.head }}"
-            echo "BRIEF=$RUNNER_TEMP/conflicts.md"
           } >> "$GITHUB_ENV"
 
       # A merge, not a rebase: only files both sides changed since the last sync can conflict (the
@@ -173,7 +172,6 @@ jobs:
           fi
           echo "The merge stopped on conflicts:"
           git diff --name-only --diff-filter=U | tee -a "$log"
-          bash "$TOOLS/sync-brief.sh" "$FORK_MD" > "$BRIEF"
           bash "$TOOLS/sync-claude.sh" "$TOOLS/sync-resolve.md" sonnet 5 2>&1 | tee "$RUNNER_TEMP/claude-resolve.log" || true
           if [[ -f .git/MERGE_HEAD ]]; then
             echo "::error::Claude did not finish the merge."

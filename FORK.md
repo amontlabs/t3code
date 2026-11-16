@@ -245,7 +245,7 @@ The official app reads the same `settings.json`, so it shows and runs lastdrop's
 
 1. Turns off every workflow that is not `lastdrop-*` (upstream's would fail or wait for upstream's runners).
 2. Finds the newest stable upstream tag (`^v\d+\.\d+\.\d+$`; nightly and preview tags are skipped). Nothing newer than the base of `lastdrop`, or `lastdrop-sync/<tag>` already exists (waiting for a person): done.
-3. `git merge <tag>`. Only files both sides changed since the last sync can conflict, which is the seams (fork folders are the fork's alone). The lockfile takes upstream's; any other conflict goes to Claude Code, headless, with only the conflicted files and their seam sections (`sync-brief.sh`, `sync-resolve.md`, Sonnet). If it stops, the conflict goes to a PR (step 7).
+3. `git merge <tag>`. Only files both sides changed since the last sync can conflict, which is the seams (fork folders are the fork's alone). The lockfile takes upstream's; any other conflict goes to Claude Code, headless, which reads this file in full, then resolves the conflicted files (`sync-resolve.md`, Sonnet). If it stops, the conflict goes to a PR (step 7).
 4. Regenerates `pnpm-lock.yaml` (`vp install --lockfile-only`), installs, then `scripts/lastdrop/sync-checks.sh`: the guard, `vp run typecheck`, `vp run -r test`, `vp run build:desktop`.
 5. Red: Claude gets one attempt at a fix (`sync-fix.md`, Opus, inside the fork's folders and seams only), starting from a digest of the failures rather than the whole log, then the checks run again.
 6. Green: moves `lastdrop` (only if nobody pushed meanwhile), deletes every `lastdrop-sync/*` branch (closing older stuck syncs' PRs), and pushes tag `v<tag>-ld.<n>`, which runs `lastdrop-release.yml`.
