@@ -11,8 +11,7 @@ import { Button } from "~/components/ui/button";
 import { ensureLocalApi } from "~/localApi";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 
-import type { AccountsResponse } from "./accountsView";
-import { ACCOUNTS_ROUTE, useRoute } from "./lastdropRoute";
+import { useLimitNames } from "./lastdropRoute";
 import { UsageLimitsList } from "./UsageLimitsList";
 import { limitGroups } from "./usageLimitsView";
 
@@ -23,15 +22,12 @@ export function UsageLimitsByAccount({
   readonly presentations: LimitPresentations;
   readonly now: number;
 }) {
-  const accounts = useRoute<AccountsResponse>(usePrimaryEnvironmentId(), ACCOUNTS_ROUTE);
+  const names = useLimitNames(usePrimaryEnvironmentId());
   const groups = limitGroups({
     presentations,
     now,
     driverLabel: (driver) => providerClients.get(driver)?.label,
-    lastdrop:
-      accounts.state === "loaded" && !("unavailable" in accounts.response)
-        ? accounts.response.accounts
-        : undefined,
+    ...names,
   });
   const links = collectExternalUsageLinks(presentations);
   return (

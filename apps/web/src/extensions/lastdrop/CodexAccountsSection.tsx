@@ -31,7 +31,7 @@ import {
   type CodexAccountsView,
   codexMeters,
 } from "./codexAccountsView";
-import { type Load, useRoute, useRouteSender } from "./lastdropRoute";
+import { useLiveRoute, useRouteSender } from "./lastdropRoute";
 
 /** Sends one change; resolves to an error message, or undefined once the view is updated. */
 type Change = (change: CodexAccountChange) => Promise<string | undefined>;
@@ -290,12 +290,15 @@ function AddAccount(props: { readonly change: Change }) {
 }
 
 export function CodexAccountsSection(props: ExtensionInstanceSectionProps) {
-  const load = useRoute<CodexAccountsResponse>(props.environmentId, CODEX_ACCOUNTS_ROUTE);
+  // Polled fast while a sign-in waits, so the account reads signed in soon after Codex has it.
+  const [load, show] = useLiveRoute<CodexAccountsResponse>(
+    props.environmentId,
+    CODEX_ACCOUNTS_ROUTE,
+    true,
+    (response) =>
+      "accounts" in response && response.accounts.some((account) => account.signIn !== undefined),
+  );
   const send = useRouteSender(props.environmentId);
-  // A change's answer shows until the next poll brings a newer read.
-  const [changed, setChanged] = useState<
-    { readonly view: CodexAccountsView; readonly after: Load<CodexAccountsResponse> } | undefined
-  >();
   const change: Change | undefined =
     send === undefined || props.readOnly
       ? undefined
@@ -305,12 +308,11 @@ export function CodexAccountsSection(props: ExtensionInstanceSectionProps) {
             next,
           );
           if (result.state === "failed") return result.message;
-          if (result.state === "loaded") setChanged({ view: result.response.view, after: load });
+          if (result.state === "loaded") show(result.response.view);
           return undefined;
         };
-  const loaded =
+  const view =
     load.state === "loaded" && !("unavailable" in load.response) ? load.response : undefined;
-  const view = changed !== undefined && changed.after === load ? changed.view : loaded;
   const note =
     load.state === "loading"
       ? "Reading accounts…"

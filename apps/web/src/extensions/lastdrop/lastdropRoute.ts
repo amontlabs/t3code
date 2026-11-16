@@ -1,5 +1,5 @@
 /**
- * Reads lastdrop's HTTP routes (`GET /api/lastdrop/accounts`, `/endpoints`) from an environment, polling while
+ * Reads lastdrop's HTTP routes (`GET /api/lastdrop/accounts`, `/codex-accounts`, `/endpoints`) from an environment, polling while
  * `active`, and posts account changes. A remote (DPoP) connection gets none: the accounts live on the Mac that
  * runs them (the server refuses its changes too).
  */
@@ -9,9 +9,13 @@ import { useEffect, useState } from "react";
 
 import { usePreparedConnection } from "~/state/session";
 
+import type { AccountsResponse } from "./accountsView";
+import { CODEX_ACCOUNTS_ROUTE, type CodexAccountsResponse } from "./codexAccountsView";
+
 export const ACCOUNTS_ROUTE = "/api/lastdrop/accounts";
 export const ENDPOINTS_ROUTE = "/api/lastdrop/endpoints";
 const REFRESH_MS = 30_000;
+const FAST_REFRESH_MS = 2_500;
 
 export type Load<T> =
   | { readonly state: "loading" }
@@ -92,8 +96,22 @@ export function useRoute<T>(
   route: string,
   active = true,
 ): Load<T> {
+  return useLiveRoute<T>(environmentId, route, active)[0];
+}
+
+/**
+ * `useRoute`, plus `show` for a newer answer (a change's) until the next read, and every `FAST_REFRESH_MS` while
+ * `fastWhile` holds for what is shown (a sign-in waiting to complete).
+ */
+export function useLiveRoute<T>(
+  environmentId: EnvironmentId | null,
+  route: string,
+  active = true,
+  fastWhile?: (response: T) => boolean,
+): readonly [Load<T>, (response: T) => void] {
   const { baseUrl, bearer, remote } = useConnection(environmentId);
   const [load, setLoad] = useState<Load<T>>({ state: "loading" });
+  const fast = load.state === "loaded" && fastWhile?.(load.response) === true;
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Polls the server's lastdrop route on a timer while active.
   useEffect(() => {
@@ -104,12 +122,32 @@ export function useRoute<T>(
         if (!stopped) setLoad(next);
       });
     read();
-    const timer = setInterval(read, REFRESH_MS);
+    const timer = setInterval(read, fast ? FAST_REFRESH_MS : REFRESH_MS);
     return () => {
       stopped = true;
       clearInterval(timer);
     };
-  }, [active, route, baseUrl, bearer, remote]);
+  }, [active, route, baseUrl, bearer, remote, fast]);
 
-  return remote ? { state: "failed", message: "Accounts show on the Mac that runs them." } : load;
+  const show = (response: T) => setLoad({ state: "loaded", response });
+  return [
+    remote ? { state: "failed", message: "Accounts show on the Mac that runs them." } : load,
+    show,
+  ];
+}
+
+/** lastdrop's Claude and Codex accounts, which name the Usage rows, while `active`. */
+export function useLimitNames(environmentId: EnvironmentId | null, active = true) {
+  const claude = useRoute<AccountsResponse>(environmentId, ACCOUNTS_ROUTE, active);
+  const codex = useRoute<CodexAccountsResponse>(environmentId, CODEX_ACCOUNTS_ROUTE, active);
+  return {
+    lastdrop:
+      claude.state === "loaded" && !("unavailable" in claude.response)
+        ? claude.response.accounts
+        : undefined,
+    lastdropCodex:
+      codex.state === "loaded" && !("unavailable" in codex.response)
+        ? codex.response.accounts
+        : undefined,
+  };
 }

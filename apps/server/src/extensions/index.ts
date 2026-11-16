@@ -21,20 +21,23 @@ import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import type { CodexAppServerClientFactory } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import type { ClaudeDriverEnv } from "../provider/Drivers/ClaudeDriver.ts";
+import type { CodexDriverEnv } from "../provider/Drivers/CodexDriver.ts";
 import { LastdropClaudeDriver } from "./lastdrop/claudeDriver.ts";
+import { LastdropCodexDriver } from "./lastdrop/codex/codexDriver.ts";
 
 /** Services the extension drivers need to create instances. */
-export type ExtensionDriversEnv = ClaudeDriverEnv;
+export type ExtensionDriversEnv = ClaudeDriverEnv | CodexDriverEnv;
 /** Services the extension drivers' usage readers need. */
 export type ExtensionUsageReadersEnv = never;
 
 /**
- * Provider drivers added after T3's built-in ones (`builtInDrivers.ts`): the user's agents, and T3's Claude
- * driver as lastdrop runs it, which replaces T3's (the registry keeps the last driver of a kind).
+ * Provider drivers added after T3's built-in ones (`builtInDrivers.ts`): the user's agents, and T3's Claude and
+ * Codex drivers as lastdrop runs them, which replace T3's (the registry keeps the last driver of a kind).
  */
 export const EXTENSION_DRIVERS: ReadonlyArray<AnyProviderDriver<ExtensionDriversEnv>> = [
   LastdropAgentsDriver,
   LastdropClaudeDriver,
+  LastdropCodexDriver,
 ];
 
 /** Drivers whose transcripts the Usage page reads, after T3's own. */

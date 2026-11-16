@@ -13,6 +13,7 @@ import { limitGroups, limitsSummary, shortPlan } from "./usageLimitsView";
 
 const NOW = Date.UTC(2026, 10, 15, 12);
 const claude = ProviderDriverKind.make("claudeAgent");
+const codex = ProviderDriverKind.make("codex");
 
 const reading = (
   id: string,
@@ -86,6 +87,13 @@ describe("the usage limits list", () => {
           [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 4 }],
           ProviderDriverKind.make("Zai"),
         ),
+        reading(
+          "codex-c1",
+          "c@example.com",
+          [{ id: "primary", kind: "session", label: "Session", usedPercent: 20 }],
+          codex,
+        ),
+        reading("codex-c2", undefined, [], codex),
       ]),
       now: NOW,
       driverLabel: () => undefined,
@@ -99,8 +107,17 @@ describe("the usage limits list", () => {
           nextFor: ["Threads", "Subagents"],
         },
       ],
+      lastdropCodex: [
+        { key: "c1", title: "Personal", email: "C@example.com" },
+        { key: "c2", title: "Team" },
+      ],
     });
-    expect(groups.map((group) => group.label)).toEqual(["claudeAgent", "Z.ai"]);
+    expect(groups.map((group) => group.label)).toEqual(["claudeAgent", "codex", "Z.ai"]);
+    // Codex rows take the fork account's name, signed in (by e-mail) or not (by its row id).
+    expect(groups[1]?.entries.map((entry) => [entry.name, entry.detail])).toEqual([
+      ["Personal", "c@example.com"],
+      ["Team", undefined],
+    ]);
     const [claudeGroup] = groups;
     expect(claudeGroup?.entries.map((entry) => entry.name)).toEqual([
       "a@example.com",
@@ -121,7 +138,8 @@ describe("the usage limits list", () => {
     expect(claudeGroup?.entries[2]?.notice).toBe("Needs sign-in.");
     expect(limitsSummary(groups)).toBe(
       "claudeAgent: a@example.com: Weekly 50% left; Work (next for Threads, Subagents): Session 10% left, " +
-        "Weekly 75% left, Weekly · Fable 40% left; claude-3: Needs sign-in. Z.ai: Z.ai: Session 96% left.",
+        "Weekly 75% left, Weekly · Fable 40% left; claude-3: Needs sign-in. codex: Personal: Session 80% left; " +
+        "Team: Needs sign-in. Z.ai: Z.ai: Session 96% left.",
     );
     expect(limitsSummary([])).toBe("No account reports limits yet.");
   });
