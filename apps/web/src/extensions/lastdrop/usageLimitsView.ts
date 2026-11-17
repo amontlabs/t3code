@@ -154,14 +154,19 @@ export function limitGroups(input: {
     (input.lastdropCodex ?? []).map((account) => [`codex-${account.key}`, account.title] as const),
   );
   // A source account's spend per key, by the key `collectLimitAccounts` gives its row.
+  // Its hub is `<environment>:<source>`, or the endpoint of a remote one (`hubIdentity` there); both are mapped.
   const keysByAccount = new Map<string, ReadonlyArray<UsageLimitSourceKey>>(
-    [...presentations.values()].flatMap((presentation) =>
+    [...presentations.entries()].flatMap(([environmentId, presentation]) =>
       (presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) =>
-        source.accounts.flatMap((account) =>
-          account.keys && account.keys.length > 0
-            ? [[`${source.id}:${account.id}`, account.keys] as const]
-            : [],
-        ),
+        source.accounts.flatMap((account) => {
+          if (!account.keys || account.keys.length === 0) return [];
+          const keys = account.keys;
+          const suffix = `${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
+          return [
+            `${environmentId}:${source.id}`,
+            ...(source.endpoint ? [source.endpoint] : []),
+          ].map((hub) => [`${hub}:${suffix}`, keys] as const);
+        }),
       ),
     ),
   );

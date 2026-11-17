@@ -172,7 +172,7 @@ export const runFallbackReactor = Effect.fn("LastdropFallback.run")(function* (
     // As T3 after its own continuation: a delegated child's task finalization skipped the run
     // while the marker was pending. With a continuation, that run settles the task; without one
     // (a Stop declined it, the run ended interrupted, the re-send failed) this settles it now.
-    yield* orchestrator.recoverDelegatedTask(event.threadId, event.payload.id);
+    yield* orchestrator.recoverDelegatedTask(event.threadId, { sourceRunId: event.payload.id });
   });
 
   yield* signals.bindHold(hold);

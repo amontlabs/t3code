@@ -85,6 +85,7 @@ function fakeRunner(script: (n: number) => ReadonlyArray<ReadonlyArray<SDKMessag
         setModel: () => Effect.void,
         applyFlagSettings: () => Effect.void,
         setPermissionMode: () => Effect.void,
+        renameSession: () => Effect.void,
         stopTask: () => Effect.void,
         backgroundTasks: () => Effect.succeed(false),
         mcpServerStatus: Effect.succeed([]),
@@ -114,6 +115,7 @@ function fakeRunner(script: (n: number) => ReadonlyArray<ReadonlyArray<SDKMessag
         fake.lookups.push(input.sessionId);
         return input.sessionId === "X" ? "tool-1" : null;
       }),
+    subagentModel: () => Effect.succeed(null),
     assertComplete: Effect.void,
   };
   return fake;

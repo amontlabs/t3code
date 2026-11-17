@@ -40,6 +40,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import { CONTINUE_PROMPT } from "../../../orchestration-v2/RestartContinuation.ts";
 import * as ProviderReplayHarness from "../../../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as PortScanner from "../../../preview/PortScanner.ts";
 import { pendingContinuations } from "../moveContinuation.ts";
 import * as MoveContinuation from "../moveContinuationLayer.ts";
 import { type CodexOpenInput, wrapCodexClientFactory } from "./factory.ts";
@@ -266,6 +267,10 @@ function runAtLimit(fullB: boolean) {
           NodeServices.layer,
           NodeCrypto.layer,
           IdAllocator.layer,
+          Layer.mock(PortScanner.PortDiscovery)({
+            trackAgent: () => () => undefined,
+            watchAgentCommandStops: () => Effect.void,
+          }),
         ),
       ),
     );

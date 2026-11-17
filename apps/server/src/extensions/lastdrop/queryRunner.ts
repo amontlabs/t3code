@@ -34,6 +34,7 @@ import {
   ClaudeAgentSdkQueryRunnerError,
   type ClaudeAgentSdkQueryRunnerShape,
   type ClaudeAgentSdkQuerySession,
+  type ClaudeAgentSdkSubagentLookupInput as SubagentLookupInput,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { type CutWork, CutWorkTracker } from "./moveContinuation.ts";
 
@@ -376,6 +377,25 @@ export function wrapQueryRunner(
     };
   };
 
+  // A subagent started before a move sits under an older conversation's folder.
+  const acrossLineage = Effect.fnUntraced(function* <E>(
+    input: SubagentLookupInput,
+    lookup: (input: SubagentLookupInput) => Effect.Effect<string | null, E>,
+  ) {
+    const sessions = yield* io(() => router.lineage(input.sessionId)).pipe(
+      Effect.orElseSucceed(() => [input.sessionId]),
+    );
+    for (const [i, session] of sessions.entries()) {
+      const found = lookup({ ...input, sessionId: session });
+      // Only the last (T3's own id) answers as T3 asked; an earlier one may simply have no such folder.
+      const value =
+        i === sessions.length - 1
+          ? yield* found
+          : yield* found.pipe(Effect.orElseSucceed(() => null));
+      if (value !== null) return value;
+    }
+    return null;
+  });
   return {
     ...inner,
     open: Effect.fn("LastdropQueryRunner.open")(function* (input: ClaudeAgentSdkQueryOpenInput) {
@@ -481,22 +501,14 @@ export function wrapQueryRunner(
       return result;
     }),
     subagentLaunchToolUseId: Effect.fn("LastdropQueryRunner.subagentLaunchToolUseId")(function* (
-      input: Parameters<ClaudeAgentSdkQueryRunnerShape["subagentLaunchToolUseId"]>[0],
+      input: SubagentLookupInput,
     ) {
-      // A subagent started before a move sits under an older conversation's folder.
-      const sessions = yield* io(() => router.lineage(input.sessionId)).pipe(
-        Effect.orElseSucceed(() => [input.sessionId]),
-      );
-      for (const [i, session] of sessions.entries()) {
-        const lookup = inner.subagentLaunchToolUseId({ ...input, sessionId: session });
-        // Only the last (T3's own id) answers as T3 asked; an earlier one may simply have no such folder.
-        const found =
-          i === sessions.length - 1
-            ? yield* lookup
-            : yield* lookup.pipe(Effect.orElseSucceed(() => null));
-        if (found !== null) return found;
-      }
-      return null;
+      return yield* acrossLineage(input, inner.subagentLaunchToolUseId);
+    }),
+    subagentModel: Effect.fn("LastdropQueryRunner.subagentModel")(function* (
+      input: SubagentLookupInput,
+    ) {
+      return yield* acrossLineage(input, inner.subagentModel);
     }),
   };
 }

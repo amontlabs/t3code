@@ -24,7 +24,7 @@ import { museClient } from "@t3tools/provider-muse/client";
 import { openCodeClient } from "@t3tools/provider-opencode/client";
 import { piClient } from "@t3tools/provider-pi/client";
 import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
-import { EXTENSION_PROVIDER_CLIENTS } from "../extensions/index.ts";
+import { EXTENSION_PROVIDER_CLIENTS } from "../extensions/clients.ts";
 
 interface KnownDriver {
   readonly label: string;

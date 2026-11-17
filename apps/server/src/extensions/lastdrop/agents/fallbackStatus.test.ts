@@ -402,10 +402,11 @@ describe("lastdrop fallback partway: one run for what waits on it", () => {
             reactorOrchestrator: (orchestrator) => ({
               ...orchestrator,
               getThreadProjection: () => Effect.die(new Error("the thread could not be read")),
-              recoverDelegatedTask: (threadId, runId) =>
-                Ref.update(recovered, (all) => [...all, `${threadId} ${runId}`]).pipe(
-                  Effect.andThen(orchestrator.recoverDelegatedTask(threadId, runId)),
-                ),
+              recoverDelegatedTask: (threadId, options) =>
+                Ref.update(recovered, (all) => [
+                  ...all,
+                  `${threadId} ${options?.sourceRunId}`,
+                ]).pipe(Effect.andThen(orchestrator.recoverDelegatedTask(threadId, options))),
             }),
           },
         );

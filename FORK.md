@@ -39,14 +39,14 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 
 ### `apps/server/src/settingsSecrets.ts` (budget 2)
 
-- **Lines**: import `EXTENSION_PROVIDER_CLIENTS` (23); `...EXTENSION_PROVIDER_CLIENTS` last in the client list inside `providerSecretFields` (45).
+- **Lines**: import `EXTENSION_PROVIDER_CLIENTS` from `extensions/clients.ts`, not `extensions/index.ts`, which imports the drivers and so back into this file (23); `...EXTENSION_PROVIDER_CLIENTS` last in the client list inside `providerSecretFields` (45).
 - **Why**: the server's own copy of the client list, used to redact and store each provider's secret settings fields.
 - **Must survive**: the spread in whichever list maps driver kinds to `secretSettingsFields(...)`.
 - **Conflict**: take upstream's file, re-add both lines.
 
 ### `apps/server/src/policy/managedProviders.ts` (budget 2)
 
-- **Lines**: import `EXTENSION_PROVIDER_CLIENTS` (27); `...EXTENSION_PROVIDER_CLIENTS` last in `PACKAGED_CLIENTS` (55).
+- **Lines**: import `EXTENSION_PROVIDER_CLIENTS` from `extensions/clients.ts` (27); `...EXTENSION_PROVIDER_CLIENTS` last in `PACKAGED_CLIENTS` (55).
 - **Why**: a managed policy refuses drivers it does not know; this makes it know the fork's.
 - **Must survive**: the spread in the list that feeds `KNOWN_DRIVERS`.
 - **Conflict**: take upstream's file, re-add both lines.

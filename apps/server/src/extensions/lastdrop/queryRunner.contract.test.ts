@@ -21,9 +21,11 @@ const runnerMethods: Record<keyof ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape
   open: true,
   forkSession: true,
   subagentLaunchToolUseId: true,
+  subagentModel: true,
   assertComplete: true,
 };
 const openFields: Record<keyof ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput, true> = {
+  resume: true,
   options: true,
   threadId: true,
   providerSessionId: true,
@@ -62,8 +64,8 @@ const settings = Schema.decodeSync(ClaudeSettings)({});
 
 describe("the wrapper's contract with T3's Claude adapter", () => {
   it("the runner and its inputs have the shape the wrapper wraps", () => {
-    assert.lengthOf(Object.keys(runnerMethods), 5);
-    assert.lengthOf(Object.keys(openFields), 3);
+    assert.lengthOf(Object.keys(runnerMethods), 6);
+    assert.lengthOf(Object.keys(openFields), 4);
     assert.lengthOf(Object.keys(forkFields), 5);
     assert.lengthOf(Object.keys(lookupFields), 5);
     assert.lengthOf(Object.keys(sessionMethods), 4);
