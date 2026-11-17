@@ -8,6 +8,7 @@ import {
   type Candidate,
   claudeView,
   decideThread,
+  hasRoom,
   type LedgerWrite,
   moveNotice,
   pick,
@@ -72,6 +73,23 @@ export interface Route {
 }
 
 const NOTHING = async () => {};
+
+/** One account at a limit, as the reason a run can't start names it. */
+export interface FullAccount {
+  readonly name: string;
+  /** The limit a reading shows it at; left out when only its own "limit reached" answer says so. */
+  readonly window?: "session" | "weekly" | "model" | undefined;
+  /** When that limit resets, epoch ms. */
+  readonly until?: number | undefined;
+}
+
+/** What a pool of accounts can take now, for a caller choosing between providers. */
+export interface PoolRoom {
+  /** Every account, each at a limit, when none can take a run; undefined while one can. */
+  readonly full: ReadonlyArray<FullAccount> | undefined;
+  /** When an account that can take a run was last read (epoch ms); undefined when none of them was. */
+  readonly roomReadAt: number | undefined;
+}
 
 export interface RouterOptions {
   readonly paths: LastdropPaths;
@@ -429,6 +447,49 @@ export class ThreadRouter {
       );
   }
 
+  /**
+   * Whether any account can take a run on `model`, or null while none is signed in (the run is then Claude
+   * Code's own login's). An account is at a limit at 100% of a window by a reading, or by a "limit reached"
+   * answer no newer reading contradicts; one nothing is known about is not (it refuses quickly if it is). The
+   * ceilings choose between accounts and refuse nothing, so they don't count here.
+   */
+  async room(model: string | undefined): Promise<PoolRoom | null> {
+    const now = this.now();
+    const [{ candidates }, statuses] = await Promise.all([
+      this.candidates(model),
+      this.options.statuses(),
+    ]);
+    if (candidates.length === 0) return null;
+    const read = (c: Candidate) => c.sessionUsed !== undefined && c.weeklyUsed !== undefined;
+    const open = candidates.filter((c) => !read(c) || hasRoom(c));
+    if (open.length > 0) {
+      const readAt = Math.max(
+        ...open.map((c) => (read(c) ? (statuses[c.id]?.at ?? -Infinity) : -Infinity)),
+      );
+      return { full: undefined, roomReadAt: Number.isFinite(readAt) ? readAt : undefined };
+    }
+    const full = candidates.map((c): FullAccount => {
+      const status = statuses[c.id];
+      // The reading's own numbers: a "limit reached" answer fills both windows without saying which.
+      const reading = readingFromStatus(status, now);
+      const row =
+        (reading.weekly ?? 0) >= 100
+          ? (["weekly", "Weekly"] as const)
+          : (reading.session ?? 0) >= 100
+            ? (["session", "Session"] as const)
+            : (usedForModel(reading, model) ?? 0) >= 100
+              ? (["model", modelRow(reading, model)] as const)
+              : undefined;
+      const until = row?.[1] === undefined ? undefined : status?.resetsAt?.[row[1]];
+      return {
+        name: c.name,
+        ...(row === undefined ? {} : { window: row[0] }),
+        ...(until === undefined ? {} : { until }),
+      };
+    });
+    return { full, roomReadAt: undefined };
+  }
+
   /** The notice for a limit reached mid-run on `account`, naming where the next message goes. */
   async limitNotice(
     account: string,
@@ -442,6 +503,19 @@ export class ThreadRouter {
     const next = delegated ? pick(others, ceiling) : pickForThread(others);
     return { notice: moveNotice({ from: account, to: next?.id, why: "limit" }), to: next?.id };
   }
+}
+
+/** The name of the reading's row for `model`'s own weekly limit ("Fable"), as `usedForModel` finds it. */
+function modelRow(
+  reading: { readonly models: Readonly<Record<string, number>> },
+  model: string | undefined,
+): string | undefined {
+  const m = model?.toLowerCase();
+  if (!m) return undefined;
+  return Object.keys(reading.models).find((name) => {
+    const word = name.toLowerCase().split(" ")[0] ?? "";
+    return word !== "" && m.includes(word);
+  });
 }
 
 function defined(env: Readonly<Record<string, string | undefined>>): Record<string, string> {

@@ -6,14 +6,20 @@
 // @effect-diagnostics nodeBuiltinImport:off - Joins lastdrop's folder paths.
 import * as NodePath from "node:path";
 
-import type { ProviderInstanceId, RuntimeMode, ServerProviderModel } from "@t3tools/contracts";
+import type {
+  ProviderInstanceId,
+  RuntimeMode,
+  ServerProviderModel,
+  ServerProviderUsageLimits,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
 
 import * as EndpointRoom from "../endpointRoom.ts";
 import { bindCatalogDir } from "./catalogSource.ts";
 import { attachCommandLog } from "./commandAnswers.ts";
-import { makeFallbackSignals, makeRoom } from "./room.ts";
+import { poolOf } from "./pools.ts";
+import { makeFallbackSignals, makeRoom, readingFromLimits, type RoomMark } from "./room.ts";
 import { makeStoredMap } from "./store.ts";
 
 export interface Targets {
@@ -29,6 +35,10 @@ export interface Targets {
   readonly runtimeModes: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<RuntimeMode> | undefined>;
+  /** The usage limits the instance last published (its snapshot's `usageLimits`). */
+  readonly usage: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ServerProviderUsageLimits | undefined>;
   /** Asks the instance to read its usage limits again. */
   readonly refreshUsage: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
 }
@@ -50,6 +60,7 @@ export const targets: Targets = {
   models: (instanceId) => (bound === undefined ? Effect.undefined : bound.models(instanceId)),
   runtimeModes: (instanceId) =>
     bound === undefined ? Effect.undefined : bound.runtimeModes(instanceId),
+  usage: (instanceId) => (bound === undefined ? Effect.undefined : bound.usage(instanceId)),
   refreshUsage: (instanceId) =>
     bound === undefined ? Effect.void : bound.refreshUsage(instanceId),
 };
@@ -60,11 +71,20 @@ export interface NativeEntry {
   readonly instanceId: string;
 }
 
-const roomMarks = makeStoredMap<number>();
-/** Usage-limit marks, shared by every session: a limit is the account's, not the thread's. */
-export const room = makeRoom(Date.now, roomMarks, (step, now) =>
-  EndpointRoom.outUntil(step.instanceId, now),
-);
+const roomMarks = makeStoredMap<RoomMark | number>();
+/**
+ * The entries' room, shared by every session: a limit is the account's, not the thread's. Claude and Codex
+ * entries ask their account pool, the others their instance's own usage reading.
+ */
+export const room = makeRoom(Date.now, roomMarks, {
+  pool: (step) => poolOf(step.provider),
+  reading: (step, now) =>
+    targets
+      .usage(step.instanceId)
+      .pipe(Effect.map((limits) => readingFromLimits(limits, step.model, now))),
+  external: (step, now) => EndpointRoom.outUntil(step.instanceId, now),
+  refresh: (step) => targets.refreshUsage(step.instanceId),
+});
 /** Runs the router saw end at a limit, for the fallback reactor. */
 export const fallbacks = makeFallbackSignals();
 /** Which chain entry made each native thread, by native id. */

@@ -209,7 +209,7 @@ describe("lastdrop fallback partway through a run", () => {
                   .find((notice) => notice.run === run2!.id)!
                   .message.split("(until ")[1]!
                   .split(")")[0] +
-                "); Antigravity · claude-sonnet-5-5 failed to open. The conversation is handed over.",
+                "); Antigravity · claude-sonnet-5-5 failed to open: simulated open failure. The conversation is handed over.",
             ],
           );
           // Claude ran the continuation in a new native conversation, at the run's effort.
@@ -235,7 +235,7 @@ describe("lastdrop fallback partway through a run", () => {
           assert.isUndefined(claudeOpen.initialNativeThreadId);
           assert.isUndefined(claudeOpen.resumeFromSession);
           // Codex is out of room now; persisted identity stays lastdrop's.
-          assert.isFalse(yield* room.hasRoom(BUILD.chain[0]!));
+          assert.isDefined(yield* room.out(BUILD.chain[0]!));
           for (const run of projection.runs) assert.equal(run.providerInstanceId, LASTDROP);
           for (const thread of projection.providerThreads)
             assert.equal(thread.providerInstanceId, LASTDROP);
@@ -267,7 +267,7 @@ describe("lastdrop fallback partway through a run", () => {
     ),
   );
 
-  it.live("says at open which entry runs, when the first has no room", () =>
+  it.live("says at open which entry runs when the first has no room, and why none can", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace("lastdrop-open-notice");
@@ -344,6 +344,55 @@ describe("lastdrop fallback partway through a run", () => {
             ],
           );
           assert.equal((yield* Ref.get(claudeCalls.turns)).length, 1);
+
+          // With Claude out too, a new thread's run fails with every entry's reason as its message: T3 shows
+          // an open failure's own message, so the router's must be the reason, not the session's name.
+          yield* room.markOut(BUILD.chain[2]!, "2099-01-01T00:00:00.000Z");
+          const second = ThreadId.make("thread:lastdrop-no-entry");
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("create-second"),
+            threadId: second,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "No entry",
+            modelSelection: SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("second"),
+            messageId: MessageId.make("second"),
+            threadId: second,
+            text: "Hello",
+            attachments: [],
+            modelSelection: SELECTION,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* orchestrator.streamStoredEvents.pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "run.updated" &&
+                event.threadId === second &&
+                event.payload.status === "failed",
+            ),
+            Stream.runHead,
+            Effect.andThen(worker.drain()),
+          );
+          assert.deepEqual(
+            (yield* orchestrator.getThreadProjection(second)).turnItems.flatMap((item) =>
+              item.type === "error" ? [item.failure.message] : [],
+            ),
+            [
+              "No entry of build can run: Codex · gpt-6.1-sol reached a usage limit (until 2099-01-01 00:00 UTC); Antigravity · claude-sonnet-5-5 is not set up; Claude · sonnet reached a usage limit (until 2099-01-01 00:00 UTC).",
+            ],
+          );
         }).pipe(
           Effect.provide(
             ProviderReplayHarness.layerWithRegistry(

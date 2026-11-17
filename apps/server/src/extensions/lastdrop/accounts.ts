@@ -36,6 +36,8 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as EnvironmentAuth from "../../auth/EnvironmentAuth.ts";
 import { ResetCreditCoordinator } from "../../provider/resetCreditCoordinator.ts";
 import { resolveLastdropDataDir } from "../dataDir.ts";
+import { bindPool, unbindPool } from "./agents/pools.ts";
+import { lastdropRouting } from "./routing.ts";
 
 const ACCOUNTS_ROUTE = "/api/lastdrop/accounts";
 
@@ -115,6 +117,19 @@ export const layer = Layer.effect(
       Effect.catch((error) => Effect.logWarning("lastdrop accounts refresh failed", error)),
     );
     yield* tick.pipe(Effect.repeat(Schedule.spaced(TICK)), Effect.forkScoped);
+    // The agents' Claude entries ask the accounts for room (the router's own readings and "limit reached"
+    // answers), and have every account read again before a chain with no entry left fails.
+    const routing = yield* lastdropRouting;
+    if (routing !== undefined) {
+      yield* bindPool("claude", {
+        // Unreadable accounts answer like no pool: the entry is then judged by its own mark alone.
+        room: (model) => Effect.promise(() => routing.router.room(model).catch(() => null)),
+        refresh: io(() => monitor.readFresh()).pipe(
+          Effect.catch((error) => Effect.logWarning("lastdrop accounts refresh failed", error)),
+        ),
+      });
+      yield* Effect.addFinalizer(() => unbindPool("claude"));
+    }
     return LastdropAccounts.of({
       view: io(() => accounts.view()).pipe(
         Effect.catch((error) =>

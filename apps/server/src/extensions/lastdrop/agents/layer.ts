@@ -54,6 +54,8 @@ export const layer = Layer.effectDiscard(
         usableInstance(instanceId).pipe(
           Effect.map((usable) => usable?.snapshot.supportedRuntimeModes),
         ),
+      usage: (instanceId) =>
+        usableInstance(instanceId).pipe(Effect.map((usable) => usable?.snapshot.usageLimits)),
       refreshUsage: (instanceId) =>
         instances.getInstance(instanceId).pipe(
           Effect.flatMap((instance) => instance?.snapshot.refreshUsage ?? Effect.void),

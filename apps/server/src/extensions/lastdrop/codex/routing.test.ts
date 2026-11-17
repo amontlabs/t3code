@@ -111,6 +111,20 @@ describe("routing over lastdrop's files", () => {
       await routing.observeLimits("B", { primary: { usedPercent: 10 } });
       assert.strictEqual(await routing.atLimit("A", "thread-1"), "B");
       assert.strictEqual((await routing.route("thread-1"))?.account, "B");
+      // The agents' question: room while one signed-in account has some; each one named when none has.
+      assert.deepStrictEqual(await routing.room(), { full: undefined, roomReadAt: NOW });
+      await routing.observeLimits("B", { primary: { usedPercent: 100 } });
+      assert.deepStrictEqual(await routing.room(), {
+        full: [{ name: "A", until: NOW + 60 * MIN }, { name: "B" }],
+        roomReadAt: undefined,
+      });
+      // A full read of A that began after its mark (a reset redeemed since, in the app or outside it) speaks
+      // for A, and the mark goes; one that began before it has older numbers, and the mark stays.
+      routing.usageRead("A", NOW);
+      assert.isDefined((await routing.room())?.full);
+      routing.usageRead("A", NOW + MIN);
+      assert.deepStrictEqual(await routing.room(), { full: undefined, roomReadAt: NOW });
+      assert.strictEqual((await routing.route("thread-2"))?.account, "A");
     } finally {
       NodeFS.rmSync(dataDir, { recursive: true, force: true });
     }

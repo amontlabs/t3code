@@ -41,6 +41,7 @@ export {
   type CodexAccountList,
   codexAccountTitle,
   type CodexRoom,
+  isCodexAccountFull,
   moveCodexAccount,
   recordedCodexAccount,
   removeCodexAccount,

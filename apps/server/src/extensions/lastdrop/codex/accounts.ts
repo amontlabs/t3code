@@ -53,8 +53,9 @@ import { codexRateLimitsFailureMessage } from "../../../provider/codexUsageLimit
 import { ResetCreditCoordinator } from "../../../provider/resetCreditCoordinator.ts";
 import { resolveLastdropDataDir } from "../../dataDir.ts";
 import { authorize, json } from "../accounts.ts";
+import { bindPool, unbindPool } from "../agents/pools.ts";
 import { isRoutable } from "./factory.ts";
-import { codexLimits, codexRoom } from "./routing.ts";
+import { codexLimits, codexRoom, lastdropCodexRouting } from "./routing.ts";
 
 const ROUTE = "/api/lastdrop/codex-accounts";
 /** How often each signed-in account's usage is read. */
@@ -241,6 +242,9 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => "codex"),
   );
 
+  // The routing the factory wrapper opens sessions with: its marks, and the agents' question about room.
+  const live = yield* lastdropCodexRouting;
+
   const readUsage = Effect.fn("LastdropCodexAccounts.readUsage")(function* (key: string) {
     yield* prepareHome(key);
     const binaryPath = yield* codexBinary;
@@ -286,6 +290,7 @@ const make = Effect.gen(function* () {
         };
       }),
     );
+    if (result.ok) live?.routing.usageRead(key, now);
   });
 
   const readAll = Effect.gen(function* () {
@@ -301,6 +306,14 @@ const make = Effect.gen(function* () {
   }).pipe(Effect.catch((error) => Effect.logWarning("lastdrop Codex usage read failed", error)));
 
   yield* readAll.pipe(Effect.repeat(Schedule.spaced(READ_EVERY)), Effect.forkScoped);
+  if (live !== undefined) {
+    yield* bindPool("codex", {
+      // Unreadable accounts answer like no pool: the entry is then judged by its own mark alone.
+      room: () => Effect.promise(() => live.routing.room().catch(() => null)),
+      refresh: readAll,
+    });
+    yield* Effect.addFinalizer(() => unbindPool("codex"));
+  }
   yield* Queue.take(signedInNow).pipe(
     Effect.flatMap((key) => readUsage(key).pipe(Effect.ignore)),
     Effect.forever,

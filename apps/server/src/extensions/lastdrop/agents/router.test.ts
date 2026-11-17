@@ -114,10 +114,10 @@ const lastdropHarnessOver = (base: AnyHarness): AnyHarness => ({
         const native = yield* nativeRegistry.get(inner.instanceId).pipe(Effect.orDie);
         const room: Room = {
           ...makeRoom(),
-          hasRoom: (step) =>
+          out: (step) =>
             Effect.sync(() => {
               roomAsked.push(step.instanceId);
-              return step.instanceId !== ANTIGRAVITY;
+              return step.instanceId === ANTIGRAVITY ? "reached a usage limit" : undefined;
             }),
         };
         const lastdrop = makeRouterAdapter({

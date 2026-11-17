@@ -304,6 +304,33 @@ describe("the thread router", () => {
     expect((await router.limitNotice("main", undefined, false)).to).toBe("Ultra");
   });
 
+  it("the pool has room while one account does, and names each one's limit when none has", async () => {
+    const week = at + 60 * MIN;
+    statuses = {
+      main: { session: 0, weekly: 100, at, resetsAt: { Weekly: week } },
+      Pro: { session: 100, weekly: 10, at, resetsAt: { Session: at + 5 * MIN } },
+      Ultra: { session: 0, weekly: 5, at: at - 2 * MIN, plan: "Ultra" },
+    };
+    // One account below its limits is enough, whatever the others are at.
+    expect(await router.room("sonnet")).toEqual({ full: undefined, roomReadAt: at - 2 * MIN });
+    // Its own weekly limit for the model, and an answer newer than its reading, are limits too.
+    statuses = {
+      ...statuses,
+      Pro: { session: 10, weekly: 10, at, models: { Fable: 100 }, resetsAt: { Fable: week } },
+    };
+    router.markFull("Ultra");
+    const none = await router.room("claude-fable-5-2");
+    expect(none?.roomReadAt).toBeUndefined();
+    expect(none?.full).toEqual(
+      expect.arrayContaining([{ name: "Pro", window: "model", until: week }, { name: "Ultra" }]),
+    );
+    expect(none?.full?.every((account) => account.name !== "main" || account.until === week)).toBe(
+      true,
+    );
+    // The same accounts still take another model: only Pro's Fable week is used up.
+    expect((await router.room("sonnet"))?.full).toBeUndefined();
+  });
+
   it("a fork gets the subagents of its source and every older conversation, never overwriting", async () => {
     await ledger.record({ session: "X", account: "Ultra", at });
     await ledger.record({ session: "C", account: "Pro", at, forkedAt: at, from: "X" });

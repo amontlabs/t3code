@@ -47,6 +47,24 @@ type Adapter = ProviderAdapterV2["Service"];
 
 const LASTDROP_DRIVER = ProviderDriverKind.make("lastdropAgents");
 
+/**
+ * An open failure whose message is its reason: T3 shows the failed open's `message`, and T3's own names only
+ * the session.
+ */
+class RouterOpenSessionError extends ProviderAdapterOpenSessionError {
+  override get message(): string {
+    return typeof this.cause === "string" ? this.cause : super.message;
+  }
+}
+
+/** What a failed open said: its cause's own words when it carries one, as T3 reads a failure. */
+const openFailureText = (error: { readonly message: string; readonly cause?: unknown }): string =>
+  error.cause instanceof Error
+    ? error.cause.message
+    : typeof error.cause === "string"
+      ? error.cause
+      : error.message;
+
 export interface RouterOptions {
   readonly instanceId: ProviderInstanceId;
   /** The agents now (the catalog reloads live). */
@@ -108,10 +126,6 @@ const intersect = (values: ReadonlyArray<unknown>): unknown => {
   return first;
 };
 
-/** "2026-11-18 15:37 UTC". */
-const clock = (epochMs: number): string =>
-  `${DateTime.formatIso(DateTime.makeUnsafe(epochMs)).slice(0, 16).replace("T", " ")} UTC`;
-
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" &&
   value !== null &&
@@ -168,16 +182,12 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
   const findAgent = (name: string) =>
     options.agents().find((candidate) => candidate.enabled && candidate.name === name);
 
-  /** The entry's adapter when its instance exists and it has room; else why not. */
+  /** The entry's adapter when its instance exists and it has room; else why not (`noRoom` for the latter). */
   const check = Effect.fn("LastdropRouter.check")(function* (step: AgentStep) {
     const target = yield* options.resolveTarget(step.instanceId);
     if (target === undefined) return { reason: `${stepLabel(step)} is not set up` } as const;
-    if (!(yield* options.room.hasRoom(step))) {
-      const until = options.room.outUntil(step);
-      return {
-        reason: `${stepLabel(step)} reached a usage limit${until === undefined ? "" : ` (until ${clock(until)})`}`,
-      } as const;
-    }
+    const out = yield* options.room.out(step);
+    if (out !== undefined) return { reason: `${stepLabel(step)} ${out}`, noRoom: true } as const;
     return { target } as const;
   });
 
@@ -227,8 +237,8 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
 
   const openSession: Adapter["openSession"] = Effect.fn("LastdropRouter.openSession")(
     function* (input) {
-      const fail = (cause: unknown) =>
-        new ProviderAdapterOpenSessionError({
+      const fail = (cause: string) =>
+        new RouterOpenSessionError({
           driver: LASTDROP_DRIVER,
           providerSessionId: input.providerSessionId,
           cause,
@@ -239,73 +249,103 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       const previous = yield* previousEntry(agent, input);
       const known = previous !== undefined && previous >= 0 ? previous : undefined;
       // A thread stays on its entry while it has room; else the chain in order. Each entry is
-      // checked and opened once; the notice names the one that opened, and why others did not.
-      const skipped: Array<string> = [];
-      for (const index of chainOrder(agent, known)) {
-        const step = agent.chain[index]!;
-        const checked = yield* check(step);
-        if (!("target" in checked)) {
-          skipped.push(checked.reason);
-          continue;
-        }
-        const target = checked.target;
-        const innerModels =
-          options.innerModels === undefined
-            ? undefined
-            : yield* options.innerModels(step.instanceId);
-        const supported =
-          options.innerRuntimeModes === undefined
-            ? undefined
-            : yield* options.innerRuntimeModes(step.instanceId);
-        const sameEntry = index === known;
-        const innerInput = {
-          ...input,
-          modelSelection: stepSelection(step, input.modelSelection, innerModels),
-          // Another entry's native thread and session are never resumed here.
-          ...(sameEntry ? {} : { initialNativeThreadId: undefined, resumeFromSession: undefined }),
-        };
-        const opened = yield* Effect.result(
-          target.openSession(
-            withEntryPolicy(
-              step,
-              supported,
-              restamp(
-                innerInput,
-                outerId,
-                step.instanceId,
-                (selection) => selection,
-              ) as typeof input,
+      // opened at most once; the notice names the one that opened, and why others did not.
+      const order = chainOrder(agent, known);
+      /** Why each entry passed over did not open, by its place in the chain. */
+      const skipped = new Map<number, string>();
+      /** The entries passed over for room alone: the ones a newer usage reading could bring back. */
+      const noRoom = new Set<number>();
+      const openOn = Effect.fn("LastdropRouter.openOn")(function* (indexes: ReadonlyArray<number>) {
+        for (const index of indexes) {
+          const step = agent.chain[index]!;
+          const checked = yield* check(step);
+          if (!("target" in checked)) {
+            skipped.set(index, checked.reason);
+            if ("noRoom" in checked) noRoom.add(index);
+            else noRoom.delete(index);
+            continue;
+          }
+          noRoom.delete(index);
+          const target = checked.target;
+          const innerModels =
+            options.innerModels === undefined
+              ? undefined
+              : yield* options.innerModels(step.instanceId);
+          const supported =
+            options.innerRuntimeModes === undefined
+              ? undefined
+              : yield* options.innerRuntimeModes(step.instanceId);
+          const sameEntry = index === known;
+          const innerInput = {
+            ...input,
+            modelSelection: stepSelection(step, input.modelSelection, innerModels),
+            // Another entry's native thread and session are never resumed here.
+            ...(sameEntry
+              ? {}
+              : { initialNativeThreadId: undefined, resumeFromSession: undefined }),
+          };
+          const opened = yield* Effect.result(
+            target.openSession(
+              withEntryPolicy(
+                step,
+                supported,
+                restamp(
+                  innerInput,
+                  outerId,
+                  step.instanceId,
+                  (selection) => selection,
+                ) as typeof input,
+              ),
             ),
-          ),
-        );
-        if (opened._tag === "Failure") {
-          skipped.push(`${stepLabel(step)} failed to open`);
-          continue;
+          );
+          if (opened._tag === "Failure") {
+            skipped.set(
+              index,
+              `${stepLabel(step)} failed to open: ${openFailureText(opened.failure)}`,
+            );
+            continue;
+          }
+          skipped.delete(index);
+          return { index, step, target, inner: opened.success, innerModels, supported, sameEntry };
         }
-        const moved = known !== undefined ? index !== known : index !== 0;
-        const notice = !moved
-          ? undefined
-          : known !== undefined
-            ? `${agent.name} continues on ${stepLabel(step)}: ${skipped.join("; ")}. The conversation is handed over.`
-            : `${agent.name} runs on ${stepLabel(step)}: ${skipped.join("; ")}.`;
-        const closers: Array<Effect.Effect<void>> = [];
-        yield* Effect.addFinalizer(() => Effect.all(closers, { discard: true }));
-        return makeSession({
-          closers,
-          agent,
-          index,
-          step,
-          target,
-          inner: opened.success,
-          innerModels,
-          supported,
-          outerSelection: input.modelSelection,
-          outerPolicy: input.runtimePolicy,
-          adoptedNativeId: sameEntry ? input.initialNativeThreadId : undefined,
-          openNotice: notice,
-        });
+        return undefined;
+      });
+      let opened = yield* openOn(order);
+      if (opened === undefined && noRoom.size > 0) {
+        // No entry is left and some only for room: a reset used outside the app may not have reached a
+        // reading yet, so their usage is read again, once, before the open fails.
+        yield* options.room.refresh([...noRoom].map((index) => agent.chain[index]!));
+        opened = yield* openOn(order.filter((index) => noRoom.has(index)));
       }
-      return yield* fail(`No entry of ${agent.name} can run: ${skipped.join("; ")}.`);
+      const why = (indexes: ReadonlyArray<number>) =>
+        indexes.flatMap((index) => skipped.get(index) ?? []).join("; ");
+      if (opened === undefined)
+        return yield* fail(`No entry of ${agent.name} can run: ${why(order)}.`);
+      const { index, step } = opened;
+      // Only the entries tried before it: a later one's reason may predate the usage read that let this one open.
+      const reasons = why(order.slice(0, order.indexOf(index)));
+      const moved = known !== undefined ? index !== known : index !== 0;
+      const notice = !moved
+        ? undefined
+        : known !== undefined
+          ? `${agent.name} continues on ${stepLabel(step)}: ${reasons}. The conversation is handed over.`
+          : `${agent.name} runs on ${stepLabel(step)}: ${reasons}.`;
+      const closers: Array<Effect.Effect<void>> = [];
+      yield* Effect.addFinalizer(() => Effect.all(closers, { discard: true }));
+      return makeSession({
+        closers,
+        agent,
+        index,
+        step,
+        target: opened.target,
+        inner: opened.inner,
+        innerModels: opened.innerModels,
+        supported: opened.supported,
+        outerSelection: input.modelSelection,
+        outerPolicy: input.runtimePolicy,
+        adoptedNativeId: opened.sameEntry ? input.initialNativeThreadId : undefined,
+        openNotice: notice,
+      });
     },
   );
 

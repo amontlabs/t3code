@@ -249,7 +249,7 @@ Nothing is shared with it: the fork never reads, writes or runs the app's folder
 - `lastdrop.log`: one line per renewal, refused request or sign-in that needs the user, and per approval request lastdrop answered for an agent thread.
 - `helper/`: an empty folder `claude` starts in when renewing a sign-in or signing in.
 - `agent-threads.json`: which agent entry (and instance) made each native thread, so a restart resumes a thread only on its own instance.
-- `agent-room.json`: agent entries out at a usage limit, until when.
+- `agent-room.json`: agent entries a run ended at a usage limit on: when it was seen and until when it lasts, unless a newer usage reading shows room (`agents/room.ts`).
 - `sessions.json`: the session ledger: each Claude conversation's account (and for a fork, when and from which), the conversation each T3 native session continues in now (the old → new id map after a move), and each T3 thread's last account. Lines of `lastdrop.log` say where each query opened and why.
 - `bin/lastdrop`: the runner script lastdrop's plugin runs in fork threads, rewritten at each server start (it holds no secret: the address and the thread's token come in each query's environment).
 - `agent-runs.json`: each run the plugin started through the runner (Claude Code's agent id → parent thread, child thread, agent), for follow-ups after a restart.

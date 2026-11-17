@@ -25,7 +25,7 @@ import { ClaudeProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters
 import { allAgents, parseCatalog, type AgentDefinition } from "./catalog.ts";
 import { makeLastdropAgentsDriver } from "./driver.ts";
 import { ALL_RUNTIME_MODES, entryRuntimeMode } from "./permissions.ts";
-import { makeFallbackSignals, makeRoom, type Room } from "./room.ts";
+import { makeFallbackSignals, makeRoom, type Room, type RoomMark } from "./room.ts";
 import type { NativeEntry } from "./shared.ts";
 import { makeStoredMap, type StoredMap } from "./store.ts";
 import { makeRouterAdapter } from "./router.ts";
@@ -241,7 +241,7 @@ describe("lastdrop router targets", () => {
           const roomFile = NodePath.join(dir, "agent-room.json");
           const before = makeStoredMap<NativeEntry>();
           before.attach(file);
-          const marks = makeStoredMap<number>();
+          const marks = makeStoredMap<RoomMark | number>();
           marks.attach(roomFile);
           const room = makeRoom(Date.now, marks);
           const live = agents.find((agent) => agent.name === "live")!;
@@ -261,7 +261,7 @@ describe("lastdrop router targets", () => {
           // A new server: maps loaded from the files only.
           const after = makeStoredMap<NativeEntry>();
           after.attach(file);
-          const reloaded = makeStoredMap<number>();
+          const reloaded = makeStoredMap<RoomMark | number>();
           reloaded.attach(roomFile);
           const reopened = yield* openOn({
             agent: "live",
@@ -275,7 +275,7 @@ describe("lastdrop router targets", () => {
           const resumed = yield* reopened.runtime.resumeThread({ providerThread: thread } as never);
           assert.equal(resumed.nativeThreadRef!.nativeId, nativeId);
           // The room marks came back too: Antigravity is still out after the restart.
-          assert.isFalse(yield* makeRoom(Date.now, reloaded).hasRoom(live.chain[0]!));
+          assert.isDefined(yield* makeRoom(Date.now, reloaded).out(live.chain[0]!));
           // Antigravity has room again: the thread still stays where its conversation is.
           const stays = yield* openOn({
             agent: "live",
@@ -317,6 +317,54 @@ describe("lastdrop router targets", () => {
       );
       assert.equal(failed._tag, "ProviderAdapterResumeThreadError");
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "an open no entry can take reads usage once more, then says why each one could not",
+    () =>
+      Effect.gen(function* () {
+        const out = new Set<ProviderInstanceId>([ANTIGRAVITY]);
+        const reread: Array<ReadonlyArray<ProviderInstanceId>> = [];
+        const room = (onRefresh: () => void): Room => ({
+          ...makeRoom(),
+          out: (step) =>
+            Effect.succeed(
+              out.has(step.instanceId)
+                ? "reached a usage limit (until 2026-11-17 20:20 UTC)"
+                : undefined,
+            ),
+          refresh: (steps) =>
+            Effect.sync(() => {
+              reread.push(steps.map((step) => step.instanceId));
+              onRefresh();
+            }),
+        });
+        const failed = yield* Effect.flip(
+          openOn({
+            agent: "live",
+            available: [ANTIGRAVITY, CLAUDE],
+            failOpen: [CLAUDE],
+            room: room(() => {}),
+          }),
+        );
+        assert.equal(failed._tag, "ProviderAdapterOpenSessionError");
+        assert.equal(
+          failed.message,
+          "No entry of live can run: Antigravity · claude-sonnet-5-5 reached a usage limit (until 2026-11-17 20:20 UTC); Claude · sonnet failed to open: simulated open failure.",
+        );
+        // Only the entry passed over for room is read again; the one that failed to open is not opened twice.
+        assert.deepEqual(reread, [[ANTIGRAVITY]]);
+
+        // A reset used outside the app: the reading that follows brings the entry back within the same open.
+        const { last, opened } = yield* openOn({
+          agent: "live",
+          available: [ANTIGRAVITY, CLAUDE],
+          failOpen: [CLAUDE],
+          room: room(() => out.clear()),
+        });
+        assert.equal(last.modelSelection.instanceId, ANTIGRAVITY);
+        assert.equal(opened.length, 2);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("gives capabilities when the first agent is out, and never fails", () =>

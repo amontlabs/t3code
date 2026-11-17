@@ -10,6 +10,8 @@ import {
   type CodexRoom,
   type CodexUsageRecord,
   fileLogger,
+  isCodexAccountFull,
+  type PoolRoom,
   recordedCodexAccount,
 } from "@t3tools/lastdrop-node";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -30,35 +32,47 @@ import type { CodexRouting } from "./factory.ts";
 const setting = (name: string) =>
   Config.String(name).pipe(Config.option, Effect.orElseSucceed(Option.none));
 
+interface LiveCodexRouting {
+  readonly routing: LastdropCodexRouting;
+  readonly sharedHome: string;
+}
+
+const routings = new Map<string, LiveCodexRouting>();
+
 /**
  * The routing over this server's lastdrop files and the shared `~/.codex` it routes away from, shared by the
- * client-factory wrapper and the Codex driver wrapper. Undefined under vitest (T3's tests build both), with
- * `LASTDROP_CODEX_ROUTING=0`, or without T3's server config.
+ * client-factory wrapper, the Codex driver wrapper and the accounts service. Undefined under vitest (T3's tests
+ * build these), with `LASTDROP_CODEX_ROUTING=0`, or without T3's server config.
  */
-export const lastdropCodexRouting: Effect.Effect<
-  { readonly routing: LastdropCodexRouting; readonly sharedHome: string } | undefined
-> = Effect.gen(function* () {
-  const underTest = yield* setting("VITEST");
-  const off = yield* setting("LASTDROP_CODEX_ROUTING");
-  const config = yield* Effect.serviceOption(ServerConfig);
-  if (
-    underTest._tag === "Some" ||
-    (off._tag === "Some" && off.value === "0") ||
-    Option.isNone(config)
-  ) {
-    return undefined;
-  }
-  const dataDir = lastdropDataDir(config.value);
-  const home = yield* HostProcess.HomeDirectory;
-  return {
-    routing: makeCodexRouting({
-      files: codexAccountFiles(dataDir),
-      now: Date.now,
-      log: fileLogger(`${dataDir}/lastdrop.log`),
-    }),
-    sharedHome: `${home}/.codex`,
-  };
-});
+export const lastdropCodexRouting: Effect.Effect<LiveCodexRouting | undefined> = Effect.gen(
+  function* () {
+    const underTest = yield* setting("VITEST");
+    const off = yield* setting("LASTDROP_CODEX_ROUTING");
+    const config = yield* Effect.serviceOption(ServerConfig);
+    if (
+      underTest._tag === "Some" ||
+      (off._tag === "Some" && off.value === "0") ||
+      Option.isNone(config)
+    ) {
+      return undefined;
+    }
+    const dataDir = lastdropDataDir(config.value);
+    // One routing per data folder: its full marks are this server's memory, and every user must see the same.
+    const known = routings.get(dataDir);
+    if (known !== undefined) return known;
+    const home = yield* HostProcess.HomeDirectory;
+    const live = {
+      routing: makeCodexRouting({
+        files: codexAccountFiles(dataDir),
+        now: Date.now,
+        log: fileLogger(`${dataDir}/lastdrop.log`),
+      }),
+      sharedHome: `${home}/.codex`,
+    };
+    routings.set(dataDir, live);
+    return live;
+  },
+);
 
 /** A reading older than this says nothing about the account's room now. */
 const CODEX_READING_VALID_MS = 2 * 60 * 60_000;
@@ -130,11 +144,17 @@ export function codexRoom(
   };
 }
 
-/** Every account's room, in the list's order; `fullUntil` holds the accounts seen at a limit (epoch ms). */
+/** An account a turn's end left at a limit: until when, and when it was seen (epoch ms). */
+interface FullMark {
+  readonly until: number;
+  readonly at: number;
+}
+
+/** Every account's room, in the list's order; `fullUntil` holds the accounts seen at a limit. */
 async function codexRooms(
   files: CodexAccountFiles,
   now: number,
-  fullUntil: ReadonlyMap<string, number>,
+  fullUntil: ReadonlyMap<string, FullMark>,
 ): Promise<CodexRoom[]> {
   const [list, usage] = await Promise.all([files.list(), files.usage()]);
   return Promise.all(
@@ -145,7 +165,7 @@ async function codexRooms(
         usage[account.key],
         now,
       );
-      const marked = fullUntil.get(account.key);
+      const marked = fullUntil.get(account.key)?.until;
       return marked === undefined || marked <= now || (room.fullUntil ?? 0) >= marked
         ? room
         : { ...room, fullUntil: marked };
@@ -156,6 +176,14 @@ async function codexRooms(
 export interface LastdropCodexRouting extends CodexRouting {
   /** The account a new thread would open on now (the roomiest), or undefined while none is signed in. */
   readonly pick: () => Promise<{ readonly account: string; readonly home: string } | undefined>;
+  /** Whether any account can take a run, for the agents' Codex entries; null while none is signed in. */
+  readonly room: () => Promise<PoolRoom | null>;
+  /**
+   * The account's usage was read in full, in a read that began at `startedAt`: that reading speaks for the
+   * account, so a mark a turn's end left before then goes (a reset redeemed since would otherwise stay hidden
+   * until the old reset time). A mark from after the read began is newer than its numbers and stays.
+   */
+  readonly usageRead: (account: string, startedAt: number) => void;
 }
 
 export function makeCodexRouting(options: {
@@ -166,7 +194,7 @@ export function makeCodexRouting(options: {
   const { files, now, log } = options;
   // A turn that ended at a limit marks its account here (the server's memory), so the reopen leaves it even
   // before Codex's own update reaches the reading.
-  const fullUntil = new Map<string, number>();
+  const fullUntil = new Map<string, FullMark>();
   return {
     route: async (threadId) => {
       const at = now();
@@ -190,6 +218,34 @@ export function makeCodexRouting(options: {
         ? undefined
         : { account: choice.key, home: files.home(choice.key) };
     },
+    room: async () => {
+      const at = now();
+      const [rooms, usage] = await Promise.all([codexRooms(files, at, fullUntil), files.usage()]);
+      const signedIn = rooms.filter((room) => room.signedIn);
+      if (signedIn.length === 0) return null;
+      const open = signedIn.filter((room) => !isCodexAccountFull(room, at));
+      if (open.length === 0) {
+        return {
+          full: signedIn.map((room) => ({
+            name: room.key,
+            ...(room.fullUntil === undefined ? {} : { until: room.fullUntil }),
+          })),
+          roomReadAt: undefined,
+        };
+      }
+      const readAt = Math.max(
+        ...open.map((room) =>
+          room.sessionUsed === undefined && room.weeklyUsed === undefined
+            ? -Infinity
+            : (usage[room.key]?.readAt ?? -Infinity),
+        ),
+      );
+      return { full: undefined, roomReadAt: Number.isFinite(readAt) ? readAt : undefined };
+    },
+    usageRead: (account, startedAt) => {
+      const marked = fullUntil.get(account);
+      if (marked !== undefined && marked.at < startedAt) fullUntil.delete(account);
+    },
     recordThread: (account, threadId, nativeThreadId) =>
       files.recordThread(nativeThreadId, { account, threadId, at: now() }),
     observeLimits: (account, snapshot) =>
@@ -203,7 +259,7 @@ export function makeCodexRouting(options: {
       const at = now();
       const reset = codexUsageLimitResetAt((await files.usage())[account]?.limits);
       const resetMs = reset === null ? Number.NaN : Date.parse(reset);
-      fullUntil.set(account, resetMs > at ? resetMs : at + FULL_WITHOUT_RESET_MS);
+      fullUntil.set(account, { until: resetMs > at ? resetMs : at + FULL_WITHOUT_RESET_MS, at });
       const choice = chooseCodexAccount({ rooms: await codexRooms(files, at, fullUntil), now: at });
       return choice === undefined || choice.why === "allFull" || choice.key === account
         ? undefined

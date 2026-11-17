@@ -23,6 +23,7 @@ import {
 import { isLastdropEndpointEnvironment } from "@t3tools/lastdrop-node";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -475,24 +476,23 @@ describe("room from usage", () => {
   it.effect("skips an entry whose provider is over its threshold, until the window resets", () =>
     Effect.gen(function* () {
       EndpointRoom.reset();
-      const room = makeRoom(
-        () => now,
-        undefined,
-        (s, at) => EndpointRoom.outUntil(s.instanceId, at),
-      );
-      assert.isTrue(yield* room.hasRoom(step));
+      const room = makeRoom(() => now, undefined, {
+        external: (s, at) => EndpointRoom.outUntil(s.instanceId, at),
+      });
+      const until = (end: number) =>
+        `reached a usage limit (until ${DateTime.formatIso(DateTime.makeUnsafe(end)).slice(0, 16).replace("T", " ")} UTC)`;
+      assert.isUndefined(yield* room.out(step));
       const reset = now + 3_600_000;
       EndpointRoom.setReading(ZAI, {
         at: now - 60_000,
         windows: [{ label: "Session", usedPercent: 92, resetsAt: reset }],
       });
-      assert.isFalse(yield* room.hasRoom(step));
-      assert.equal(room.outUntil(step), reset);
+      assert.equal(yield* room.out(step), until(reset));
       EndpointRoom.setThresholds({ sessionThreshold: 0.95, weeklyThreshold: 0.95 });
-      assert.isTrue(yield* room.hasRoom(step));
+      assert.isUndefined(yield* room.out(step));
       // A mark from a run at a limit still counts.
       yield* room.markOut(step, markEnd);
-      assert.equal(room.outUntil(step), now + 600_000);
+      assert.equal(yield* room.out(step), until(now + 600_000));
       EndpointRoom.reset();
     }),
   );

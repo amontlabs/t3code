@@ -161,6 +161,19 @@ export class AccountsMonitor {
   }
 
   /**
+   * Reads every account from Anthropic now, not from Claude Code's saved copy: for a caller that every reading
+   * turns away, when a reset used elsewhere may have changed the numbers.
+   */
+  async readFresh(): Promise<void> {
+    await this.ticking?.catch(() => {});
+    for (const entry of this.entries.values()) {
+      entry.due = true;
+      entry.fresh = true;
+    }
+    await this.tick();
+  }
+
+  /**
    * Redeems a banked reset on one of the fork's accounts (`ClaudeUsage.redeemReset`), then reads that account
    * again from Anthropic, whatever the answer.
    */
