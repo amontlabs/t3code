@@ -1,4 +1,7 @@
-/** `LastdropClaudeDriver.create` (claudeDriver.ts): T3's Claude instance, insulated from Claude Code's own login. */
+/**
+ * `LastdropClaudeDriver.create` (claudeDriver.ts): T3's Claude instance, insulated from Claude Code's own login,
+ * its approval cards carrying an MCP form's own scopes.
+ */
 import type { ClaudeSettings, ServerProvider } from "@t3tools/contracts";
 import { isLastdropEndpointEnvironment, userAuthOverride } from "@t3tools/lastdrop-node";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
@@ -16,6 +19,7 @@ import { ClaudeDriver, type ClaudeDriverEnv } from "../../provider/Drivers/Claud
 import { mergeClaudeProcessEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { insulatedSnapshot } from "./claudeDriver.ts";
+import { elicitationChoicesLive } from "./claudeElicitation.ts";
 import { type LastdropRouting, lastdropRouting } from "./routing.ts";
 
 /** How long "a lastdrop account can take work" is trusted between snapshot reads. */
@@ -23,7 +27,12 @@ const ACCOUNT_READY_FOR_MS = 5_000;
 
 export const create: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.Path>["create"] =
   Effect.fn("LastdropClaudeDriver.create")(function* (input) {
-    const instance = yield* ClaudeDriver.create(input);
+    const created = yield* ClaudeDriver.create(input);
+    // On every Claude instance, whichever account or endpoint it runs on (claudeElicitation.ts).
+    const instance: ProviderInstance = {
+      ...created,
+      orchestrationAdapter: elicitationChoicesLive.onAdapter(created.orchestrationAdapter),
+    };
     const routing = yield* lastdropRouting;
     if (routing === undefined) return instance;
     const processEnv = yield* mergeClaudeProcessEnvironment(

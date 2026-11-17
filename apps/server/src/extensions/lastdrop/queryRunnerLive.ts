@@ -17,6 +17,7 @@ import {
   ClaudeAgentSdkQueryRunner,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import * as ProjectionStoreV2 from "../../orchestration-v2/ProjectionStore.ts";
+import { elicitationChoicesLive } from "./claudeElicitation.ts";
 import { pendingContinuations } from "./moveContinuation.ts";
 import { type ThreadLineage, wrapQueryRunner } from "./queryRunner.ts";
 import { lastdropRouting } from "./routing.ts";
@@ -45,7 +46,8 @@ const lineageReader = Effect.gen(function* () {
 
 /**
  * The runner's variables and lastdrop's plugin on every query (step 8, `runner/`), around the routing wrapper
- * so a routed query's environment and options keep them. Not under vitest, where T3's tests pin the query's options.
+ * so a routed query's environment and options keep them, and an MCP form's own scopes in the query's elicitation
+ * answers (`claudeElicitation.ts`). Not under vitest, where T3's tests pin the query's options.
  */
 export const wrapLive = <E, R>(
   queryRunner: Layer.Layer<ClaudeAgentSdkQueryRunner, E, R>,
@@ -66,7 +68,11 @@ export const wrapLive = <E, R>(
           input: ClaudeAgentSdkQueryOpenInput,
         ) {
           const added = yield* runnerVariables(input.threadId);
-          const withRunner = withRunnerEnvironment(input, hostEnvironment, () => added);
+          const withRunner = withRunnerEnvironment(
+            elicitationChoicesLive.onQuery(input),
+            hostEnvironment,
+            () => added,
+          );
           const plugin = boundPlugin();
           return yield* inner.open(
             plugin === undefined ? withRunner : withLastdropPlugin(withRunner, plugin),
