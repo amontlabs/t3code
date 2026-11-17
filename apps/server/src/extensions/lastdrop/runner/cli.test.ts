@@ -134,7 +134,8 @@ describe("the runner script", () => {
     expect(line).toMatchObject({
       nativeTasks: true,
       agentModels: true,
-      t3Instance: false,
+      t3Instance: true,
+      t3InstanceId: "lastdropAgents",
       revision: 7,
     });
     expect((line!.agents as Array<{ name: string }>).map((agent) => agent.name)).toEqual([

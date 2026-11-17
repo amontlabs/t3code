@@ -9,6 +9,7 @@ import {
   type AgentDefinition,
   type AgentStep,
 } from "../agents/catalog.ts";
+import { LASTDROP_AGENTS_DRIVER } from "../agents/settings.ts";
 
 /** One line the plugin reads: `{"type": ..., ...}`. */
 export type RunnerLine = { readonly type: string } & Readonly<Record<string, unknown>>;
@@ -112,10 +113,10 @@ const hashRevision = (value: string): number => {
 };
 
 /**
- * `--agent-catalog`'s line (`AgentCatalog.pluginLine`). In the fork:
- * - `t3Instance` is false: the plugin's T3 texts name the standalone app's instance (`lastdrop`), and the
- *   fork's own provider is `lastdropAgents`, which T3's delegate_task lists by itself;
- * - `delegateNotes` is false: a plain Claude child is a T3 thread the fork's query-runner wrapper routes.
+ * `--agent-catalog`'s line (`AgentCatalog.pluginLine`). In the fork, `t3InstanceId` names the fork's own agents
+ * provider, so the plugin's delegate_task texts and refusals give the call that runs here (its default id is
+ * the standalone app's `lastdrop`; while the provider is off, T3 refuses the target and the plugin says so).
+ * `delegateNotes` is false: a plain Claude child is a T3 thread the fork's query-runner wrapper routes.
  */
 export const catalogLine = (
   catalog: ReadonlyArray<AgentDefinition>,
@@ -135,7 +136,8 @@ export const catalogLine = (
     ...(extras.saveClaudeText === undefined ? {} : { saveClaudeText: extras.saveClaudeText }),
     nativeTasks: true,
     agentModels: true,
-    t3Instance: false,
+    t3Instance: true,
+    t3InstanceId: LASTDROP_AGENTS_DRIVER,
     delegateNotes: false,
     agents,
   };

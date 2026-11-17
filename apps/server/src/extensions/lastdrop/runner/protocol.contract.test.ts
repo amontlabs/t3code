@@ -28,6 +28,10 @@ const pluginCatalog = (line: Record<string, unknown>) => ({
   nativeTasks: line.nativeTasks === true,
   agentModels: line.agentModels === true,
   t3Instance: line.t3Instance === true,
+  t3InstanceId:
+    typeof line.t3InstanceId === "string" && line.t3InstanceId !== ""
+      ? line.t3InstanceId
+      : "lastdrop",
   delegateNotes: line.delegateNotes === true,
   revision: line.revision as number | undefined,
   saveClaude: line.saveClaude === true,
@@ -86,9 +90,11 @@ describe("the plugin's runner protocol", () => {
     const seen = pluginCatalog(parsed);
     assert.isTrue(seen.nativeTasks, "admission() throws without nativeTasks");
     assert.isTrue(seen.agentModels, "types are registered only with agentModels");
-    assert.isFalse(
-      seen.t3Instance,
-      "the fork's instance is lastdropAgents, not the plugin's `lastdrop`",
+    assert.isTrue(seen.t3Instance, "delegate_task's texts name no instance without it");
+    assert.strictEqual(
+      seen.t3InstanceId,
+      "lastdropAgents",
+      "the fork's agents provider, not the plugin's default (the standalone app's `lastdrop`)",
     );
     assert.isFalse(seen.delegateNotes, "the fork routes Claude children itself");
     assert.strictEqual(seen.revision, 7);
