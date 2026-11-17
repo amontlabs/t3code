@@ -28,6 +28,7 @@ import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
+import { LastdropAgentHoverRow } from "~/extensions";
 import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../providerInstances";
 
 export function SubagentTooltipContent(props: {
@@ -42,10 +43,11 @@ export function SubagentTooltipContent(props: {
   elapsed?: ReactNode;
   parentThread?: Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath"> | undefined;
   childThread?:
-    | Pick<OrchestrationV2ThreadShell, "branch" | "worktreePath" | "modelSelection">
+    | Pick<OrchestrationV2ThreadShell, "id" | "branch" | "worktreePath" | "modelSelection">
     | undefined;
   parentProject?: Pick<OrchestrationProjectShell, "workspaceRoot"> | undefined;
   childProject?: Pick<OrchestrationProjectShell, "id" | "title" | "workspaceRoot"> | undefined;
+  childThreadId?: string | null | undefined;
   status: OrchestrationV2TurnItemStatus;
   result?: string | null | undefined;
   progress?: string | null | undefined;
@@ -149,6 +151,7 @@ export function SubagentTooltipContent(props: {
           ) : null}
         </span>
       </div>
+      <LastdropAgentHoverRow {...props} threadId={props.childThreadId ?? props.childThread?.id} />
       <div className="flex min-w-0 items-center justify-between gap-4">
         <span
           className={cn(

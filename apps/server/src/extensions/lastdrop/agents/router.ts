@@ -31,7 +31,13 @@ import {
 
 import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
 
-import { stepLabel, stepSelection, type AgentDefinition, type AgentStep } from "./catalog.ts";
+import {
+  stepId,
+  stepLabel,
+  stepSelection,
+  type AgentDefinition,
+  type AgentStep,
+} from "./catalog.ts";
 import {
   defaultCommandAnswerServices,
   makeSessionAnswers,
@@ -165,9 +171,6 @@ const restamp = (
   }
   return out;
 };
-
-/** A chain entry's identity: instance, model and effort (the same model at two efforts differs). */
-const stepId = (step: AgentStep): string => `${step.instanceId}/${step.model}/${step.effort ?? ""}`;
 
 interface Picked {
   readonly index: number;
@@ -413,7 +416,13 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
 
     const remember = (thread: OrchestrationV2ProviderThread) => {
       const nativeId = thread.nativeThreadRef?.nativeId;
-      if (nativeId != null) nativeEntries.set(nativeId, { entry: thisStep, instanceId: innerId });
+      if (nativeId != null)
+        nativeEntries.set(nativeId, {
+          entry: thisStep,
+          instanceId: innerId,
+          agent: agent.name,
+          ...(thread.appThreadId === null ? {} : { appThreadId: thread.appThreadId }),
+        });
       return thread;
     };
 

@@ -30,9 +30,11 @@ import {
 import { readReplayFixtureTranscript } from "../../../orchestration-v2/testkit/ProviderReplayFixtures.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../../../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { materializeReplayTranscriptRuntimeInstructions } from "../../../orchestration-v2/testkit/ReplayRuntimeInstructions.ts";
-import type { AgentDefinition, AgentStep } from "./catalog.ts";
+import { fallbackThreads, type AgentDefinition, type AgentStep } from "./catalog.ts";
 import { makeFallbackSignals, makeRoom, type Room } from "./room.ts";
 import { makeRouterAdapter } from "./router.ts";
+import type { NativeEntry } from "./shared.ts";
+import { makeStoredMap } from "./store.ts";
 
 const LASTDROP = ProviderInstanceId.make("lastdrop");
 const CLAUDE = CLAUDE_MODEL_SELECTION.instanceId;
@@ -67,6 +69,9 @@ const agents = (): ReadonlyArray<AgentDefinition> => [
 let agentName = "build";
 /** Steps whose room was asked, in order. */
 const roomAsked: Array<ProviderInstanceId> = [];
+
+/** Which entry made each native thread, as the router records it. */
+const nativeEntries = makeStoredMap<NativeEntry>();
 
 /** What the Claude adapter was called with, to prove it never sees the lastdrop identity. */
 const innerCalls: Array<unknown> = [];
@@ -125,6 +130,7 @@ const lastdropHarnessOver = (base: AnyHarness): AnyHarness => ({
           agents,
           room,
           fallbacks: makeFallbackSignals(),
+          nativeEntries,
           // Antigravity's instance exists here: only its room keeps it out.
           resolveTarget: (id) =>
             Effect.succeed(
@@ -309,6 +315,10 @@ describe("lastdrop router over T3's Claude and Codex adapters", () => {
       const projection = [...result.projections.values()][0]!;
       assert.equal(projection.runs[0]!.modelSelection.model, "fallback");
       assert.equal(projection.providerSessions[0]!.providerInstanceId, LASTDROP);
+      // The thread is listed on its fallback entry, for the subagent card's hover.
+      assert.deepEqual(fallbackThreads(agents(), nativeEntries.entries()).get("fallback"), {
+        [projection.thread.id]: 1,
+      });
     }).pipe(Effect.scoped),
   );
 });

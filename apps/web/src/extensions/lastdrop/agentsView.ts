@@ -16,6 +16,9 @@ export interface AgentRecord extends AgentEntry {
   readonly description: string;
   readonly enabled: boolean;
   readonly fallbacks: ReadonlyArray<AgentEntry>;
+  /** Ids from `agentLook.ts`; absent is the plain look. */
+  readonly icon?: string;
+  readonly color?: string;
 }
 
 export interface ModelChoice {

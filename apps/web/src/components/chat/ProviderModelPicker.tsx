@@ -114,6 +114,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
   /** Shown after the model name inside the same trigger, such as the effort level. */
   triggerSuffix?: ReactNode;
+  /** Replaces the provider icon before a single model's name. */
+  triggerIcon?: ReactNode;
   /** Names the suffix for the tooltip and screen readers. */
   triggerDetail?: string | null;
   /** Composer shortcuts this trigger answers besides the picker's own. */
@@ -395,6 +397,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </span>
               ) : null}
             </span>
+          ) : props.triggerIcon !== undefined && props.triggerLabel === undefined ? (
+            props.triggerIcon
           ) : activeEntry && props.triggerLabel === undefined ? (
             // Narrow compacted composers hide the provider icon before truncating the name.
             <span data-chat-provider-model-picker-icon className="contents">

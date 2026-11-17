@@ -62,7 +62,14 @@ export interface AgentDefinition {
   readonly chain: ReadonlyArray<AgentStep>;
   /** One of Claude's own models (fable, opus…), listed before the user's agents. */
   readonly claudeModel?: boolean;
+  /** The icon and color its subagents show, by the ids `client-runtime/src/extensions.ts` lists. */
+  readonly icon?: string;
+  readonly color?: string;
 }
+
+/** A chain entry's identity: instance, model and effort (the same model at two efforts differs). */
+export const stepId = (step: AgentStep): string =>
+  `${step.instanceId}/${step.model}/${step.effort ?? ""}`;
 
 /** Efforts each provider's models took when the standalone app last listed them. */
 export type ModelEfforts = Readonly<
@@ -151,12 +158,16 @@ export const parseCatalog = (
           : [makeStep(entry.provider, fallbackModel, stringOr(entry.effort), instances)];
       }),
     ];
+    const icon = stringOr(raw.icon);
+    const color = stringOr(raw.color);
     return [
       {
         name,
         description: typeof raw.description === "string" ? raw.description : "",
         enabled: raw.enabled === true,
         chain,
+        ...(icon === undefined ? {} : { icon }),
+        ...(color === undefined ? {} : { color }),
       },
     ];
   });
@@ -290,10 +301,64 @@ export const closestEffort = (
   return (lower ?? higher)?.[0];
 };
 
+/** Agent threads whose latest session runs on an entry past the first: agent → thread id → index. */
+export type FallbackThreads = ReadonlyMap<string, Readonly<Record<string, number>>>;
+
+/** How many fallback threads each agent's model lists: the recent ones a card or transcript shows. */
+const FALLBACK_THREADS_LIMIT = 50;
+
+/**
+ * From the entry map (oldest first), each agent thread's latest entry when it is not the first of
+ * its agent's chain. An entry no longer in the chain is left out.
+ */
+export const fallbackThreads = (
+  agents: ReadonlyArray<AgentDefinition>,
+  entries: ReadonlyArray<
+    readonly [
+      string,
+      { readonly entry: string; readonly agent?: string; readonly appThreadId?: string },
+    ]
+  >,
+): FallbackThreads => {
+  const latest = new Map<string, { readonly agent: string; readonly entry: string }>();
+  for (const [, value] of entries) {
+    if (value.agent === undefined || value.appThreadId === undefined) continue;
+    latest.delete(value.appThreadId);
+    latest.set(value.appThreadId, { agent: value.agent, entry: value.entry });
+  }
+  const byAgent = new Map<string, Array<readonly [string, number]>>();
+  for (const [threadId, { agent: name, entry }] of latest) {
+    const agent = agents.find((candidate) => candidate.name === name);
+    const index = agent?.chain.findIndex((step) => stepId(step) === entry) ?? -1;
+    if (index <= 0) continue;
+    const list = byAgent.get(name) ?? [];
+    list.push([threadId, index]);
+    byAgent.set(name, list);
+  }
+  return new Map(
+    [...byAgent].map(([name, list]) => [
+      name,
+      Object.fromEntries(list.slice(-FALLBACK_THREADS_LIMIT)),
+    ]),
+  );
+};
+
+/** Compares two readings: equal when every agent lists the same threads on the same entries. */
+export const fallbackSignature = (threads: FallbackThreads): string =>
+  [...threads]
+    .map(
+      ([name, byThread]) =>
+        `${name}:${Object.entries(byThread)
+          .map(([threadId, index]) => `${threadId}=${index}`)
+          .join(",")}`,
+    )
+    .join(";");
+
 /** The lastdrop provider's models: Claude's first, then each agent, effort only when it may be picked. */
 export const agentModels = (
   agents: ReadonlyArray<AgentDefinition>,
   known: ModelEfforts = {},
+  onFallback: FallbackThreads = new Map(),
 ): ReadonlyArray<ServerProviderModel> =>
   agents
     .filter((agent) => agent.enabled && agent.chain.length > 0)
@@ -325,6 +390,16 @@ export const agentModels = (
         isCustom: false,
         ...(index === 0 ? { isDefault: true } : {}),
         capabilities: { optionDescriptors: descriptors },
+        lastdropAgent: {
+          ...(agent.icon === undefined ? {} : { icon: agent.icon }),
+          ...(agent.color === undefined ? {} : { color: agent.color }),
+          chain: agent.chain.map((step) => ({
+            instanceId: step.instanceId,
+            model: step.model,
+            ...(step.effort === undefined ? {} : { effort: step.effort }),
+          })),
+          ...(onFallback.has(agent.name) ? { fallbackThreads: onFallback.get(agent.name) } : {}),
+        },
       } satisfies ServerProviderModel;
     });
 

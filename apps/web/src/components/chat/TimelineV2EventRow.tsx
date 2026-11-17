@@ -77,6 +77,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
       status: live?.status ?? item.status,
       startedAt: live?.startedAt ?? item.startedAt,
       completedAt: live?.completedAt ?? item.completedAt,
+      model: live?.model,
     };
   });
   const summary = subagentGroupSummary(agents);
@@ -103,7 +104,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
           )}
         >
           <span className="flex shrink-0 items-center -space-x-1.5" aria-hidden>
-            {agents.slice(0, 3).map(({ item, status }) => (
+            {agents.slice(0, 3).map(({ item, status, model }) => (
               <EnvironmentSubagentAvatar
                 key={item.id}
                 environmentId={ctx.activeThreadEnvironmentId}
@@ -111,6 +112,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
                 driver={item.driver}
                 remote={item.remoteChild}
                 status={agents.length === 1 ? status : undefined}
+                model={model}
               />
             ))}
             {agents.length > 3 ? (

@@ -94,6 +94,30 @@
       "budget": 3,
       "why": "model row icon from the agent's backend"
     },
+    "packages/contracts/src/server.ts": {
+      "budget": 2,
+      "why": "an agent model's look and chain on the wire"
+    },
+    "apps/web/src/components/chat/V2LifecycleRow.tsx": {
+      "budget": 13,
+      "why": "a lastdrop agent's icon and color on its subagent card"
+    },
+    "apps/web/src/components/chat/TimelineV2EventRow.tsx": {
+      "budget": 4,
+      "why": "agent icons on a subagent group's avatars"
+    },
+    "apps/web/src/components/chat/ComposerControlsBar.tsx": {
+      "budget": 9,
+      "why": "a lastdrop agent's icon and running model in the model trigger"
+    },
+    "apps/web/src/components/chat/ProviderModelPicker.tsx": {
+      "budget": 4,
+      "why": "an icon slot replacing the provider icon in the trigger"
+    },
+    "apps/web/src/components/chat/SubagentTooltipContent.tsx": {
+      "budget": 5,
+      "why": "the chain entry a lastdrop agent runs on, in its card's hover"
+    },
     "apps/server/src/orchestration-v2/IdleCompactionService.ts": {
       "budget": 6,
       "why": "idle compaction for lastdrop agent threads"

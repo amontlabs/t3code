@@ -5,7 +5,7 @@ This is [T3 Code](https://github.com/pingdotgg/t3code) with a few additions. It 
 What it adds:
 
 - **Several Claude accounts, used automatically.** Each conversation runs on the account with the most room left, and moves on to another account when one hits its limit.
-- **Your own agents.** Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus.
+- **Your own agents.** Set up agents on Codex, Antigravity, Z.ai or Claude, each with backups to try next if one is unavailable. They show up as models with their own icons and effort menus. Give each agent an icon and color, and its subagents are easy to tell apart in a thread; hover one to see which model it's running on, backups included.
 - **Limits per account.** Hover over the usage icon to see what each account has left.
 - **Context and cache at a glance.** A ring by the send button shows how full the context is. Under the last message, a line warns when Claude's prompt cache is about to expire, and says clearly once it has.
 - **Approvals that remember.** When a tool Claude uses asks for permission and offers to remember it (computer use, for example), the card shows those choices, "Always allow" included, and the tool keeps your answer.

@@ -18,6 +18,7 @@ import {
   agentModels,
   allAgents,
   closestEffort,
+  fallbackThreads,
   modelName,
   parseCatalog,
   parseModelEfforts,
@@ -46,6 +47,8 @@ const CATALOG = {
       provider: "codex",
       model: "gpt-6.1-sol",
       enabled: true,
+      icon: "eye",
+      color: "violet",
       fallbacks: [
         { provider: "antigravity", model: "claude-opus-5-5" },
         { provider: "claude", model: "opus" },
@@ -136,6 +139,37 @@ describe("lastdrop agent catalog", () => {
     );
     const cheap = agents.find((agent) => agent.name === "cheap")!;
     assert.equal(cheap.chain[0]!.instanceId, "zai");
+  });
+
+  it("gives each agent's model its look, its chain and the threads on a fallback entry", () => {
+    const review = agents.find((agent) => agent.name === "review")!;
+    const [codex, antigravity, claude] = review.chain.map(
+      (step) => `${step.instanceId}/${step.model}/${step.effort ?? ""}`,
+    );
+    // Oldest first, as the entry map keeps them; t2 moved back to its first entry later.
+    const onFallback = fallbackThreads(agents, [
+      ["n1", { entry: antigravity!, agent: "review", appThreadId: "t1" }],
+      ["n2", { entry: claude!, agent: "review", appThreadId: "t2" }],
+      ["n3", { entry: codex!, agent: "review", appThreadId: "t2" }],
+      ["n4", { entry: "gone/x/", agent: "review", appThreadId: "t3" }],
+      ["n5", { entry: antigravity! }],
+    ]);
+    assert.deepEqual([...onFallback], [["review", { t1: 1 }]]);
+    const look = agentModels(agents, known, onFallback).find((model) => model.slug === "review")!;
+    decodeModel(look);
+    assert.deepEqual(look.lastdropAgent, {
+      icon: "eye",
+      color: "violet",
+      chain: [
+        { instanceId: "codex", model: "gpt-6.1-sol" },
+        { instanceId: "antigravity", model: "claude-opus-5-5" },
+        { instanceId: "claudeAgent", model: "opus" },
+      ],
+      fallbackThreads: { t1: 1 },
+    });
+    assert.deepEqual(models.find((model) => model.slug === "judge")!.lastdropAgent, {
+      chain: [{ instanceId: "claudeAgent", model: "fable", effort: "high" }],
+    });
   });
 
   it("names and describes models as the standalone ACP provider does", () => {

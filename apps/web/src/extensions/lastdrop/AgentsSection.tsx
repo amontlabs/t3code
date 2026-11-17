@@ -1,9 +1,17 @@
 /**
  * lastdrop's agents, on the "lastdrop agents" provider's card: each agent's name, description, provider and
- * model, effort and fallbacks in order, with a switch. Add, edit, remove; the list lives on the server in
+ * model, effort and fallbacks in order, its icon and color, with a switch. Add, edit, remove; the list lives on the server in
  * `~/.t3/lastdrop/agents.json` (`/api/lastdrop/agents`).
  */
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CheckIcon,
+  PencilIcon,
+  PlusIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import { useId, useState } from "react";
 
 import { SettingsSection } from "~/components/settings/settingsLayout";
@@ -40,6 +48,13 @@ import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 
 import type { ExtensionInstanceSectionProps } from "../index";
+import { AGENT_COLOR_CHOICES, AGENT_ICON_COMPONENTS, AgentGlyph } from "./AgentAvatar";
+import {
+  LASTDROP_AGENT_COLORS,
+  LASTDROP_AGENT_ICONS,
+  type LastdropAgentColor,
+  type LastdropAgentIcon,
+} from "./agentLook";
 import { useAgentsEditor, type AgentsWrite } from "./agentsApi";
 import {
   EFFORT_LABEL,
@@ -155,6 +170,91 @@ function EntryFields(props: {
   );
 }
 
+/** The agent's glyph from its record; an id this client doesn't know draws the default. */
+function RecordGlyph(props: { readonly agent: AgentRecord; readonly className?: string }) {
+  const icon = (LASTDROP_AGENT_ICONS as ReadonlyArray<string>).includes(props.agent.icon ?? "")
+    ? (props.agent.icon as LastdropAgentIcon)
+    : null;
+  const color =
+    props.agent.color !== undefined && Object.hasOwn(LASTDROP_AGENT_COLORS, props.agent.color)
+      ? LASTDROP_AGENT_COLORS[props.agent.color as LastdropAgentColor]
+      : null;
+  return <AgentGlyph icon={icon} color={color} className={props.className ?? "size-6"} />;
+}
+
+/** The icon grid and color swatches; picking the selected icon again clears it. */
+function LookFields(props: {
+  readonly draft: AgentRecord;
+  readonly disabled: boolean;
+  readonly onChange: (look: Pick<AgentRecord, "icon" | "color">) => void;
+}) {
+  const { draft, disabled } = props;
+  const pick = (icon: string | undefined, color: string | undefined) =>
+    props.onChange({
+      ...(icon === undefined ? {} : { icon }),
+      ...(color === undefined ? {} : { color }),
+    });
+  const swatch =
+    "inline-flex size-6 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50";
+  return (
+    <div className="flex items-start gap-3 text-sm">
+      <RecordGlyph agent={draft} className="mt-6 size-9" />
+      <div className="min-w-0 flex-1 space-y-2">
+        <span>Icon on its subagent cards</span>
+        <div role="group" aria-label="Icon" className="flex flex-wrap gap-1">
+          {LASTDROP_AGENT_ICONS.map((id) => {
+            const Icon = AGENT_ICON_COMPONENTS[id];
+            const selected = draft.icon === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-label={id}
+                aria-pressed={selected}
+                disabled={disabled}
+                onClick={() => pick(selected ? undefined : id, draft.color)}
+                className={
+                  selected
+                    ? "inline-flex size-7 items-center justify-center rounded-md bg-accent text-foreground ring-2 ring-inset ring-ring"
+                    : "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50"
+                }
+              >
+                <Icon aria-hidden className="size-4" />
+              </button>
+            );
+          })}
+        </div>
+        <div role="group" aria-label="Color" className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            aria-label="No color"
+            aria-pressed={draft.color === undefined}
+            disabled={disabled}
+            onClick={() => pick(draft.icon, undefined)}
+            className={`${swatch} border border-dashed border-border text-muted-foreground`}
+          >
+            {draft.color === undefined ? <CheckIcon aria-hidden className="size-3.5" /> : null}
+          </button>
+          {AGENT_COLOR_CHOICES.map(([id, hex]) => (
+            <button
+              key={id}
+              type="button"
+              aria-label={id}
+              aria-pressed={draft.color === id}
+              disabled={disabled}
+              onClick={() => pick(draft.icon, id)}
+              className={`${swatch} text-white`}
+              style={{ backgroundColor: hex }}
+            >
+              {draft.color === id ? <CheckIcon aria-hidden className="size-3.5" /> : null}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AgentDialog(props: {
   readonly initial: AgentRecord;
   readonly agents: ReadonlyArray<AgentRecord>;
@@ -212,6 +312,13 @@ function AgentDialog(props: {
                 }}
               />
             </label>
+            <LookFields
+              draft={draft}
+              disabled={busy}
+              onChange={(look) =>
+                setDraft(({ icon: _icon, color: _color, ...current }) => ({ ...current, ...look }))
+              }
+            />
             <label className="block space-y-1.5 text-sm">
               <span>Description</span>
               <Textarea
@@ -341,6 +448,7 @@ function AgentRow(props: {
   return (
     <li className="flex flex-col gap-1.5 px-3 py-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-2">
+        <RecordGlyph agent={agent} />
         <span className="truncate text-sm font-medium text-foreground">{agent.name}</span>
         <Badge variant="secondary">{entryLabel(providers, agent)}</Badge>
         <span className="flex-1" />

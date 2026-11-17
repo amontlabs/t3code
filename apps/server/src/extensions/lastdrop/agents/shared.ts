@@ -65,10 +65,15 @@ export const targets: Targets = {
     bound === undefined ? Effect.void : bound.refreshUsage(instanceId),
 };
 
-/** Which entry made a native thread: the entry's id and its instance. */
+/**
+ * Which entry made a native thread: the entry's id and its instance. The agent and the T3 thread
+ * it runs for are absent on entries saved before they were kept.
+ */
 export interface NativeEntry {
   readonly entry: string;
   readonly instanceId: string;
+  readonly agent?: string;
+  readonly appThreadId?: string;
 }
 
 const roomMarks = makeStoredMap<RoomMark | number>();

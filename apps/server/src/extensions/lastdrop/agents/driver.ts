@@ -21,7 +21,7 @@ import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 
-import { agentModels } from "./catalog.ts";
+import { agentModels, fallbackSignature, fallbackThreads } from "./catalog.ts";
 import { boundCatalogFiles, makeCatalogSource, type CatalogSource } from "./catalogSource.ts";
 import { ALL_RUNTIME_MODES } from "./permissions.ts";
 import { makeRouterAdapter } from "./router.ts";
@@ -82,6 +82,8 @@ export const makeLastdropAgentsDriver = (
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
+    const onFallback = () =>
+      fallbackThreads(source.current().agents, Shared.nativeEntries.entries());
     /** Every instance the agents' chains run on, for usage refreshes and their model lists. */
     const chainInstances = () => [
       ...new Set(
@@ -117,7 +119,7 @@ export const makeLastdropAgentsDriver = (
     });
     const build = Effect.fn("LastdropAgentsDriver.build")(function* () {
       const reading = source.current();
-      const own = agentModels(reading.agents, reading.efforts);
+      const own = agentModels(reading.agents, reading.efforts, onFallback());
       const slugs = new Set(own.map((model) => model.slug));
       const legacy = (yield* innerModels()).filter((model) => {
         if (slugs.has(model.slug)) return false;
@@ -160,11 +162,15 @@ export const makeLastdropAgentsDriver = (
       Effect.map((models) => models.map((model) => model.slug).join(",")),
     );
     let lastInner = "";
+    // Threads moving to a fallback entry publish too, so cards name the entry that runs.
+    let lastFallbacks = fallbackSignature(onFallback());
     yield* Effect.gen(function* () {
       const changed = source.reloadIfChanged();
       const signature = yield* innerSignature;
-      if (changed || signature !== lastInner) {
+      const fallbacks = fallbackSignature(onFallback());
+      if (changed || signature !== lastInner || fallbacks !== lastFallbacks) {
         lastInner = signature;
+        lastFallbacks = fallbacks;
         yield* refresh;
       }
     }).pipe(Effect.repeat(Schedule.spaced(CATALOG_POLL)), Effect.forkScoped);

@@ -30,6 +30,7 @@ import {
 } from "./ComposerModelEffort";
 import type { useComposerProviderModel } from "./useComposerProviderModel";
 import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
+import { useLastdropAgentTrigger } from "~/extensions";
 
 /**
  * The composer footer controls: the model picker (which also holds effort, speed and
@@ -161,6 +162,13 @@ export function ComposerControlsBar(props: {
     onPromptEdit,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
+  const agentTrigger = useLastdropAgentTrigger({
+    environmentId,
+    threadRef: routeKind === "server" ? routeThreadRef : null,
+    instanceId: selectedInstanceId,
+    model: selectedModelForPickerWithCustomFallback,
+    effortSuffix: effort.suffix,
+  });
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -215,6 +223,7 @@ export function ComposerControlsBar(props: {
         composerControlsCollapsed ? "min-w-13 shrink text-xs!" : "min-w-13",
       )}
       triggerSuffix={effort.suffix}
+      {...agentTrigger}
       triggerDetail={effort.detail}
       triggerShortcuts={
         pickerOwnsModeShortcut ? "composer.effort composer.mode" : "composer.effort"

@@ -30,6 +30,9 @@ export interface AgentRecord extends AgentEntry {
   readonly description: string;
   readonly enabled: boolean;
   readonly fallbacks: ReadonlyArray<AgentEntry>;
+  /** Ids from the clients' lists (`client-runtime/src/extensions.ts`); absent is the plain look. */
+  readonly icon?: string;
+  readonly color?: string;
 }
 
 const MAX_AGENTS = 64;
@@ -37,6 +40,14 @@ const MAX_AGENTS = 64;
 const MAX_FALLBACKS = 7;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
 const MODEL = /^[^\s\u0000-\u001f]{1,200}$/;
+/** An icon or color id. The server keeps any well-formed one; a client that doesn't know it draws the default. */
+const LOOK_ID = /^[a-z0-9-]{1,32}$/;
+
+/** The agent's icon and color from a request or the file, each kept only when well-formed. */
+const lookOf = (raw: Record<string, unknown>): Pick<AgentRecord, "icon" | "color"> => ({
+  ...(typeof raw.icon === "string" && LOOK_ID.test(raw.icon) ? { icon: raw.icon } : {}),
+  ...(typeof raw.color === "string" && LOOK_ID.test(raw.color) ? { color: raw.color } : {}),
+});
 
 export type Validated =
   | { readonly ok: true; readonly agents: ReadonlyArray<AgentRecord> }
@@ -109,6 +120,7 @@ export const validateAgents = (input: unknown): Validated => {
       enabled: raw.enabled === true,
       ...first,
       fallbacks,
+      ...lookOf(raw),
     });
   }
   return { ok: true, agents };
@@ -148,6 +160,7 @@ const recordOf = (raw: unknown): AgentRecord | undefined => {
     enabled: raw.enabled === true,
     ...first,
     fallbacks,
+    ...lookOf(raw),
   };
 };
 
@@ -211,7 +224,13 @@ export const saveCatalog = (files: CatalogFiles, agents: ReadonlyArray<AgentReco
   }
   const revision = (typeof doc.revision === "number" ? doc.revision : 0) + 1;
   const written = agents.map((agent) => {
-    const { effort: _effort, fallbacks: _fallbacks, ...rest } = before.get(agent.id) ?? {};
+    const {
+      effort: _effort,
+      fallbacks: _fallbacks,
+      icon: _icon,
+      color: _color,
+      ...rest
+    } = before.get(agent.id) ?? {};
     return {
       ...rest,
       id: agent.id,
@@ -220,6 +239,8 @@ export const saveCatalog = (files: CatalogFiles, agents: ReadonlyArray<AgentReco
       enabled: agent.enabled,
       ...entryJson(agent),
       ...(agent.fallbacks.length === 0 ? {} : { fallbacks: agent.fallbacks.map(entryJson) }),
+      ...(agent.icon === undefined ? {} : { icon: agent.icon }),
+      ...(agent.color === undefined ? {} : { color: agent.color }),
     };
   });
   writeWhole(files.catalog, `${JSON.stringify({ ...doc, agents: written, revision }, null, 2)}\n`);

@@ -64,6 +64,7 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { subagentResumedSince } from "./V2LifecycleRow.logic";
 import { Button, InlineButton } from "../ui/button";
 import { T3Wordmark } from "../T3Wordmark";
+import { LastdropSubagentAvatar, useLastdropAgentLookKey } from "~/extensions";
 
 export type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 
@@ -270,6 +271,7 @@ export function EnvironmentSubagentAvatar({
   providerInstanceId,
   driver,
   remote,
+  model,
   ...props
 }: {
   environmentId: EnvironmentId;
@@ -278,6 +280,7 @@ export function EnvironmentSubagentAvatar({
   /** A task in a linked environment runs a provider instance there; its driver here is only a label. */
   remote?: OrchestrationV2RemoteTaskChild | undefined;
   status?: OrchestrationV2TurnItem["status"] | undefined;
+  model?: string | null | undefined;
 }) {
   const providerEnvironmentId = remote?.environmentId ?? environmentId;
   const providersAtom = serverEnvironment.providersValueAtom(providerEnvironmentId);
@@ -311,6 +314,14 @@ export function EnvironmentSubagentAvatar({
     (providers) =>
       providers?.find((provider) => provider.instanceId === providerInstanceId)?.iconUrl,
   );
+  const agentLook = useLastdropAgentLookKey(providerEnvironmentId, providerInstanceId, model);
+  if (agentLook)
+    return (
+      <LastdropSubagentAvatar
+        lookKey={agentLook}
+        dotClass={props.status && subagentStatusVisual(props.status).dotClass}
+      />
+    );
   return (
     <SubagentAvatar
       {...props}
@@ -458,6 +469,7 @@ function SubagentTimelineLink(props: {
         driver={props.driver}
         remote={remote}
         status={status ?? undefined}
+        model={agent?.model}
       />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
@@ -579,6 +591,7 @@ function SubagentTimelineTooltip(
       progress={props.progress}
       parentThread={parent}
       childThread={child}
+      childThreadId={props.threadId}
       parentProject={parentProject ?? undefined}
       childProject={childProject ?? undefined}
     />

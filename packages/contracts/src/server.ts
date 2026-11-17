@@ -84,6 +84,8 @@ export const ServerProviderModel = Schema.Struct({
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
+  /** lastdrop: an agent's look and chain, read by the web's `extensions/lastdrop/agentLook.ts`. */
+  lastdropAgent: Schema.optional(Schema.Unknown),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
 

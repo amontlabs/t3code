@@ -35,7 +35,7 @@ const APP_CATALOG = {
   revision: 37,
   saveClaude: true,
   judges: { zai: "glm-5.3" },
-  agents: [{ id: "A1", ...build, futureKey: 1 }],
+  agents: [{ id: "A1", ...build, futureKey: 1, color: "teal" }],
 };
 
 /** A home with the app's files, a fork folder, and an editor over them. */
@@ -93,9 +93,11 @@ describe("saving the agents", () => {
           yield* editor.importFromApp;
           const before = (yield* editor.view).agents;
           assert.equal(before[0]!.id, "A1");
+          assert.equal(before[0]!.color, "teal");
+          const { color: _color, ...uncolored } = before[0]!;
           const saved = yield* editor.save({
             agents: [
-              { ...before[0]!, description: "Changed", fallbacks: [] },
+              { ...uncolored, description: "Changed", fallbacks: [], icon: "eye" },
               { ...build, name: "review", provider: "codex", model: "gpt-6.1-sol", effort: "high" },
             ],
             revision: 37,
@@ -106,6 +108,10 @@ describe("saving the agents", () => {
           assert.deepEqual(written.judges, { zai: "glm-5.3" });
           assert.equal(written.agents[0].futureKey, 1);
           assert.notProperty(written.agents[0], "fallbacks");
+          // A cleared color leaves the file; the new icon is written.
+          assert.notProperty(written.agents[0], "color");
+          assert.equal(written.agents[0].icon, "eye");
+          assert.equal(parseCatalog(written)[0]!.icon, "eye");
           assert.deepEqual(
             parseCatalog(written).map((agent) => [
               agent.name,

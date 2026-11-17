@@ -91,3 +91,14 @@ export { withConversationStatus } from "./lastdrop/ConversationStatusLine";
 
 /** Context usage ring beside the send button (`ChatComposer.tsx` seam). */
 export { ContextRing } from "./lastdrop/ContextRing";
+
+/**
+ * A lastdrop agent's icon and color on its subagent cards (`V2LifecycleRow.tsx`,
+ * `TimelineV2EventRow.tsx` seams) and the entry it runs on in the hover (`SubagentTooltipContent.tsx`).
+ */
+export {
+  LastdropAgentHoverRow,
+  LastdropSubagentAvatar,
+  useLastdropAgentLookKey,
+  useLastdropAgentTrigger,
+} from "./lastdrop/AgentAvatar";
