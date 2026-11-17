@@ -1,0 +1,79 @@
+name: lastdrop release retry
+
+# GitHub's free macOS arm64 runners are sometimes all busy: a release job that no runner picks up
+# is cancelled after 15 minutes ("The job was not acquired by Runner of type hosted"), and a rerun
+# minutes later usually gets one. This reruns such a release until a runner takes it. A build that
+# did run and failed is a real failure and is left alone. See FORK.md, "Releases".
+
+on:
+  workflow_run:
+    workflows: ["lastdrop release"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: lastdrop-release-retry-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    # First attempts only: this job reruns later attempts itself, so their completions must not
+    # start another retry chain.
+    if: github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      TAG: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Rerun until a runner takes the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prints "unacquired" when the attempt's macOS job never got a runner, else "ran".
+          attempt_state() {
+            gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$1/jobs" \
+              --jq '[.jobs[] | select(.name == "Release macOS arm64")][0]
+                    | if . != null and .conclusion == "cancelled" and ((.runner_name // "") == "")
+                      then "unacquired" else "ran" end'
+          }
+          run_field() { gh api "repos/$REPO/actions/runs/$RUN_ID" --jq "$1"; }
+          # A newer fork tag means a newer release supersedes this one: publishing it late with
+          # --latest would point the update feed back at an older version.
+          superseded() {
+            local newest
+            newest="$(gh api --paginate "repos/$REPO/git/matching-refs/tags/v" --jq '.[].ref' |
+              sed 's#^refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-ld\.[0-9]+$' | sort -V | tail -1)"
+            [[ -n "$newest" && "$newest" != "$TAG" ]]
+          }
+
+          attempt="$(run_field .run_attempt)"
+          for retry in 1 2 3 4 5 6; do
+            if [[ "$(attempt_state "$attempt")" != "unacquired" ]]; then
+              echo "Attempt $attempt ran on a runner; nothing to retry."
+              exit 0
+            fi
+            sleep 600
+            if superseded; then
+              echo "A newer fork tag exists; $TAG is not retried."
+              exit 0
+            fi
+            # The release workflow has been found disabled with no known actor; a rerun of a
+            # disabled workflow is refused.
+            gh api -X PUT "repos/$REPO/actions/workflows/lastdrop-release.yml/enable"
+            gh run rerun "$RUN_ID" --repo "$REPO"
+            echo "Retry $retry of $TAG (attempt $((attempt + 1)))."
+            until [[ "$(run_field .run_attempt)" -gt "$attempt" && "$(run_field .status)" == "completed" ]]; do
+              sleep 60
+            done
+            attempt="$(run_field .run_attempt)"
+          done
+          if [[ "$(attempt_state "$attempt")" == "unacquired" ]]; then
+            echo "::error::No macOS runner took $TAG after 6 retries. Rerun it by hand later."
+            exit 1
+          fi
