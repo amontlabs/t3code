@@ -126,6 +126,10 @@
       "budget": 2,
       "why": "agy's raw tool calls for lastdrop's command answers"
     },
+    "apps/server/src/orchestration-v2/Adapters/AntigravityAdapterV2.ts": {
+      "budget": 6,
+      "why": "an Antigravity session is given the repository's other worktrees"
+    },
     "apps/server/src/orchestration-v2/RestartContinuation.ts": {
       "budget": 2,
       "why": "export CONTINUE_PROMPT for the continuation after a usage-limit move"

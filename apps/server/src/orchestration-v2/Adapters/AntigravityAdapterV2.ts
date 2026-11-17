@@ -33,6 +33,7 @@ import {
   describeAntigravitySubagentLaunches,
 } from "../../provider/acp/AntigravityChildWork.ts";
 import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityClientFiles.ts";
+import { findSiblingWorktrees, listedWorktrees } from "../../extensions/antigravityWorktrees.ts";
 import { watchAntigravityPromptOutcome } from "../../provider/acp/AntigravityTurnOutcome.ts";
 import {
   antigravityApprovalOptions,
@@ -139,6 +140,7 @@ export function makeAntigravityAcpAdapterFlavor(
   const makeRuntime = Effect.fn("AntigravityAdapterV2.makeRuntime")(
     function* (input: AcpAdapterV2RuntimeInput) {
       const scope = yield* Scope.fork(yield* Effect.scope);
+      const worktrees = yield* findSiblingWorktrees(options, input.cwd);
       const runtime = yield* options
         .withProcess(
           Scope.close(scope, Exit.void),
@@ -146,7 +148,7 @@ export function makeAntigravityAcpAdapterFlavor(
             ...input,
             clientFileReads: true,
             sessionSystemPromptAppend: PULL_REQUEST_LINKING_INSTRUCTIONS,
-            additionalDirectories: [options.host.paths.attachmentsDir],
+            additionalDirectories: [options.host.paths.attachmentsDir, ...worktrees],
           }),
         )
         .pipe(Effect.provideService(Scope.Scope, scope));
@@ -254,7 +256,7 @@ export function makeAntigravityAcpAdapterFlavor(
         readAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
-          allowedRoots: antigravityClientFileRoots(cwd),
+          allowedRoots: [...antigravityClientFileRoots(cwd), ...listedWorktrees(cwd)],
           request,
         }),
     },
