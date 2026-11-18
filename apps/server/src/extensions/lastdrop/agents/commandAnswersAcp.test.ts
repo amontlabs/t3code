@@ -73,12 +73,12 @@ const commandCall = (
   id: string,
   command: string,
   optionId: "allow" | "deny",
-  title = "run_command",
+  naming: Record<string, unknown> = { name: "run_command", title: command },
 ) =>
   toolCall(
     id,
     {
-      title,
+      ...naming,
       kind: "execute",
       rawInput: {
         CommandLine: command,
@@ -261,12 +261,12 @@ const transcript = {
       label: "session.prompt",
       frame: { kind: "request", method: "session/prompt", params: "<any>" },
     },
-    // The real command is judged: denied although the title is run_command, and a read-only
-    // command under the same title is allowed (no verdict carries over).
+    // The real command is judged: agy 1.5.9+ names run_command in `name` and the command in
+    // `title`; older agy named it in `title`. A read-only command is allowed (no verdict carries over).
     ...commandCall("call-1", "rm -rf ~/Documents", "deny"),
-    ...commandCall("call-2", "ls -la", "allow"),
+    ...commandCall("call-2", "ls -la", "allow", { title: "run_command" }),
     // A title that looks read-only does not make its real command so: not agy's run_command, refused.
-    ...commandCall("call-3", "rm -rf ~/Documents", "deny", "Run `ls`"),
+    ...commandCall("call-3", "rm -rf ~/Documents", "deny", { title: "Run `ls`" }),
     // Review 2, item 1: no rawInput, a backticked title. T3 takes `ls` from the title; nothing
     // says what runs, so it is refused without the judge.
     ...toolCall("call-4", { title: "Run `ls`", kind: "execute" }, "deny"),

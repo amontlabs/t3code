@@ -196,7 +196,9 @@ const antigravityPlan = (
   const input = raw.rawInput;
   if (input !== undefined && !isRecord(input)) return unread(item);
   const { toolSummary: _ownWords, ...fields } = input ?? {};
-  if (raw.title === "run_command" && raw.kind === "execute") {
+  // agy 1.5.9+ names the tool in `name` and puts the command in `title`; older agy sent only `title`.
+  const tool = raw.name ?? raw.title;
+  if (tool === "run_command" && raw.kind === "execute") {
     const line = fields.CommandLine;
     const cwd = fields.Cwd;
     if (
@@ -211,7 +213,7 @@ const antigravityPlan = (
     return shell(line, typeof cwd === "string" && cwd.trim() !== "" ? cwd : threadCwd);
   }
   if (raw.kind === "execute") return unread(item);
-  return otherTool(raw.title ?? raw.name ?? "tool", raw.kind ?? "other", fields, threadCwd);
+  return otherTool(tool ?? "tool", raw.kind ?? "other", fields, threadCwd);
 };
 
 /** What the judge reads of another tool: its own fields, never its output. */
