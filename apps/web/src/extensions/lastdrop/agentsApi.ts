@@ -103,7 +103,7 @@ export function useAgentsEditor(environmentId: EnvironmentId | null) {
   };
 
   const save = (agents: ReadonlyArray<AgentRecord>) =>
-    write(AGENTS_ROUTE, "PUT", {
+    write(AGENTS_ROUTE, "POST", {
       agents,
       ...(load.state === "loaded" ? { revision: load.view.revision } : {}),
     });

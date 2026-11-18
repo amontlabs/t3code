@@ -123,8 +123,8 @@ export function EndpointKeysSection(
                 key={status.provider}
                 status={status}
                 readOnly={readOnly}
-                save={(provider, key) => change({ method: "PUT", provider, key })}
-                clear={(provider) => change({ method: "DELETE", provider })}
+                save={(provider, key) => change({ kind: "set", provider, key })}
+                clear={(provider) => change({ kind: "clear", provider })}
               />
             ))}
             {importable.length > 0 ? (
@@ -135,7 +135,7 @@ export function EndpointKeysSection(
                     disabled={importing || readOnly}
                     onClick={() => {
                       setImporting(true);
-                      void change({ method: "POST" }).then((failure) => {
+                      void change({ kind: "import" }).then((failure) => {
                         setImporting(false);
                         setImportError(failure);
                       });

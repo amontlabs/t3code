@@ -1,8 +1,9 @@
 /**
  * `/api/lastdrop/agents`: the agents editor's routes, thin over `LastdropAgentsEditor`.
  *
- * `GET` (read scope), `PUT { agents, revision? }` and `POST /import` (the one-time copy of the app's list).
+ * `GET` (read scope), `POST { agents, revision? }` and `POST /import` (the one-time copy of the app's list).
  * Writes need `providers:manage` and refuse a remote (DPoP) session: the files live on this Mac.
+ * Writes are POST: T3's CORS allows only GET and POST, and the desktop renderer is cross-origin.
  */
 import { AuthOrchestrationReadScope, AuthProvidersManageScope } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -53,7 +54,7 @@ const read = HttpRouter.add(
 );
 
 const save = HttpRouter.add(
-  "PUT",
+  "POST",
   AGENTS_ROUTE,
   Effect.gen(function* () {
     const refused = yield* refusal(true);

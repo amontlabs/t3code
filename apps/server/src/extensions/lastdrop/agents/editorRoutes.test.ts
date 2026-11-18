@@ -71,8 +71,8 @@ describe("the agents routes", () => {
         assert.equal(yield* call("GET", "none"), 401);
         assert.equal(yield* call("GET", "bearer-access-token:other"), 403);
         assert.equal(yield* call("GET", READ), 200);
-        assert.equal(yield* call("PUT", READ, undefined, { agents: [] }), 403);
-        assert.equal(yield* call("PUT", REMOTE, undefined, { agents: [] }), 403);
+        assert.equal(yield* call("POST", READ, undefined, { agents: [] }), 403);
+        assert.equal(yield* call("POST", REMOTE, undefined, { agents: [] }), 403);
         assert.equal(yield* call("POST", REMOTE, "/api/lastdrop/agents/import"), 403);
         assert.deepEqual(saved, []);
       }),
@@ -82,10 +82,10 @@ describe("the agents routes", () => {
     "saves and imports for a local manager, and answers an editor refusal with its status",
     () =>
       Effect.gen(function* () {
-        assert.equal(yield* call("PUT", MANAGE, undefined, { agents: [], revision: 3 }), 200);
+        assert.equal(yield* call("POST", MANAGE, undefined, { agents: [], revision: 3 }), 200);
         assert.deepEqual(saved, [{ agents: [], revision: 3 }]);
-        assert.equal(yield* call("PUT", MANAGE, undefined, { agents: [], revision: 1 }), 409);
-        assert.equal(yield* call("PUT", MANAGE, undefined, { nothing: true }), 400);
+        assert.equal(yield* call("POST", MANAGE, undefined, { agents: [], revision: 1 }), 409);
+        assert.equal(yield* call("POST", MANAGE, undefined, { nothing: true }), 400);
         assert.equal(yield* call("POST", MANAGE, "/api/lastdrop/agents/import"), 200);
       }),
   );

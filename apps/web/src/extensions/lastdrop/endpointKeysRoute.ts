@@ -32,17 +32,19 @@ export type KeysLoad =
   | ({ readonly state: "loaded" } & KeysView);
 
 type Request =
-  | { readonly method: "GET" }
-  | { readonly method: "PUT"; readonly provider: EndpointProviderId; readonly key: string }
-  | { readonly method: "DELETE"; readonly provider: EndpointProviderId }
-  | { readonly method: "POST" };
+  | { readonly kind: "read" }
+  | { readonly kind: "set"; readonly provider: EndpointProviderId; readonly key: string }
+  | { readonly kind: "clear"; readonly provider: EndpointProviderId }
+  | { readonly kind: "import" };
 
 const urlFor = (request: Request): string =>
-  request.method === "GET"
+  request.kind === "read"
     ? KEYS_ROUTE
-    : request.method === "POST"
+    : request.kind === "import"
       ? `${KEYS_ROUTE}/import`
-      : `${KEYS_ROUTE}/${request.provider}`;
+      : request.kind === "clear"
+        ? `${KEYS_ROUTE}/${request.provider}/clear`
+        : `${KEYS_ROUTE}/${request.provider}`;
 
 async function send(
   request: Request,
@@ -50,13 +52,14 @@ async function send(
   bearer: string | undefined,
 ): Promise<KeysLoad> {
   const response = await fetch(new URL(urlFor(request), baseUrl), {
-    method: request.method,
+    // Writes are POST: T3's CORS allows only GET and POST, and the desktop renderer is cross-origin.
+    method: request.kind === "read" ? "GET" : "POST",
     credentials: bearer === undefined ? "include" : "omit",
     headers: {
       ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }),
-      ...(request.method === "PUT" ? { "content-type": "application/json" } : {}),
+      ...(request.kind === "set" ? { "content-type": "application/json" } : {}),
     },
-    ...(request.method === "PUT" ? { body: JSON.stringify({ key: request.key }) } : {}),
+    ...(request.kind === "set" ? { body: JSON.stringify({ key: request.key }) } : {}),
   }).catch(() => undefined);
   if (response === undefined)
     return { state: "failed", message: "The server couldn't be reached." };
@@ -84,7 +87,7 @@ export function useEndpointKeys(environmentId: EnvironmentId) {
   useEffect(() => {
     if (baseUrl === undefined || remote) return;
     let stopped = false;
-    void send({ method: "GET" }, baseUrl, bearer).then((next) => {
+    void send({ kind: "read" }, baseUrl, bearer).then((next) => {
       if (!stopped) setLoad(next);
     });
     return () => {
@@ -94,7 +97,7 @@ export function useEndpointKeys(environmentId: EnvironmentId) {
 
   /** Changes a key, and returns the server's complaint (the view stays as it was), or undefined on success. */
   const change = async (
-    request: Exclude<Request, { method: "GET" }>,
+    request: Exclude<Request, { kind: "read" }>,
   ): Promise<string | undefined> => {
     if (baseUrl === undefined) return "The server isn't ready.";
     const next = await send(request, baseUrl, bearer);

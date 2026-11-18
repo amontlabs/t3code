@@ -151,7 +151,7 @@ const providerRoutes = (provider: EndpointProvider) => {
   const path = `${KEYS_ROUTE}/${provider}` as const;
   return Layer.mergeAll(
     HttpRouter.add(
-      "PUT",
+      "POST",
       path,
       Effect.gen(function* () {
         const refused = yield* authorize("write");
@@ -164,8 +164,8 @@ const providerRoutes = (provider: EndpointProvider) => {
       }),
     ),
     HttpRouter.add(
-      "DELETE",
-      path,
+      "POST",
+      `${path}/clear` as const,
       Effect.gen(function* () {
         const refused = yield* authorize("write");
         if (refused !== undefined) return refused;
