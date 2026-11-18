@@ -384,6 +384,9 @@ jobs:
                 *) gh workflow disable "$(basename "$path")" --repo "$GITHUB_REPOSITORY" || true ;;
               esac
             done
+          # GitHub keeps disabling lastdrop-release.yml on this fork, and a tag pushed while it is
+          # disabled starts no run at all.
+          gh api --silent -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/lastdrop-release.yml/enable"
           git tag -a "$release_tag" -m "T3 Code ${TAG} with lastdrop"
           git push "$remote" "refs/tags/$release_tag"
           echo "Tagged $release_tag." >> "$GITHUB_STEP_SUMMARY"

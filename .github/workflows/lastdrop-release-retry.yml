@@ -63,7 +63,7 @@ jobs:
               echo "A newer fork tag exists; $TAG is not retried."
               exit 0
             fi
-            # The release workflow has been found disabled with no known actor; a rerun of a
+            # The release workflow has been disabled by GitHub on this fork; a rerun of a
             # disabled workflow is refused.
             gh api -X PUT "repos/$REPO/actions/workflows/lastdrop-release.yml/enable"
             gh run rerun "$RUN_ID" --repo "$REPO"

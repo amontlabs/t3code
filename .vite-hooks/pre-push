@@ -1,3 +1,14 @@
 # lastdrop: refuse a push with changes outside the fork's folders and seams (FORK.md rule 2).
 # CI runs the guard itself, and the sync job must still push a stuck branch for its PR.
-[ -n "${CI:-}" ] || node scripts/lastdrop/check-fork-paths.ts
+[ -n "${CI:-}" ] && exit 0
+refs="$(cat)"
+node scripts/lastdrop/check-fork-paths.ts
+
+# lastdrop: GitHub keeps disabling lastdrop-release.yml on this fork, and a release tag pushed while
+# it is disabled starts no run at all, so a push of one to the fork switches it on first.
+case "$2" in *github.com*amontlabs/t3code*) ;; *) exit 0 ;; esac
+printf '%s\n' "$refs" | grep -Eq ' refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-ld\.[0-9]+ ' || exit 0
+gh api --silent -X PUT repos/amontlabs/t3code/actions/workflows/lastdrop-release.yml/enable || {
+  echo "lastdrop: could not enable the lastdrop release workflow (gh auth?); the tag would not build." >&2
+  exit 1
+}
