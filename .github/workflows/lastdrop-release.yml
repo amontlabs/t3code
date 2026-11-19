@@ -5,11 +5,12 @@ name: lastdrop release
 # with the files electron-updater reads (latest-mac.yml, zip, blockmap). See FORK.md, "Releases".
 #
 # Runs on a tag pushed by a person or by lastdrop-sync.yml (with its own token, so the push starts
-# workflows). The app warns while the latest finished run of this workflow failed (SyncNotice.tsx).
+# workflows), or dispatched on the tag by lastdrop-release-retry.yml. The app warns while the latest finished run of this workflow failed (SyncNotice.tsx).
 
 on:
   push:
     tags: ["v*-ld.*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
