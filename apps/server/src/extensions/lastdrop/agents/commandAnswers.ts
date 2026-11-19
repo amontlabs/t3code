@@ -198,11 +198,9 @@ const antigravityPlan = (
   const { toolSummary: _ownWords, ...fields } = input ?? {};
   // agy 1.5.9+ names the tool in `name` and puts the command in `title`; older agy sent only
   // `title`. T3's managed ACP server sends no `name` and puts the command line itself in `title`.
-  const titledByCommand =
-    raw.name === undefined &&
-    typeof fields.CommandLine === "string" &&
-    raw.title?.trim() === fields.CommandLine.trim();
-  const tool = titledByCommand ? "run_command" : (raw.name ?? raw.title);
+  const titleIsCommand =
+    typeof fields.CommandLine === "string" && raw.title?.trim() === fields.CommandLine.trim();
+  const tool = raw.name === undefined && titleIsCommand ? "run_command" : (raw.name ?? raw.title);
   if (tool === "run_command" && raw.kind === "execute") {
     const line = fields.CommandLine;
     const cwd = fields.Cwd;
@@ -213,8 +211,12 @@ const antigravityPlan = (
     )
       return unread(item);
     if (isCutAntigravityToolText(line)) return unread(item);
-    if (namesAnotherCommand(item.prompt, line, raw.title))
-      return mismatch(line, item.prompt!.trim());
+    // With no `command` in rawInput, T3 takes the request's text from the title's first backticked
+    // part; when the title is the command line, that part is a piece of this same command.
+    const titlePart = titleIsCommand ? /`([^`]+)`/.exec(raw.title!)?.[1]?.trim() : undefined;
+    const prompt =
+      titlePart !== undefined && item.prompt?.trim() === titlePart ? undefined : item.prompt;
+    if (namesAnotherCommand(prompt, line, raw.title)) return mismatch(line, item.prompt!.trim());
     return shell(line, typeof cwd === "string" && cwd.trim() !== "" ? cwd : threadCwd);
   }
   if (raw.kind === "execute") return unread(item);
