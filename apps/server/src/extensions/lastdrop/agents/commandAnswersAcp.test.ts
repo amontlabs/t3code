@@ -262,9 +262,11 @@ const transcript = {
       frame: { kind: "request", method: "session/prompt", params: "<any>" },
     },
     // The real command is judged: agy 1.5.9+ names run_command in `name` and the command in
-    // `title`; older agy named it in `title`. A read-only command is allowed (no verdict carries over).
+    // `title`; older agy named it in `title`. Read-only commands are allowed (no verdict carries over).
     ...commandCall("call-1", "rm -rf ~/Documents", "deny"),
     ...commandCall("call-2", "ls -la", "allow", { title: "run_command" }),
+    // T3's managed ACP server sends no `name` and the command line itself as `title`.
+    ...commandCall("call-2b", "ls", "allow", { title: "ls" }),
     // A title that looks read-only does not make its real command so: not agy's run_command, refused.
     ...commandCall("call-3", "rm -rf ~/Documents", "deny", { title: "Run `ls`" }),
     // Review 2, item 1: no rawInput, a backticked title. T3 takes `ls` from the title; nothing
@@ -425,17 +427,18 @@ describe("lastdrop on T3's real Antigravity adapter", () => {
       yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, decoded);
       // The answers themselves are the transcript's expected ACP responses (checked above).
       const shown = notices.filter((notice) => !notice.startsWith("live runs on"));
-      assert.deepEqual(shown.slice(0, 3), [
+      assert.deepEqual(shown.slice(0, 4), [
         "Declined: rm -rf ~/Documents (not covered by your allow rules; judge: critical risk, user authorization unknown. Deletes documents.)",
         "Allowed as read-only (ls): ls -la",
+        "Allowed as read-only (ls): ls",
         // Not agy's run_command (its title is changed): a command-running tool lastdrop can't read.
         "Declined: ls (lastdrop could not read which command this request is for)",
       ]);
-      assert.include(shown[3]!, "could not read which command");
-      assert.include(shown[4]!, "ssh_exec");
-      assert.include(shown[5]!, "could not read which command");
-      assert.include(shown[6]!, "names another command");
-      assert.equal(shown.length, 7);
+      assert.include(shown[4]!, "could not read which command");
+      assert.include(shown[5]!, "ssh_exec");
+      assert.include(shown[6]!, "could not read which command");
+      assert.include(shown[7]!, "names another command");
+      assert.equal(shown.length, 8);
       const planned = prompts.map((prompt) => prompt.split("<planned_action>")[1]!);
       assert.deepEqual(
         planned.map((text) =>

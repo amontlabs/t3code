@@ -196,8 +196,13 @@ const antigravityPlan = (
   const input = raw.rawInput;
   if (input !== undefined && !isRecord(input)) return unread(item);
   const { toolSummary: _ownWords, ...fields } = input ?? {};
-  // agy 1.5.9+ names the tool in `name` and puts the command in `title`; older agy sent only `title`.
-  const tool = raw.name ?? raw.title;
+  // agy 1.5.9+ names the tool in `name` and puts the command in `title`; older agy sent only
+  // `title`. T3's managed ACP server sends no `name` and puts the command line itself in `title`.
+  const titledByCommand =
+    raw.name === undefined &&
+    typeof fields.CommandLine === "string" &&
+    raw.title?.trim() === fields.CommandLine.trim();
+  const tool = titledByCommand ? "run_command" : (raw.name ?? raw.title);
   if (tool === "run_command" && raw.kind === "execute") {
     const line = fields.CommandLine;
     const cwd = fields.Cwd;
