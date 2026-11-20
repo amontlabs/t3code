@@ -213,9 +213,15 @@ describe("lastdrop router targets", () => {
       });
       assert.equal(openrouter.last.runtimePolicy.runtimeMode, "auto-accept-edits");
       const step = agents.find((agent) => agent.name === "live")!.chain[0]!;
-      // Antigravity has no auto mode, even with its modes unknown.
+      // Antigravity without its own Auto, or with its modes unknown: lastdrop answers.
       assert.equal(entryRuntimeMode(step, "auto", undefined), "auto-accept-edits");
       assert.equal(entryRuntimeMode(step, "auto", ANTIGRAVITY_MODES), "auto-accept-edits");
+      // A sign-in with agy's own Auto keeps it; what it still asks, lastdrop answers.
+      assert.equal(entryRuntimeMode(step, "auto", [...ALL_RUNTIME_MODES]), "auto");
+      assert.equal(
+        entryRuntimeMode(step, "auto", [...ALL_RUNTIME_MODES], "plan"),
+        "approval-required",
+      );
       // A target with neither mode still asks the person.
       assert.equal(entryRuntimeMode(step, "auto", ["approval-required"]), "approval-required");
       // Plan mode: edits must reach lastdrop to be refused, so not accept-edits (review item 3).

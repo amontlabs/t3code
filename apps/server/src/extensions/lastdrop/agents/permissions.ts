@@ -1,7 +1,8 @@
 /**
  * The thread's mode as each entry's instance takes it, and who answers its approval requests
- * (docs/agents.md "Permission modes"). Under `auto` lastdrop answers, so Antigravity runs accept-edits;
- * otherwise T3's rule: an unsupported mode becomes `approval-required` and the person answers.
+ * (docs/agents.md "Permission modes"). Under `auto`, an entry without an auto of its own runs
+ * accept-edits and lastdrop answers; otherwise T3's rule: an unsupported mode becomes
+ * `approval-required` and the person answers.
  */
 import type { RuntimeMode } from "@t3tools/contracts";
 import type { JudgePolicy } from "@t3tools/lastdrop-node";
@@ -34,11 +35,11 @@ export const entryRuntimeMode = (
 ): RuntimeMode => {
   if (mode === "auto") {
     const known = supported !== undefined && supported.length > 0;
-    // Antigravity has no auto mode, even while its modes are unknown. OpenRouter: Claude Code's own
-    // auto check is untested there. Both are asked about every command, which lastdrop answers;
-    // Z.ai keeps Claude Code's check (verified in step 6).
+    // Antigravity's own Auto exists only on some sign-ins; while its modes are unknown, or in plan
+    // mode, lastdrop answers. OpenRouter: Claude Code's own auto check is untested there. Answered
+    // entries are asked about every command; Z.ai keeps Claude Code's check (verified in step 6).
     const answered =
-      step.provider === "antigravity" ||
+      (step.provider === "antigravity" && (!known || interactionMode === "plan")) ||
       step.provider === "openrouter" ||
       (known && !supported.includes("auto"));
     if (answered) {
