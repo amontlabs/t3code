@@ -2,7 +2,6 @@
  * lastdrop's server extensions. T3's own registries spread these at small seams listed in
  * FORK.md. With empty lists and an identity wrapper the server behaves exactly as upstream.
  */
-import type { ProviderClientDefinition } from "@t3tools/provider-core/client";
 import type { AnyProviderDriver } from "@t3tools/provider-core/server/driver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -15,7 +14,6 @@ import * as LastdropEndpointKeys from "./lastdrop/endpointKeys.ts";
 import { LastdropAgentsDriver } from "./lastdrop/agents/driver.ts";
 import * as AgentsEditor from "./lastdrop/agents/editor.ts";
 import * as AgentsEditorRoutes from "./lastdrop/agents/editorRoutes.ts";
-import { lastdropAgentsClient } from "./lastdrop/agents/settings.ts";
 
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import type { ClaudeAgentSdkQueryRunner } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
@@ -44,15 +42,6 @@ export const EXTENSION_DRIVERS: ReadonlyArray<AnyProviderDriver<ExtensionDrivers
 export const EXTENSION_USAGE_DRIVERS: ReadonlyArray<
   AnyProviderDriver<ExtensionDriversEnv, ExtensionUsageReadersEnv>
 > = [];
-
-/**
- * Client definitions of the extension drivers, for the server's own copies of the client list
- * (`settingsSecrets.ts`, `policy/managedProviders.ts`). Keep in step with
- * `packages/client-runtime/src/extensions.ts`.
- */
-export const EXTENSION_PROVIDER_CLIENTS: ReadonlyArray<ProviderClientDefinition> = [
-  lastdropAgentsClient,
-];
 
 /**
  * Wraps the layer that opens every Claude Agent SDK query: lastdrop picks the Claude account per

@@ -117,7 +117,7 @@ const call = (
 
 const declined = (detail: string) => ({
   behavior: "deny",
-  message: `lastdrop refused ${detail}. That is final for this command: don't retry it or work around it. Go on with the task without it and give your report, naming anything refused that you needed and why.`,
+  message: `The user declined this tool call and said:\nlastdrop refused ${detail}. That is final for this command: don't retry it or work around it. Go on with the task without it and give your report, naming anything refused that you needed and why.`,
   decisionClassification: "user_reject",
 });
 

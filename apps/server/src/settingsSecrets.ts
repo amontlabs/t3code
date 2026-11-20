@@ -20,7 +20,7 @@ import { kiroClient } from "@t3tools/provider-kiro/client";
 import { museClient } from "@t3tools/provider-muse/client";
 import { openCodeClient } from "@t3tools/provider-opencode/client";
 import { piClient } from "@t3tools/provider-pi/client";
-import { EXTENSION_PROVIDER_CLIENTS } from "./extensions/index.ts";
+import { EXTENSION_PROVIDER_CLIENTS } from "./extensions/clients.ts";
 import {
   readSecretFieldValues,
   SOURCE_CONTROL_HOST_SECRET_FIELDS,
@@ -237,7 +237,7 @@ function mapSecretFieldGroups(
       ) as EasDeviceHostConfig,
   );
 
-  // Its own prefix: an EAS and a Simlock host may share an id.
+  // Its own prefix: an Expo and a Simlock host may share an id.
   const simlockDeviceHosts = settings.simlockDeviceHosts.map(
     (host) =>
       mapFields(
