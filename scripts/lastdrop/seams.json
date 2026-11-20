@@ -18,7 +18,7 @@
       "budget": 15,
       "why": "usage windows in words and per-key spend (OpenRouter)"
     },
-    "packages/shared/src/usageLimits.ts": {
+    "packages/shared/src/usageLimitsCopy.ts": {
       "budget": 2,
       "why": "a hub's reset credits offered per kind"
     },

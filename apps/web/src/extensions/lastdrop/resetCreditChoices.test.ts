@@ -1,5 +1,5 @@
 import { UsageLimitSourceId } from "@t3tools/contracts";
-import { resetCreditChoices } from "@t3tools/shared/usageLimits";
+import { resetCreditChoices } from "@t3tools/shared/usageLimitsCopy";
 import { describe, expect, it } from "vite-plus/test";
 
 // Pins the `usageLimits.ts` seam (FORK.md): a hub's reset credits are offered per kind.

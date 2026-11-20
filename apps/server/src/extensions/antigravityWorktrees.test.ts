@@ -31,24 +31,28 @@ const makeRepository = Effect.fn("antigravityWorktrees.test.makeRepository")(fun
     }
     return folder;
   });
-  const find = (cwd: string) => findSiblingWorktrees({ fileSystem, path }, cwd);
-  return { fileSystem, path, base, main, link, find };
+  const given = (cwd: string) => findSiblingWorktrees({ fileSystem, path }, cwd);
+  /** Every sibling the session's folder may read. */
+  const find = (cwd: string) => given(cwd).pipe(Effect.map(() => listedWorktrees(cwd)));
+  return { fileSystem, path, base, main, link, given, find };
 });
 
 describe("the worktrees an Antigravity session is given", () => {
   it.effect("are the repository's other checkouts, from any folder of any of them", () =>
     Effect.gen(function* () {
-      const { path, main, link, find } = yield* makeRepository();
+      const { path, main, link, given, find } = yield* makeRepository();
       const item = yield* link("item");
       const gate = yield* link("gate");
 
       assert.deepEqual(yield* find(main), [gate, item]);
       assert.deepEqual(yield* find(item), [gate, main]);
       assert.deepEqual(yield* find(path.join(gate, "src")), [item, main]);
-      // The client's own file reads allow what the session was given.
-      assert.deepEqual(listedWorktrees(item), [gate, main]);
       assert.deepEqual(listedWorktrees(path.join(item, "src")), []);
       assert.deepEqual(listedWorktrees(null), []);
+      // agy runs commands from its first folder, so the session gets only the siblings after its own.
+      assert.deepEqual(yield* given(main), []);
+      assert.deepEqual(yield* given(item), [main]);
+      assert.deepEqual(yield* given(path.join(gate, "src")), [item, main]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

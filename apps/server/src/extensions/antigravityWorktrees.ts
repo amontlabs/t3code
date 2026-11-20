@@ -85,7 +85,9 @@ const siblingWorktrees = Effect.fn("antigravityWorktrees.siblingWorktrees")(func
 
 /**
  * Finds the other worktrees of the repository `cwd` is in, for a session starting there. It finds
- * none where `cwd` is in no repository, or in a checkout the repository does not list.
+ * none where `cwd` is in no repository, or in a checkout the repository does not list. All of them
+ * are readable; the session is given only those after `cwd`, since agy runs commands from its
+ * lexicographically first folder.
  */
 export const findSiblingWorktrees = Effect.fn("antigravityWorktrees.find")(function* (
   services: Services,
@@ -95,7 +97,7 @@ export const findSiblingWorktrees = Effect.fn("antigravityWorktrees.find")(funct
     Effect.catchCause(() => Effect.succeed(none)),
   );
   listed.set(cwd, found);
-  return found;
+  return found.filter((worktree) => worktree > cwd);
 });
 
 /** The worktrees the latest session started in `cwd` was given. */
