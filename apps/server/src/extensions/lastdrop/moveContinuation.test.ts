@@ -134,12 +134,15 @@ describe("the continuation after a usage-limit move", () => {
     ]);
     assert.deepEqual(work[0], {
       kind: "subagent",
-      label: "Remember the code word (id a-fail)",
+      label: "Remember the code word (id a-fail; resume it with SendMessage to 'a-fail')",
       id: "lastdrop-cut:a-fail",
     });
     const text = continuationText(work);
     assert.equal(text, `${restartCancelledBackgroundWorkNote(work)}\n\n${CONTINUE_PROMPT}`);
-    assert.include(text, "- subagent: Remember the code word (id a-fail)");
+    assert.include(
+      text,
+      "- subagent: Remember the code word (id a-fail; resume it with SendMessage to 'a-fail')",
+    );
     assert.isTrue(text.startsWith("Note: the T3 server restarted"));
     assert.isTrue(text.endsWith(CONTINUE_PROMPT));
   });
@@ -153,7 +156,7 @@ describe("the continuation after a usage-limit move", () => {
         prompt: "Count to three",
       }),
     ]);
-    assert.equal(work?.label, "Count to three (id a1)");
+    assert.equal(work?.label, "Count to three (id a1; resume it with SendMessage to 'a1')");
   });
 
   it("background shells and monitors still running are listed after subagents, as T3's roster lists them", () => {
@@ -220,7 +223,7 @@ describe("the continuation after a usage-limit move", () => {
     ]);
     assert.deepEqual(
       work.map((w) => w.label),
-      ["Writer (id a1)"],
+      ["Writer (id a1; resume it with SendMessage to 'a1')"],
     );
   });
 

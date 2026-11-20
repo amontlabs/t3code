@@ -538,7 +538,7 @@ describe("the query-runner wrapper (replays)", () => {
               work: [
                 {
                   kind: "subagent",
-                  label: "Remember and write (id a-cut)",
+                  label: "Remember and write (id a-cut; resume it with SendMessage to 'a-cut')",
                   id: "lastdrop-cut:a-cut",
                 },
               ],

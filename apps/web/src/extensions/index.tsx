@@ -94,10 +94,9 @@ export { ContextRing } from "./lastdrop/ContextRing";
 
 /**
  * A lastdrop agent's icon and color on its subagent cards (`V2LifecycleRow.tsx`,
- * `TimelineV2EventRow.tsx` seams) and the entry it runs on in the hover (`SubagentTooltipContent.tsx`).
+ * `TimelineV2EventRow.tsx` seams). The hover's row is imported from `AgentAvatar` itself.
  */
 export {
-  LastdropAgentHoverRow,
   LastdropSubagentAvatar,
   useLastdropAgentLookKey,
   useLastdropAgentTrigger,

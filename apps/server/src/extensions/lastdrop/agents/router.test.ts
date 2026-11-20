@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
@@ -172,8 +173,32 @@ const runThroughLastdrop = Effect.fn("runThroughLastdrop")(function* (
             ) + 1,
           ),
         };
+  // A recording borrowed from another scenario names the Codex thread after that scenario, as
+  // T3's own Codex replay test rewrites it.
+  const recordedScenario = variant.recordedScenario;
+  const named: ProviderReplayTranscript =
+    recordedScenario === undefined
+      ? sliced
+      : {
+          ...sliced,
+          entries: sliced.entries.map((entry) =>
+            entry.type === "expect_outbound" &&
+            Predicate.isObject(entry.frame) &&
+            entry.frame.method === "thread/name/set" &&
+            Predicate.isObject(entry.frame.params) &&
+            entry.frame.params.name === `Replay fixture: ${recordedScenario}`
+              ? {
+                  ...entry,
+                  frame: {
+                    ...entry.frame,
+                    params: { ...entry.frame.params, name: `Replay fixture: ${fixtureName}` },
+                  },
+                }
+              : entry,
+          ),
+        };
   // The native SDK still gets its own runtime instructions and model.
-  const replay = materializeReplayTranscriptRuntimeInstructions(sliced, {
+  const replay = materializeReplayTranscriptRuntimeInstructions(named, {
     driver: variant.driver,
     model: variant.modelSelection.model,
   });

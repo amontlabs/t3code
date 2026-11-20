@@ -29,7 +29,7 @@ import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
-import { LastdropAgentHoverRow } from "~/extensions";
+import { LastdropAgentHoverRow } from "~/extensions/lastdrop/AgentAvatar";
 import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../providerInstances";
 
 export function SubagentTooltipContent(props: {

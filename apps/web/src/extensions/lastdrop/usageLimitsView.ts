@@ -10,12 +10,11 @@ import type {
 } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
-  formatResetsIn,
   type LimitAccount,
-  limitsNotice,
   remainingPercent,
   type LimitPresentations,
 } from "@t3tools/shared/usageLimits";
+import { formatResetsIn, limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 
 import { accountTitle, type AccountView } from "./accountsView";
 import type { CodexAccountView } from "./codexAccountsView";
