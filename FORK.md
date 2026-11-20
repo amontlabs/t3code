@@ -237,6 +237,13 @@ Line numbers are at v0.1.9 and drift; find each seam by the code it sits beside.
 - **Why**: agents load `CLAUDE.md` in every session; without the pointer they never learn the fork's rules. It names FORK.md instead of importing it, so the file is read when needed, not on every turn.
 - **Conflict**: take upstream's file and re-add the sentence.
 
+### `vite.config.ts` (budget 1)
+
+- **Lines**: `"apps/web/src/extensions/**"` in the `excludeFiles` of the lint override that turns on `t3code/no-untranslated-copy`.
+- **Why**: the fork's web UI is English-only. Translating it would add its strings to T3's committed catalogs (`apps/web/src/i18n/translations/*.json`), which are not fork files and would conflict on every sync. Without the line, the pre-commit hook refuses any commit touching a fork file with copy in it.
+- **Must survive**: the fork's web folder outside that rule. If it is lost, lint fails on the fork's copy again; nothing at runtime changes.
+- **Conflict**: take upstream's file and add the path again to whatever override enables the rule for `apps/web/src`.
+
 ## App identity and data
 
 The fork is its own app that opens the official app's data: the same T3 home (`~/.t3`, or `T3CODE_HOME`, resolved by T3's own code; dev runs: `~/.t3/dev`), database, settings and secrets. Everything the fork adds goes under its own folder or files, never into T3's files or schema.

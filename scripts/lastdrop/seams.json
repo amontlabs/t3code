@@ -26,6 +26,10 @@
       "budget": 2,
       "why": "points agents to FORK.md"
     },
+    "vite.config.ts": {
+      "budget": 1,
+      "why": "the fork's web UI is English-only, outside the translation rule"
+    },
     "apps/server/src/provider/builtInDrivers.ts": {
       "budget": 9,
       "why": "extension drivers and usage readers"
