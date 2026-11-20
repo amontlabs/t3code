@@ -37,10 +37,18 @@ run() {
 }
 
 # The workspace's packages (pnpm-workspace.yaml) that have the script.
+# A package's task is a script in its package.json or a task in its vite.config.ts (web, desktop).
 packages_with() {
+  local manifest config
   git ls-files -- 'apps/*/package.json' 'packages/*/package.json' 'infra/*/package.json' \
     evals/package.json scripts/package.json oxlint-plugin-t3code/package.json |
-    xargs jq -r --arg script "$1" 'select(.scripts[$script]) | .name'
+    while read -r manifest; do
+      config="$(dirname "$manifest")/vite.config.ts"
+      if jq -e --arg script "$1" '.scripts[$script]' "$manifest" > /dev/null ||
+        { [[ -f "$config" ]] && grep -qE "^[[:space:]]+$1: [{]" "$config"; }; then
+        jq -r .name "$manifest"
+      fi
+    done
 }
 
 run guard node scripts/lastdrop/check-fork-paths.ts --base "$base"
