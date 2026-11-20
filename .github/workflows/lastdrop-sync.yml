@@ -94,6 +94,7 @@ jobs:
         id: plan
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch --no-tags "$UPSTREAM" '+refs/tags/v*:refs/tags/v*'
@@ -114,6 +115,14 @@ jobs:
             fi
             if git ls-remote --exit-code --heads origin "lastdrop-sync/$tag" > /dev/null; then
               echo "::notice::lastdrop-sync/$tag already exists: a sync to $tag is waiting to be resolved (see its PR)."
+              # Without its PR the app shows no warning, so a stuck sync would wait unseen.
+              if [[ -z "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "lastdrop-sync/$tag" --state open --json number --jq '.[].number')" ]]; then
+                gh label create lastdrop-sync --repo "$GITHUB_REPOSITORY" --color D93F0B \
+                  --description "A fork update that needs attention (the app warns while one is open)" --force
+                gh pr create --repo "$GITHUB_REPOSITORY" --base lastdrop --head "lastdrop-sync/$tag" \
+                  --label lastdrop-sync --title "Sync to $tag: needs attention" \
+                  --body "A sync to \`$tag\` stopped and its PR was missing. Its run's summary has the details. Resolve it following FORK.md (\"Resolving a sync\"), then close this PR and delete \`lastdrop-sync/$tag\`."
+              fi
               exit 0
             fi
             base="$(git rev-parse "refs/tags/$tag^{commit}")"
@@ -286,7 +295,7 @@ jobs:
           set -uo pipefail
           if [[ -f .git/MERGE_HEAD ]]; then git merge --abort; fi
           body="$RUNNER_TEMP/body.md"
-          tail_of() { [[ -s "$1" ]] && { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 30000 "$1"; echo '```'; echo '</details>'; echo; }; }
+          tail_of() { [[ -s "$1" ]] && { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 8000 "$1"; echo '```'; echo '</details>'; echo; }; }
           if [[ "$MERGED" == true ]]; then
             title="Sync to $TAG: checks failed"
             {
@@ -325,6 +334,12 @@ jobs:
             tail_of "$RUNNER_TEMP/claude-resolve.log" "Claude, resolving (tail)"
             tail_of "$RUNNER_TEMP/claude-fix.log" "Claude, fixing (tail)"
           } >> "$body"
+          # GitHub refuses a PR body over 65536 characters.
+          if (( $(wc -c < "$body") > 60000 )); then
+            head -c 60000 "$body" > "$body.cut"
+            printf '\n\n(Cut to fit. The full logs are in the run.)\n' >> "$body.cut"
+            mv "$body.cut" "$body"
+          fi
           if [[ "$DRY_RUN" == true ]]; then
             { echo "### Dry run to \`$TAG\`: $title"; echo; cat "$body"; } >> "$GITHUB_STEP_SUMMARY"
             exit 1
