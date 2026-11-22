@@ -45,6 +45,7 @@ import {
 } from "./commandAnswers.ts";
 import { entryRuntimePolicy } from "./permissions.ts";
 import { isUsageLimit } from "../endpointRoom.ts";
+import { antigravityQuotaReset } from "./antigravityQuota.ts";
 import type { FallbackSignals, Room } from "./room.ts";
 import type { NativeEntry } from "./shared.ts";
 import { makeStoredMap, type StoredMap } from "./store.ts";
@@ -376,6 +377,8 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     let pendingNotice = session.openNotice;
     /** Set once this session hands a run over: a later limit here is T3's own (`atTerminal`). */
     let handedOver = false;
+    /** Antigravity turns whose chat message was agy's quota notice, with its reset (`atTerminal`). */
+    const quotaNotices = new Map<string, { readonly resetAt: string | null }>();
     /**
      * Provider threads whose conversation this entry did not make (handed over from another one).
      * On them a restart continuation is no native resume: the turn must send its prompt.
@@ -488,8 +491,14 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
     const atTerminal = Effect.fn("LastdropRouter.atTerminal")(function* (
       event: Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>,
     ) {
-      if (event.status !== "failed" || !isUsageLimit(step.provider, event.failure)) return [event];
-      yield* options.room.markOut(step, event.failure.resetAt);
+      const quota = quotaNotices.get(event.providerTurnId);
+      quotaNotices.delete(event.providerTurnId);
+      if (
+        event.status !== "failed" ||
+        (quota === undefined && !isUsageLimit(step.provider, event.failure))
+      )
+        return [event];
+      yield* options.room.markOut(step, event.failure.resetAt ?? quota?.resetAt);
       const other = yield* firstUsable(
         agent,
         agent.chain.map((_, index) => index).filter((index) => index !== session.index),
@@ -528,6 +537,18 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
       return notice === undefined ? [handover] : [notice, handover];
     });
 
+    const noteQuota = Effect.fn("LastdropRouter.noteQuota")(function* (
+      event: ProviderAdapterV2Event,
+      providerTurnId: string | null,
+      text: string,
+    ) {
+      const resetAt =
+        providerTurnId === null ? undefined : antigravityQuotaReset(text, yield* DateTime.now);
+      if (providerTurnId !== null && resetAt !== undefined)
+        quotaNotices.set(providerTurnId, { resetAt });
+      return [event];
+    });
+
     const mapEvents = (
       events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>,
       /** Only T3's own event pump answers requests; another subscriber just watches. */
@@ -541,7 +562,11 @@ export const makeRouterAdapter = (options: RouterOptions): Adapter => {
             ? atTerminal(event)
             : event.type === "provider_turn.updated"
               ? atTurnStart(event)
-              : Effect.succeed([event]),
+              : event.type === "turn_item.updated" &&
+                  event.turnItem.type === "assistant_message" &&
+                  step.provider === "antigravity"
+                ? noteQuota(event, event.turnItem.providerTurnId, event.turnItem.text)
+                : Effect.succeed([event]),
         ),
         Stream.flatMap((batch) => Stream.fromIterable(batch)),
         Stream.map((event) => toOuter(event)),

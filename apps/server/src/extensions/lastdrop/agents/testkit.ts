@@ -60,6 +60,8 @@ export const makeFakeAdapter = (input: {
   readonly failedRunOrdinals?: ReadonlySet<number>;
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failOpen?: boolean;
+  /** A failed run's chat message, instead of its partial work. */
+  readonly failedText?: string;
   /** A failed run leaves a command running, as a limit mid-command does. */
   readonly commandAtLimit?: boolean;
   /** Turns end only once this is done: a parent thread whose run stays active. */
@@ -198,7 +200,7 @@ export const makeFakeAdapter = (input: {
                 `message:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}`,
               ),
               text: failed
-                ? `Partial work by ${input.instanceId}`
+                ? (input.failedText ?? `Partial work by ${input.instanceId}`)
                 : `${input.instanceId} answer for run ${turnInput.runOrdinal}`,
               streaming: false,
             },

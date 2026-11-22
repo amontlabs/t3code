@@ -14,6 +14,7 @@ import {
   ThreadId,
   type ModelSelection,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -405,6 +406,121 @@ describe("lastdrop fallback partway through a run", () => {
                 },
               },
               ProviderAdapterRegistry.layerFromAdapters([claude, lastdrop]),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.live("continues past Antigravity when its quota notice comes as a chat message", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("lastdrop-antigravity-quota");
+        const claudeCalls = yield* makeFakeCalls;
+        const claude = makeFakeAdapter({
+          instanceId: CLAUDE,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          capabilities: ClaudeProviderCapabilitiesV2,
+          calls: claudeCalls,
+        });
+        // agy's error step after the notice is no API error T3 knows, so it is a plain provider error.
+        const antigravity = makeFakeAdapter({
+          instanceId: ANTIGRAVITY,
+          driver: ProviderDriverKind.make("antigravity"),
+          capabilities: ClaudeProviderCapabilitiesV2,
+          calls: yield* makeFakeCalls,
+          failedRunOrdinals: new Set([1]),
+          failedText:
+            "\n⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 68h47m38s.\n",
+          failure: makeProviderFailure({
+            message: "Antigravity stopped this turn because of an error.",
+            class: "provider_error",
+          }),
+        });
+        const room = makeRoom();
+        yield* room.markOut(BUILD.chain[0]!, "2099-01-01T00:00:00.000Z");
+        const signals = makeFallbackSignals();
+        const lastdrop = makeRouterAdapter({
+          instanceId: LASTDROP,
+          agents: () => [BUILD],
+          resolveTarget: (id) =>
+            Effect.succeed(id === CLAUDE ? claude : id === ANTIGRAVITY ? antigravity : undefined),
+          room,
+          fallbacks: signals,
+        });
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          yield* Effect.forkScoped(runFallbackReactor(signals));
+          const settled = (ordinal: number) =>
+            orchestrator.streamStoredEvents.pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" &&
+                  event.payload.ordinal === ordinal &&
+                  event.payload.status !== "running" &&
+                  event.payload.status !== "pending",
+              ),
+              Stream.runHead,
+              Effect.andThen(worker.drain()),
+            );
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("create"),
+            threadId,
+            projectId,
+            createdBy: "user",
+            creationSource: "web",
+            title: "Antigravity quota",
+            modelSelection: SELECTION,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("first"),
+            messageId: MessageId.make("first"),
+            threadId,
+            text: "Review this",
+            attachments: [],
+            modelSelection: SELECTION,
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* settled(1);
+          yield* settled(2);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            projection.runs.map((run) => [run.ordinal, run.status]),
+            [
+              [1, "cancelled"],
+              [2, "completed"],
+            ],
+          );
+          assert.equal((yield* Ref.get(claudeCalls.turns)).length, 1);
+          // Out until the notice's reset, about 68h from now, not the default hour.
+          const until = (yield* room.out(BUILD.chain[1]!))?.match(/\(until (.+) UTC\)/)?.[1];
+          const now = DateTime.toEpochMillis(yield* DateTime.now);
+          assert.isAbove(Date.parse(`${until?.replace(" ", "T")}:00Z`) - now, 60 * 3_600_000);
+        }).pipe(
+          Effect.provide(
+            Layer.merge(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "lastdrop-antigravity-quota",
+                  runtimePolicyOverride: {
+                    cwd,
+                    approvalPolicy: "never",
+                    sandboxPolicy: { type: "readOnly" },
+                  },
+                },
+                ProviderAdapterRegistry.layerFromAdapters([claude, antigravity, lastdrop]),
+              ),
+              EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
             ),
           ),
         );
