@@ -232,7 +232,11 @@ describe("an MCP form's own scopes on Claude's approval card", () => {
       adapter,
       "const nativeRequestId = `mcp-elicitation:${callbackOptions.requestId}`;",
     );
-    assert.include(adapter, "options: CLAUDE_MCP_ELICITATION_OPTIONS,");
+    // T3 Code's own MCP requests drop "acceptForSession"; every other server's card gets all the options.
+    assert.match(
+      adapter,
+      /options:\s+ownRequest === undefined\s+\? CLAUDE_MCP_ELICITATION_OPTIONS\s+: CLAUDE_MCP_ELICITATION_OPTIONS\.filter\(/u,
+    );
     assert.match(
       adapter,
       /const CLAUDE_MCP_ELICITATION_OPTIONS[\s\S]{0,120}"cancel"[\s\S]{0,60}"decline"[\s\S]{0,80}"acceptForSession"[\s\S]{0,80}"accept", label: "Approve"/u,

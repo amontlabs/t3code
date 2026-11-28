@@ -459,8 +459,7 @@ describe("lastdrop fallback partway through a run", () => {
                 ({ event }) =>
                   event.type === "run.updated" &&
                   event.payload.ordinal === ordinal &&
-                  event.payload.status !== "running" &&
-                  event.payload.status !== "pending",
+                  event.payload.status !== "running",
               ),
               Stream.runHead,
               Effect.andThen(worker.drain()),

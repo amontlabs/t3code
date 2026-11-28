@@ -19,6 +19,7 @@ import type { EnvironmentThreadState } from "./state/threadState.ts";
 /** The user's agents (driver `lastdropAgents`): Claude's models and the standalone app's agents. */
 const lastdropAgentsClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("lastdropAgents"),
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- a provider name, as upstream's "Claude"
   label: "lastdrop agents",
   featured: false,
   settingsSchema: makeProviderSettingsSchema({
@@ -150,8 +151,9 @@ export function withoutLastdropShadowThreads<
   if (cached !== undefined) return cached as ReadonlyArray<T>;
   const runsByParent = new Map<string, Set<string>>();
   for (const thread of threads) {
-    const parent = thread.lineage.parentThreadId;
-    const agentId = parent === null ? null : lastdropRunAgentId(thread.id);
+    // The id first: upstream counts `parentThreadId` reads (threadShell.test.ts).
+    const agentId = lastdropRunAgentId(thread.id);
+    const parent = agentId === null ? null : thread.lineage.parentThreadId;
     if (parent === null || agentId === null) continue;
     const runs = runsByParent.get(parent) ?? new Set<string>();
     runs.add(agentId);

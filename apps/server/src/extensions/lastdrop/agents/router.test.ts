@@ -132,6 +132,18 @@ const lastdropHarnessOver = (base: AnyHarness): AnyHarness => ({
           room,
           fallbacks: makeFallbackSignals(),
           nativeEntries,
+          // Under `auto` lastdrop also answers what Claude asks (claude_auto_mode_unavailable). The
+          // judge (no `agy` here) waits until the session closes, so the fixture's person answers first.
+          commandAnswers: {
+            rules: () => ({ allow: [], deny: [], ask: [] }),
+            judge: (_prompt, signal) =>
+              new Promise((resolve) =>
+                signal.addEventListener("abort", () =>
+                  resolve({ allow: false, failure: "closed" }),
+                ),
+              ),
+            log: () => {},
+          },
           // Antigravity's instance exists here: only its room keeps it out.
           resolveTarget: (id) =>
             Effect.succeed(

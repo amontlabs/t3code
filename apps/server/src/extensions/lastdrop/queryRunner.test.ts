@@ -91,6 +91,9 @@ function fakeRunner(script: (n: number) => ReadonlyArray<ReadonlyArray<SDKMessag
         mcpServerStatus: Effect.succeed([]),
         readMcpResource: () => Effect.succeed({ contents: [] }),
         callMcpTool: () => Effect.succeed({}),
+        mcpAuthenticate: () => Effect.die("unexpected MCP sign-in"),
+        mcpSubmitOAuthCallbackUrl: () => Effect.die("unexpected MCP sign-in"),
+        reconnectMcpServer: () => Effect.die("unexpected MCP reconnect"),
         listPermissionRules: Effect.succeed([]),
         interrupt: Effect.void,
         close: Effect.sync(() => {

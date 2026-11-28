@@ -29,6 +29,7 @@ const openFields: Record<keyof ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput, tru
   options: true,
   threadId: true,
   providerSessionId: true,
+  onStartupPhase: true,
 };
 const forkFields: Record<keyof ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput, true> = {
   sessionId: true,
@@ -65,7 +66,7 @@ const settings = Schema.decodeSync(ClaudeSettings)({});
 describe("the wrapper's contract with T3's Claude adapter", () => {
   it("the runner and its inputs have the shape the wrapper wraps", () => {
     assert.lengthOf(Object.keys(runnerMethods), 6);
-    assert.lengthOf(Object.keys(openFields), 4);
+    assert.lengthOf(Object.keys(openFields), 5);
     assert.lengthOf(Object.keys(forkFields), 5);
     assert.lengthOf(Object.keys(lookupFields), 5);
     assert.lengthOf(Object.keys(sessionMethods), 4);
@@ -181,9 +182,10 @@ describe("the wrapper's contract with T3's Claude adapter", () => {
   it("the continuation after a move is T3's restart continuation: its prompt, after its note when work was cut", () => {
     const restart = source("../../orchestration-v2/RestartContinuation.ts");
     // A run cut mid-turn: the prompt alone with no note, else note, blank line, prompt.
-    assert.include(
+    // The fork passes no cause: a move reads as T3's restart, not as the agent runtime exiting.
+    assert.match(
       restart,
-      "note.work.length === 0 ? undefined : restartCancelledBackgroundWorkNote(note.work)",
+      /note\.work\.length === 0\s+\? undefined\s+: restartCancelledBackgroundWorkNote\(note\.work, input\.cause\)/u,
     );
     assert.include(restart, "? CONTINUE_PROMPT");
     assert.include(restart, "`${noteText}\\n\\n${CONTINUE_PROMPT}`");
