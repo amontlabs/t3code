@@ -197,6 +197,8 @@ jobs:
         if: steps.plan.outputs.tag != ''
         run: |
           set -euo pipefail
+          # Git merges the lockfile's text without a conflict and can leave it broken, so start from upstream's.
+          git checkout "$BASE" -- pnpm-lock.yaml
           vp install --lockfile-only --ignore-scripts
           if ! git diff --quiet -- pnpm-lock.yaml; then
             git commit -m "lastdrop: lockfile for $TAG" -- pnpm-lock.yaml
@@ -295,7 +297,7 @@ jobs:
           set -uo pipefail
           if [[ -f .git/MERGE_HEAD ]]; then git merge --abort; fi
           body="$RUNNER_TEMP/body.md"
-          tail_of() { [[ -s "$1" ]] && { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 8000 "$1"; echo '```'; echo '</details>'; echo; }; }
+          tail_of() { [[ -s "$1" ]] || return 0; { echo "<details><summary>$2</summary>"; echo; echo '```'; tail -c 8000 "$1"; echo '```'; echo '</details>'; echo; }; }
           if [[ "$MERGED" == true ]]; then
             title="Sync to $TAG: checks failed"
             {
